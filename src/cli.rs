@@ -33,6 +33,8 @@ pub enum Command {
     Export(ExportArgs),
     /// Diagnose the local installation and print pass/warn/fail checks.
     Doctor(DoctorArgs),
+    /// Run configured external checkers and record drift alerts.
+    Check(CheckArgs),
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -143,3 +145,17 @@ pub enum ExportFormatArg {
 /// `driftwatch doctor` — no flags in v1.
 #[derive(Debug, Args, Default, Clone)]
 pub struct DoctorArgs {}
+
+/// `driftwatch check [--only NAMES] [--dry-run]`
+#[derive(Debug, Args, Default, Clone)]
+pub struct CheckArgs {
+    /// Restrict to the named checkers. Repeat to include more than one,
+    /// or supply a single comma-separated list. When omitted, every
+    /// configured checker in declaration order runs.
+    #[arg(long, value_name = "NAME", value_delimiter = ',')]
+    pub only: Vec<String>,
+    /// Do not persist any rows. Useful for smoke-testing a checker
+    /// command without polluting the database.
+    #[arg(long)]
+    pub dry_run: bool,
+}

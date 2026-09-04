@@ -149,6 +149,8 @@ fn snap_to_dto(s: Snapshot) -> SnapshotExport {
         checker_name: s.checker_name,
         status: s.status,
         diagnostic: s.diagnostic,
+        git_commit: s.git_commit,
+        git_branch: s.git_branch,
     }
 }
 

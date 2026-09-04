@@ -37,16 +37,16 @@ fn schema_contains_all_foundation_tables() {
 }
 
 #[test]
-fn migration_version_is_one_after_init() {
+fn migration_version_is_two_after_init() {
     let tmp = tempdir().unwrap();
     let path = tmp.path().join("state.db");
     let mut conn = storage::open(&path).unwrap();
     let v = storage::migrations::apply(&mut conn).unwrap();
-    assert_eq!(v, 1);
+    assert_eq!(v, 2);
     let recorded: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(recorded, 1);
+    assert_eq!(recorded, 2);
 }
 
 #[test]

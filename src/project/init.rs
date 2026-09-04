@@ -89,7 +89,7 @@ mod tests {
         assert!(out.root.config_path.is_file());
         assert!(out.config_written);
         assert!(out.db_created);
-        assert_eq!(out.schema_version, 1);
+        assert_eq!(out.schema_version, 2);
     }
 
     #[test]

@@ -5,8 +5,9 @@
 //! breaking older binaries. Optional sections (`[project]`, `[storage]`,
 //! `[fingerprint]`, `[[checkers]]`) default to empty values when absent.
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -59,6 +60,20 @@ pub struct CheckerEntry {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Optional working directory. Defaults to the project root.
+    #[serde(default)]
+    pub working_dir: Option<PathBuf>,
+    /// Optional environment variables added to the checker process.
+    /// `BTreeMap` is used for stable serialization order in tests and
+    /// round-trips.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// Per-checker timeout in milliseconds. Defaults to 30_000.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Per-stream output capture limit in bytes. Defaults to 1 MiB.
+    #[serde(default)]
+    pub max_output_bytes: Option<u64>,
 }
 
 impl Config {
@@ -158,5 +173,58 @@ args = ["--json"]
         let s = cfg.to_toml().unwrap();
         assert!(s.contains("name = \"x\""));
         assert!(s.contains("max_stdout_bytes = 10"));
+    }
+
+    #[test]
+    fn loads_checker_with_optional_fields() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("driftwatch.toml");
+        fs::write(
+            &p,
+            r#"
+[[checkers]]
+name = "arch"
+command = "my-spec-checker"
+args = ["--json"]
+working_dir = "./sub"
+timeout_ms = 5000
+max_output_bytes = 4096
+
+[checkers.env]
+SPEC_VERSION = "1"
+"#,
+        )
+        .unwrap();
+        let cfg = Config::load(&p).unwrap();
+        assert_eq!(cfg.checkers.len(), 1);
+        let c = &cfg.checkers[0];
+        assert_eq!(c.name, "arch");
+        assert_eq!(c.command, "my-spec-checker");
+        assert_eq!(c.args, vec!["--json".to_string()]);
+        assert_eq!(c.working_dir.as_deref(), Some(Path::new("./sub")));
+        assert_eq!(c.timeout_ms, Some(5000));
+        assert_eq!(c.max_output_bytes, Some(4096));
+        assert_eq!(c.env.get("SPEC_VERSION").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn missing_optional_checker_fields_default() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("driftwatch.toml");
+        fs::write(
+            &p,
+            r#"
+[[checkers]]
+name = "basic"
+command = "my-spec-checker"
+"#,
+        )
+        .unwrap();
+        let cfg = Config::load(&p).unwrap();
+        let c = &cfg.checkers[0];
+        assert!(c.working_dir.is_none());
+        assert!(c.env.is_empty());
+        assert!(c.timeout_ms.is_none());
+        assert!(c.max_output_bytes.is_none());
     }
 }

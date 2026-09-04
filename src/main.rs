@@ -30,6 +30,8 @@ fn main() -> anyhow::Result<ExitCode> {
                 .with_context(|| "driftwatch export failed")?,
             Command::Doctor(args) => driftwatch::commands::doctor_cmd(args, &cwd)
                 .with_context(|| "driftwatch doctor failed")?,
+            Command::Check(args) => driftwatch::commands::check_cmd(args, &cwd)
+                .with_context(|| "driftwatch check failed")?,
         };
     Ok(ExitCode::from(code as u8))
 }

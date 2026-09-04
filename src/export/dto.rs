@@ -92,6 +92,8 @@ pub struct SnapshotExport {
     pub checker_name: String,
     pub status: String,
     pub diagnostic: Option<String>,
+    pub git_commit: Option<String>,
+    pub git_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

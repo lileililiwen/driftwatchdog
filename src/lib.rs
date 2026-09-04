@@ -3,6 +3,7 @@
 //! The CLI binary in `src/main.rs` is intentionally thin: it parses arguments
 //! and dispatches to the library.
 
+pub mod checker;
 pub mod cli;
 pub mod commands;
 pub mod doctor;

@@ -97,6 +97,7 @@ pub fn run(cwd: &Path) -> Result<Report, crate::error::Error> {
     checks.push(check_git(&proj));
     checks.extend(check_directories(&proj));
     checks.extend(check_checkers(&proj));
+    checks.extend(check_recent_check_runs(&proj));
 
     let exit_code = if checks.iter().any(|c| c.status == Status::Fail) {
         2
@@ -297,6 +298,55 @@ fn check_one_checker(checker: &crate::project::config::CheckerEntry) -> Check {
             checker.name
         )),
     }
+}
+
+/// Surface a Warn for any configured checker whose most recent
+/// `check_snapshots` row is in a non-success status. A configured
+/// checker that has never been run is silent here — `check_checkers`
+/// already covers the executable-presence story.
+fn check_recent_check_runs(proj: &ProjectRoot) -> Vec<Check> {
+    let cfg = match Config::load(&proj.config_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(), // Already reported by `config.parse`.
+    };
+    if cfg.checkers.is_empty() {
+        return Vec::new();
+    }
+    let db = match Db::open(&proj.db_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(), // Already reported by `db.open`.
+    };
+    let alerts = crate::repo::alerts::Alerts::new(&db);
+    let mut out = Vec::new();
+    for checker in &cfg.checkers {
+        let snap = match alerts.latest_snapshot_for(&checker.name) {
+            Ok(Some(s)) => s,
+            Ok(None) => continue, // Never run; not a problem here.
+            Err(_) => continue,
+        };
+        let is_failure = matches!(
+            snap.status.as_str(),
+            "failed" | "timeout" | "bad_json" | "start_failed" | "unknown"
+        );
+        if is_failure {
+            let detail = snap
+                .diagnostic
+                .clone()
+                .unwrap_or_else(|| format!("status: {}", snap.status));
+            out.push(
+                Check::warn(
+                    "checker.last_run",
+                    format!("Checker `{}` last run failed", checker.name),
+                    detail,
+                )
+                .with_remediation(format!(
+                    "Run `driftwatch check --only {}` to see the live error.",
+                    checker.name
+                )),
+            );
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -92,3 +92,12 @@ CREATE INDEX IF NOT EXISTS idx_occurrences_run ON occurrences(run_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_snapshot ON drift_alerts(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
 "#;
+
+/// Migration: extend `check_snapshots` with the Git context captured at the
+/// time of the run. The `checker-and-drift-alerts` change uses these
+/// columns to attribute snapshots to a commit and to compare them across
+/// runs. The migration is additive and never destructive.
+pub const MIGRATION_0002_SNAPSHOT_GIT: &str = r#"
+ALTER TABLE check_snapshots ADD COLUMN git_commit TEXT;
+ALTER TABLE check_snapshots ADD COLUMN git_branch TEXT;
+"#;

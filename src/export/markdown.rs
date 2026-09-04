@@ -88,15 +88,16 @@ pub fn to_string(doc: &ExportDocument) -> Result<String, Error> {
     })?;
 
     push_records(&mut s, "Check snapshots", doc.snapshots.len(), |s| {
-        s.push_str("| ID | Taken at | Checker | Status | Diagnostic |\n");
-        s.push_str("|----|----------|---------|--------|------------|\n");
+        s.push_str("| ID | Taken at | Checker | Status | Commit | Diagnostic |\n");
+        s.push_str("|----|----------|---------|--------|--------|------------|\n");
         for sn in &doc.snapshots {
             s.push_str(&format!(
-                "| {} | {} | `{}` | {} | {} |\n",
+                "| {} | {} | `{}` | {} | {} | {} |\n",
                 sn.id,
                 sn.taken_at,
                 md_inline(&sn.checker_name),
                 md_inline(&sn.status),
+                md_inline(sn.git_commit.as_deref().unwrap_or("-")),
                 md_inline(sn.diagnostic.as_deref().unwrap_or("-")),
             ));
         }

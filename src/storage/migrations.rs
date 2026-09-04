@@ -12,7 +12,10 @@ use crate::storage::schema;
 
 /// All known migrations in order. New entries must be appended; never reorder
 /// or rewrite a published migration.
-const MIGRATIONS: &[(i64, &str)] = &[(1, schema::MIGRATION_0001_BASELINE)];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, schema::MIGRATION_0001_BASELINE),
+    (2, schema::MIGRATION_0002_SNAPSHOT_GIT),
+];
 
 /// Apply all unapplied migrations and return the current schema version.
 pub fn apply(conn: &mut Connection) -> Result<i64, Error> {
@@ -78,9 +81,9 @@ mod tests {
         let p = tmp.path().join("state.db");
         let mut conn = crate::storage::open(&p).unwrap();
         let v = apply(&mut conn).unwrap();
-        assert_eq!(v, 1);
-        // Second call is a no-op and still reports version 1.
+        assert_eq!(v, 2);
+        // Second call is a no-op and still reports the same version.
         let v2 = apply(&mut conn).unwrap();
-        assert_eq!(v2, 1);
+        assert_eq!(v2, 2);
     }
 }
