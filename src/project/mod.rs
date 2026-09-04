@@ -2,9 +2,9 @@
 
 pub mod config;
 pub mod git;
+pub mod root;
 
 mod init;
-mod root;
 
 pub use init::init;
 pub use root::ProjectRoot;

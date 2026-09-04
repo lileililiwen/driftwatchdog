@@ -4,9 +4,11 @@
 //! and dispatches to the library.
 
 pub mod cli;
+pub mod commands;
 pub mod error;
 pub mod project;
 pub mod repo;
+pub mod runtime;
 pub mod storage;
 
 pub use error::Error;
