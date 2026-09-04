@@ -1,16 +1,16 @@
-# Driftwatch
+# Driftwatchdog
 
 Your AI fixed this bug three times already.
 
-Driftwatch remembers it.
+Driftwatchdog remembers it.
 
-Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in AI-assisted coding workflows. It records failed commands, recognizes recurring bugs, consumes external spec-checker results, and produces context that humans and coding agents can act on.
+Driftwatchdog is a local-first, language-agnostic CLI for runtime failure memory in AI-assisted coding workflows. It records failed commands, recognizes recurring bugs, consumes external spec-checker results, and produces context that humans and coding agents can act on.
 
-Rust is Driftwatch's implementation language—not a restriction on the projects it monitors. Run Rust, Python, C#, JavaScript/TypeScript, Go, Java, Flutter, or any other command-line tool through the same interface.
+Rust is Driftwatchdog's implementation language—not a restriction on the projects it monitors. Run Rust, Python, C#, JavaScript/TypeScript, Go, Java, Flutter, or any other command-line tool through the same interface.
 
 ## Why
 
-AI coding agents often rediscover the same failure because the project has no durable runtime memory. Driftwatch connects:
+AI coding agents often rediscover the same failure because the project has no durable runtime memory. Driftwatchdog connects:
 
     runtime command -> failure memory -> recurring bug
                                   -> spec alerts -> possible relationship
@@ -23,24 +23,24 @@ It is not an APM platform, test framework, spec parser, CI server, code fixer, o
     cargo install --path .
 
     # Initialize local state
-    driftwatch init
+    driftwatchdog init
 
     # Wrap any project command
-    driftwatch run cargo test
-    driftwatch run pytest
-    driftwatch run npm test
+    driftwatchdog run cargo test
+    driftwatchdog run pytest
+    driftwatchdog run npm test
 
     # Inspect runtime memory
-    driftwatch list
-    driftwatch top
-    driftwatch report
-    driftwatch report --ai > drift.md  # AI-oriented context report
+    driftwatchdog list
+    driftwatchdog top
+    driftwatchdog report
+    driftwatchdog report --ai > drift.md  # AI-oriented context report
 
-State is stored locally in .driftwatch/state.db. By default Driftwatch does not upload code, logs, or specs, does not use telemetry, and does not call an LLM API.
+State is stored locally in .driftwatch/state.db. By default Driftwatchdog does not upload code, logs, or specs, does not use telemetry, and does not call an LLM API.
 
 ## Example
 
-    $ driftwatch run cargo test
+    $ driftwatchdog run cargo test
 
     FAIL
 
@@ -50,30 +50,30 @@ State is stored locally in .driftwatch/state.db. By default Driftwatch does not 
 
 After checker integration:
 
-    driftwatch check
-    driftwatch link bug:abcdef12 spec:42 --note "see issue #108"
-    driftwatch report --ai > drift.md
+    driftwatchdog check
+    driftwatchdog link bug:abcdef12 spec:42 --note "see issue #108"
+    driftwatchdog report --ai > drift.md
 
 The AI report contains recurring failures, current spec violations, possible heuristic relationships and manual links, recent commits, and instructions to investigate recurrence and add regression coverage. It deliberately does not claim that a similarity score proves root cause.
 
 ## Commands
 
-    driftwatch init
-    driftwatch run <command> [args...]
-    driftwatch list [--limit N] [--failed] [--tag TAG]
-    driftwatch top [--limit N] [--days N] [--tag TAG]
-    driftwatch show <bug-id>
-    driftwatch report [--ai] [--limit N] [--days N] [--tag TAG]
-    driftwatch check [--only NAMES] [--dry-run]
-    driftwatch link bug:<id> spec:<alert-id> [--note "..."]
-    driftwatch unlink <link-id>
-    driftwatch export json|jsonl|markdown
-    driftwatch gc [--days N]
-    driftwatch doctor
+    driftwatchdog init
+    driftwatchdog run <command> [args...]
+    driftwatchdog list [--limit N] [--failed] [--tag TAG]
+    driftwatchdog top [--limit N] [--days N] [--tag TAG]
+    driftwatchdog show <bug-id>
+    driftwatchdog report [--ai] [--limit N] [--days N] [--tag TAG]
+    driftwatchdog check [--only NAMES] [--dry-run]
+    driftwatchdog link bug:<id> spec:<alert-id> [--note "..."]
+    driftwatchdog unlink <link-id>
+    driftwatchdog export json|jsonl|markdown
+    driftwatchdog gc [--days N]
+    driftwatchdog doctor
 
 ## External checkers
 
-Driftwatch does not define a spec format. Configure existing local tools in driftwatch.toml:
+Driftwatchdog does not define a spec format. Configure existing local tools in driftwatch.toml:
 
     [[checkers]]
     name = "architecture"

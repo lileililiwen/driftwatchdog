@@ -3,11 +3,11 @@
 //! exercises the public `score_pair` and `generate` functions from
 //! a black-box perspective.
 
-use driftwatch::repo::alerts::Alert;
-use driftwatch::repo::bugs::Fingerprint;
-use driftwatch::similarity::candidates::{generate, MAX_PAIRS};
-use driftwatch::similarity::score::{score_pair, AlertInput, BugInput, ALGO_VERSION, THRESHOLD};
-use driftwatch::similarity::tokenize::{jaccard, tokenize};
+use driftwatchdog::repo::alerts::Alert;
+use driftwatchdog::repo::bugs::Fingerprint;
+use driftwatchdog::similarity::candidates::{generate, MAX_PAIRS};
+use driftwatchdog::similarity::score::{score_pair, AlertInput, BugInput, ALGO_VERSION, THRESHOLD};
+use driftwatchdog::similarity::tokenize::{jaccard, tokenize};
 use std::collections::HashMap;
 
 fn fp(id: i64, canonical: &str) -> Fingerprint {

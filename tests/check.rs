@@ -7,12 +7,12 @@
 #![cfg(unix)]
 
 use assert_cmd::Command;
-use driftwatch::repo::{alerts::Alerts, Db};
+use driftwatchdog::repo::{alerts::Alerts, Db};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
 fn driftwatch() -> Command {
-    Command::cargo_bin("driftwatch").expect("compiled driftwatch binary")
+    Command::cargo_bin("driftwatchdog").expect("compiled driftwatch binary")
 }
 
 fn init_dir() -> tempfile::TempDir {

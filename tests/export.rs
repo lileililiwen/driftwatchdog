@@ -9,7 +9,7 @@ use tempfile::tempdir;
 // other test references it directly.
 
 fn driftwatch() -> Command {
-    Command::cargo_bin("driftwatch").expect("compiled driftwatch binary")
+    Command::cargo_bin("driftwatchdog").expect("compiled driftwatch binary")
 }
 
 fn init_dir() -> tempfile::TempDir {
@@ -102,13 +102,13 @@ fn export_jsonl_emits_one_record_per_line_with_type_and_record_id() {
 fn export_json_after_link_includes_manual_link_with_note() {
     let tmp = init_dir();
     let db_path = tmp.path().join(".driftwatch/state.db");
-    let mut db = driftwatch::repo::Db::open(&db_path).unwrap();
-    let fp = driftwatch::repo::bugs::Bugs::new(&mut db)
+    let mut db = driftwatchdog::repo::Db::open(&db_path).unwrap();
+    let fp = driftwatchdog::repo::bugs::Bugs::new(&mut db)
         .upsert_for_occurrence("err", "err", "2026-01-01T00:00:00Z")
         .unwrap();
-    driftwatch::repo::alerts::Alerts::record_run(
+    driftwatchdog::repo::alerts::Alerts::record_run(
         &mut db,
-        &driftwatch::repo::alerts::NewSnapshot {
+        &driftwatchdog::repo::alerts::NewSnapshot {
             taken_at: "2026-01-01T00:00:00Z",
             checker_name: "spec",
             status: "success",
@@ -117,7 +117,7 @@ fn export_json_after_link_includes_manual_link_with_note() {
             git_commit: None,
             git_branch: None,
         },
-        &[driftwatch::repo::alerts::NewAlert {
+        &[driftwatchdog::repo::alerts::NewAlert {
             severity: "warning",
             message: "m",
             source: Some("s"),

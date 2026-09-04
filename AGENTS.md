@@ -2,7 +2,7 @@
 
 ## Scope
 
-Driftwatch is a local-first Rust CLI for remembering runtime failures across AI-assisted coding sessions. Rust describes the implementation, not the monitored project: command execution and failure normalization must remain language-agnostic.
+Driftwatchdog is a local-first Rust CLI for remembering runtime failures across AI-assisted coding sessions. Rust describes the implementation, not the monitored project: command execution and failure normalization must remain language-agnostic.
 
 ## Required workflow
 

@@ -1,12 +1,17 @@
 [package]
-name = "driftwatch"
+name = "driftwatchdog"
 version = "0.1.0"
 edition = "2021"
 description = "Local-first runtime failure memory for AI-assisted coding workflows."
-license = "LicenseRef-Driftwatch"
+license = "MIT"
+repository = "https://github.com/lileililiwen/driftwatchdog"
+homepage = "https://github.com/lileililiwen/driftwatchdog"
+keywords = ["ai", "cli", "fingerprinting", "runtime", "memory"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
 
 [[bin]]
-name = "driftwatch"
+name = "driftwatchdog"
 path = "src/main.rs"
 
 [dependencies]

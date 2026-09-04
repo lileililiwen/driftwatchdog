@@ -2,9 +2,9 @@
 //! "opening the database does not recreate or delete records" — this file
 //! asserts that round-trip plus the post-init invariants.
 
-use driftwatch::repo::runs::{RunStatus, Runs};
-use driftwatch::repo::Db;
-use driftwatch::storage;
+use driftwatchdog::repo::runs::{RunStatus, Runs};
+use driftwatchdog::repo::Db;
+use driftwatchdog::storage;
 use rusqlite::Connection;
 use tempfile::tempdir;
 

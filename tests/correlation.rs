@@ -6,12 +6,14 @@
 #![cfg(unix)]
 
 use assert_cmd::Command;
-use driftwatch::repo::{alerts::Alerts, bugs::Bugs, correlations::Correlations, links::Links, Db};
+use driftwatchdog::repo::{
+    alerts::Alerts, bugs::Bugs, correlations::Correlations, links::Links, Db,
+};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
 fn driftwatch() -> Command {
-    Command::cargo_bin("driftwatch").expect("compiled driftwatch binary")
+    Command::cargo_bin("driftwatchdog").expect("compiled driftwatch binary")
 }
 
 fn init_dir() -> tempfile::TempDir {
@@ -37,7 +39,7 @@ fn insert_fingerprint_and_alert(db_path: &std::path::Path) -> (i64, i64) {
     // Then record the alert snapshot (separate `&mut db` borrow).
     Alerts::record_run(
         &mut db,
-        &driftwatch::repo::alerts::NewSnapshot {
+        &driftwatchdog::repo::alerts::NewSnapshot {
             taken_at: "2026-01-01T00:00:00Z",
             checker_name: "spec",
             status: "success",
@@ -46,7 +48,7 @@ fn insert_fingerprint_and_alert(db_path: &std::path::Path) -> (i64, i64) {
             git_commit: None,
             git_branch: None,
         },
-        &[driftwatch::repo::alerts::NewAlert {
+        &[driftwatchdog::repo::alerts::NewAlert {
             severity: "warning",
             message: "DbPool: timeout exceeded",
             source: Some("specs/db.md"),
@@ -257,7 +259,7 @@ fn report_ai_includes_possible_relationships_when_heuristic_passes_threshold() {
         .upsert(
             fp_id,
             alert_id,
-            driftwatch::similarity::score::ComponentScores {
+            driftwatchdog::similarity::score::ComponentScores {
                 message: 1.0,
                 symbol: 1.0,
                 file: 1.0,

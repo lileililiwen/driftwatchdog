@@ -3,14 +3,14 @@
 //! "non-fatal Git failure" behavior.
 
 use assert_cmd::Command;
-use driftwatch::project::git;
+use driftwatchdog::project::git;
 use tempfile::tempdir;
 
 #[test]
 fn init_outside_git_succeeds() {
     let tmp = tempdir().unwrap();
     // The fresh tempdir is not a Git worktree.
-    Command::cargo_bin("driftwatch")
+    Command::cargo_bin("driftwatchdog")
         .expect("binary")
         .arg("init")
         .current_dir(tmp.path())
