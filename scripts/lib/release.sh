@@ -1,13 +1,14 @@
 # shellcheck shell=sh
 # URL construction and archive naming shared by the installer, the
 # release builder, and the GitHub workflow.
+#
+# Callers must set DRIFTWATCH_LIB_DIR to the directory holding this
+# file before sourcing. POSIX `sh` does not update $0 inside a sourced
+# file, so we cannot reliably locate config.sh from inside this script.
 
-# The lib dir is normally passed in by the caller (install.sh, package.sh,
-# etc.). When this file is sourced directly, fall back to the directory
-# holding the file so the script can be invoked standalone for ad-hoc
-# debugging.
 if [ -z "${DRIFTWATCH_LIB_DIR:-}" ]; then
-    DRIFTWATCH_LIB_DIR=$(CDPATH= cd -- "$(dirname -- "${0:-.}")" && pwd)
+    printf 'release.sh: DRIFTWATCH_LIB_DIR is not set; cannot locate config.sh\n' >&2
+    return 1 2>/dev/null || exit 1
 fi
 . "$DRIFTWATCH_LIB_DIR/config.sh"
 

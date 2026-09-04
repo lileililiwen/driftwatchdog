@@ -32,8 +32,10 @@ artifact_suffix=$2
 stage_dir=$3
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-. "$script_dir/lib/version.sh"
-. "$script_dir/lib/release.sh"
+DRIFTWATCH_LIB_DIR="$script_dir/lib"
+export DRIFTWATCH_LIB_DIR
+. "$DRIFTWATCH_LIB_DIR/version.sh"
+. "$DRIFTWATCH_LIB_DIR/release.sh"
 
 version=$(driftwatch_version)
 archive_name=$(driftwatch_archive_name "$version" "$artifact_suffix")
