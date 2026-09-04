@@ -18,7 +18,8 @@ Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in
 | v0.2 Observe | `export-and-doctor` | Inspect, export, and diagnose the local installation. |
 | v0.3 Connect | `checker-and-drift-alerts` | Run configured external checkers through a stable JSON protocol and retain drift snapshots. |
 | v0.4 Correlate | `correlation-and-ai-context` | Relate recurring failures to alerts, support manual links, and generate AI context. |
-| v0.5 Integrate | Future change | Add MCP read tools, Claude Code/OpenCode/Aider examples, and GitHub Actions templates. |
+| v0.5 Distribute | `linux-macos-distribution` | Ship native Linux + Intel macOS binaries through a shell installer, an npm launcher, direct downloads, and reproducible CI. |
+| v0.6 Integrate | Future change | Add MCP read tools, Claude Code/OpenCode/Aider examples, and GitHub Actions templates. |
 | v1.0 Stable | Future hardening changes | Stabilize schema, config, checker protocol, CLI, cross-platform behavior, documentation, and real-project validation. |
 
 ## Closed change inventory
@@ -31,6 +32,7 @@ The following change packages have been implemented and archived:
 - `export-and-doctor` — Portable export (json/jsonl/markdown) and local doctor diagnostics.
 - `checker-and-drift-alerts` — External checker protocol, adapters, snapshots, alerts, `driftwatch check`.
 - `correlation-and-ai-context` — Heuristic correlation, manual `link`/`unlink`, and `driftwatch report --ai`.
+- `linux-macos-distribution` — Shell installer, npm launcher, GitHub Actions release workflow, and SHA-256-verified archives for Linux x86_64, Linux arm64, and macOS x86_64.
 
 ## Change dependency graph
 
@@ -40,9 +42,11 @@ project-foundation
 runtime-memory → fingerprinting-and-retention → export-and-doctor
         ↓                                      ↓
 checker-and-drift-alerts ───────────────→ correlation-and-ai-context
+                                               ↓
+                                       linux-macos-distribution
 ```
 
-The first three packages form the smallest useful runtime-memory release. Checker integration remains optional until that foundation is stable.
+The first three packages form the smallest useful runtime-memory release. Checker integration remains optional until that foundation is stable. Distribution packaging (v0.5) layers on top of the stable CLI without altering its contract.
 
 ## Explicit non-goals for v1
 

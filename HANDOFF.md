@@ -12,16 +12,16 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
-All six v0.x change packages are **implemented and archived**: `project-foundation`, `runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, and `correlation-and-ai-context`. The `driftwatch` Rust binary builds and tests cleanly. The full CLI surface is functional: `init`, `run`, `list`, `top`, `show`, `report` (with `--ai`), `gc`, `export json|jsonl|markdown`, `doctor`, `check`, `link`, `unlink`. The SQLite schema (version 3) covers runs, fingerprints, occurrences, check_snapshots (with `git_commit`/`git_branch`), drift_alerts, correlations (with per-component scores and `algorithm_version`), and manual_links. Five capability specs are live under `openspec/specs/`. The next change is the v0.5 integration work (MCP read tools + examples + GitHub Actions templates); see ROADMAP.md.
+All v0.x change packages through v0.5 are **implemented and archived**: `project-foundation`, `runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`, and `linux-macos-distribution`. The `driftwatch` Rust binary builds and tests cleanly. The full CLI surface is functional: `init`, `run`, `list`, `top`, `show`, `report` (with `--ai`), `gc`, `export json|jsonl|markdown`, `doctor`, `check`, `link`, `unlink`. The SQLite schema (version 3) covers runs, fingerprints, occurrences, check_snapshots (with `git_commit`/`git_branch`), drift_alerts, correlations (with per-component scores and `algorithm_version`), and manual_links. Six capability specs are live under `openspec/specs/`. Native release archives plus an SHA-256 manifest are produced for Linux x86_64, Linux arm64, and macOS x86_64 by `.github/workflows/release.yml`; the shell installer (`scripts/install.sh`), the npm launcher (`npm/driftwatchdog/`), direct downloads, and `cargo install` are documented in README.md. The next change is the v0.6 integration work (MCP read tools + examples + GitHub Actions templates); see ROADMAP.md.
 
 ## Start here
 
 Read these in order:
 
-1. README.md — product positioning and user-facing command surface.
+1. README.md — product positioning, user-facing command surface, and installation channels.
 2. ROADMAP.md — release sequence, closed change inventory, and dependency graph.
-3. `openspec/specs/` — the five capability specifications the implementation satisfies.
-4. The archived v0.5 change proposal (still spec-only) under `openspec/changes/` once it lands.
+3. `openspec/specs/` — the six capability specifications the implementation satisfies.
+4. The archived v0.6 change proposal (still spec-only) under `openspec/changes/` once it lands.
 
 ## Change inventory
 
@@ -33,6 +33,7 @@ Read these in order:
 | export-and-doctor | archived 2026-09-04 | Portable export (json/jsonl/markdown) and local doctor diagnostics | foundation |
 | checker-and-drift-alerts | archived 2026-09-04 | External checker protocol, adapters, snapshots, alerts, `driftwatch check` | foundation |
 | correlation-and-ai-context | archived 2026-09-04 | Heuristic correlations, manual `link`/`unlink`, `driftwatch report --ai` | fingerprinting; checker alerts |
+| linux-macos-distribution | archived 2026-09-04 | Shell installer, npm launcher, release workflow, SHA-256-verified native archives for Linux x86_64, Linux arm64, and macOS x86_64 | any prior archive |
 
 ## Implementation constraints
 
@@ -50,9 +51,9 @@ Read these in order:
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 217+ tests pass: lib + integration
+    cargo test             # 230+ tests pass: lib + integration (incl. packaging)
     cargo clippy --all-targets --all-features -- -D warnings
-    openspec validate --changes --strict --no-interactive   # 1/1 pass
+    openspec validate --changes --strict --no-interactive   # 0/0 pass (changes archived)
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
     ./target/debug/driftwatch report                        # markdown report
@@ -65,6 +66,7 @@ Last run on this change:
     ./target/debug/driftwatch check                         # runs configured checkers
     ./target/debug/driftwatch link bug:<hash8> spec:<id>    # persists manual link
     ./target/debug/driftwatch unlink <id>                   # removes targeted link
+    sh scripts/smoke.sh                                     # release packaging end-to-end
 
 ## Module map
 
@@ -97,6 +99,20 @@ Last run on this change:
 - `src/checker/report.rs` — `Status`, `Severity`, `CheckerOutcome`, `label_for_status`.
 - `src/runtime/runner.rs` — `CommandSpec`, `CapturedStream`, `RunOutcome`, `run`.
 - `src/commands/{run,list,top,show,report,gc,export,doctor,check,link,unlink,report_ai}.rs` — per-subcommand orchestration returning process exit code.
+- `scripts/lib/{config,version,platform,release}.sh` — shared packaging helpers: target matrix, version source (Cargo.toml), host detection, and URL construction.
+- `scripts/package.sh` — reproducible per-target release builder (`cargo build --release --locked`, then archive).
+- `scripts/checksum.sh` — deterministic SHA-256 manifest generator from the final archives.
+- `scripts/install.sh` — POSIX shell installer: strict mode, `--version`/`--dest`/`--allow-root`/`--dry-run`, HTTPS download, SHA-256 verification, atomic install into a user-writable default.
+- `scripts/smoke.sh` — opt-in local release smoke test that drives the installer against a hand-built fixture.
+- `npm/driftwatchdog/package.json` — npm package metadata (`bin` exposes `driftwatch`).
+- `npm/driftwatchdog/bin/driftwatch.js` — launcher: host detection, versioned cache, manifest + archive fetch, verification, exec with forwarded args and exit status.
+- `npm/driftwatchdog/lib/platform.js` — npm-side `targetFor` / `detectTarget`, normalized to the shell matrix.
+- `npm/driftwatchdog/lib/release.js` — npm-side `releaseUrls`, mirrors `scripts/lib/release.sh`.
+- `npm/driftwatchdog/lib/verify.js` — dependency-free HTTP, SHA-256, manifest parser, and tar.gz extractor (with path-traversal safety).
+- `npm/driftwatchdog/test/launcher.test.js` — `node:test` suite covering supported/unsupported hosts, verification, round-trip exec, cache reuse, and traversal rejection.
+- `tests/packaging.sh` + `tests/packaging/{test_*.sh,fixture.sh}` — bash packaging tests (target mapping, artifact naming, checksum manifest, installer) and shared fixture.
+- `tests/packaging/run_all.sh` + `tests/packaging.rs` — combined bash+node runner and a Rust integration test that invokes it from `cargo test`.
+- `.github/workflows/release.yml` — tag-triggered matrix build (linux-x86_64, linux-arm64, darwin-x86_64), checksum manifest generation, and `softprops/action-gh-release` upload; the publish job depends on every matrix build, so partial matrices fail before any asset ships.
 
 ## Known environment note
 
@@ -104,4 +120,4 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 
 ## Next action
 
-All v0.x change packages are closed. v0.5 (MCP read tools + examples + GitHub Actions templates) is the next release; see ROADMAP.md. Until a new change proposal lands in `openspec/changes/`, no implementation work is queued — apply small documentation fixes and bug fixes directly. Follow the "Change completion workflow" at the top of this file when a new change is ready to archive.
+All v0.x change packages through v0.5 are closed. v0.6 (MCP read tools + examples + GitHub Actions templates) is the next release; see ROADMAP.md. Until a new change proposal lands in `openspec/changes/`, no implementation work is queued — apply small documentation fixes and bug fixes directly. Follow the "Change completion workflow" at the top of this file when a new change is ready to archive.
