@@ -12,7 +12,7 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
-`project-foundation` is **implemented and archived** (2026-09-04). The `driftwatch` Rust binary builds and tests cleanly, `driftwatch init` is functional, the SQLite schema (version 1) is in place, and all OpenSpec validation gates pass. The capability spec is live at `openspec/specs/project-foundation/spec.md`. The remaining five change packages (`runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`) are spec-only.
+`project-foundation` and `runtime-memory` are **implemented and archived** (both 2026-09-04). The `driftwatch` Rust binary builds and tests cleanly: `driftwatch init`, `driftwatch run`, `driftwatch list`, and `driftwatch top` are all functional. The SQLite schema (version 1) covers runs, fingerprints, occurrences, check_snapshots, drift_alerts, correlations, and manual_links. Both capability specs are live under `openspec/specs/`. The remaining four change packages (`fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`) are spec-only.
 
 ## Start here
 
@@ -20,17 +20,17 @@ Read these in order:
 
 1. README.md — product positioning and user-facing command surface.
 2. ROADMAP.md — release sequence and dependency graph.
-3. `openspec/changes/runtime-memory/` — **next change**: arbitrary command runner and run queries. Foundation is ready (`Db`, `Runs::reserve`, schema fields for output/tags/git, project-root discovery, config loader).
-4. `openspec/changes/fingerprinting-and-retention/` — generic normalization and bug memory.
+3. `openspec/changes/fingerprinting-and-retention/` — **next change**: generic failure normalization, bug grouping, retention/GC. Runtime is ready (`Runs::list` filters, exit codes, output excerpts, tags, Git context).
+4. `openspec/changes/export-and-doctor/` — portable export and local diagnostics.
 
-Then continue with export/diagnostics, checker, and correlation changes in the order documented by the roadmap.
+Then continue with checker and correlation changes in the order documented by the roadmap.
 
 ## Change inventory
 
 | Change | Status | Purpose | Depends on |
 | --- | --- | --- | --- |
 | project-foundation | archived 2026-09-04 | Rust CLI, config, local directory, SQLite schema, Git metadata | none |
-| runtime-memory | spec-only | Run arbitrary commands and persist/query runs | foundation |
+| runtime-memory | archived 2026-09-04 | Run arbitrary commands, persist/query runs, top-level empty state | foundation |
 | fingerprinting-and-retention | spec-only | Normalize failures, aggregate bugs, report, GC | runtime memory |
 | export-and-doctor | spec-only | Portable export and local diagnostics | foundation; integrates with later data |
 | checker-and-drift-alerts | spec-only | External checker protocol, adapters, snapshots, alerts | foundation |
@@ -52,15 +52,17 @@ Then continue with export/diagnostics, checker, and correlation changes in the o
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 31 tests pass: 19 unit + 12 integration
+    cargo test             # 60 tests pass: 32 lib unit + 28 integration
     cargo clippy --all-targets --all-features -- -D warnings
-    openspec validate --changes --strict --no-interactive   # 6/6 pass
-    ./target/debug/driftwatch init --help                   # works
+    openspec validate --changes --strict --no-interactive   # 4/4 pass
+    ./target/debug/driftwatch run echo hi                   # exit 0, row written
+    ./target/debug/driftwatch list                          # table renders
+    ./target/debug/driftwatch top                           # empty-state message
 
-## Foundation module map
+## Module map
 
-- `src/main.rs` — binary entrypoint, `anyhow` boundary.
-- `src/cli.rs` — `clap` derive types (`Cli`, `Command::Init`, `InitArgs`).
+- `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`.
+- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top}` and arg structs).
 - `src/error.rs` — `thiserror` `Error` enum used by library code.
 - `src/project/root.rs` — `ProjectRoot::discover` with bounded walk-up.
 - `src/project/config.rs` — `Config` struct + TOML loader (preserves absent sections).
@@ -70,10 +72,12 @@ Last run on this change:
 - `src/storage/migrations.rs` — versioned migration runner.
 - `src/storage/schema.rs` — `MIGRATION_0001_BASELINE` SQL.
 - `src/repo/mod.rs` — `Db` wrapper, `open`, `open_in_memory`.
-- `src/repo/runs.rs` — `RunRecord`, `RunStatus`, `Runs::reserve/find`.
-- `src/repo/bugs.rs` — `Fingerprint` row, `Bugs::find_by_hash`.
+- `src/repo/runs.rs` — `RunRecord`, `RunStatus`, `RunCompletion`, `ListFilter`; `Runs::{reserve,find,insert_full,list}`.
+- `src/repo/bugs.rs` — `Fingerprint`, `TopRow`; `Bugs::{find_by_hash,top}`.
 - `src/repo/alerts.rs` — `Alerts::snapshot_count` (placeholder for checker change).
 - `src/repo/correlations.rs`, `src/repo/links.rs` — placeholders with constructors.
+- `src/runtime/runner.rs` — `CommandSpec`, `CapturedStream`, `RunOutcome`, `run`; two-thread drain past capture limit.
+- `src/commands/{run,list,top}.rs` — per-subcommand orchestration returning process exit code.
 
 ## Known environment note
 
@@ -81,4 +85,4 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 
 ## Next action
 
-Implement exactly one active change at a time, beginning with `runtime-memory`. Reuse the foundation's `Db` + `Runs::reserve`; extend the runner schema, add bounded stream capture, and add the `list`/`top` query surfaces. When the change is done, follow the "Change completion workflow" at the top of this file.
+Implement exactly one active change at a time, beginning with `fingerprinting-and-retention`. Reuse the runtime's `Runs::list` output and `RunRecord` fields (tags, output excerpts, exit_code); add a generic normalizer that produces `fingerprints` and `occurrences` rows, hook it into the `run` flow after `insert_full`, and add `driftwatch report` and `driftwatch gc` to round out v0.1. When the change is done, follow the "Change completion workflow" at the top of this file.
