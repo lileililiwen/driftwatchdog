@@ -40,12 +40,31 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Cross-compiling to Linux arm64 requires a cross C toolchain:
+      # rusqlite is built with `features = ["bundled"]`, so
+      # libsqlite3-sys compiles SQLite from C source. Without this,
+      # the arm64 build fails with:
+      #   ToolNotFound: failed to find tool "aarch64-linux-gnu-gcc"
+      - name: Install cross C toolchain for Linux arm64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          aarch64-linux-gnu-gcc --version
+
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
       - name: Build release binary
+        env:
+          # Point cc-rs at the cross compiler installed above. Only
+          # consulted when cross-compiling to Linux arm64; harmless
+          # (and ignored) for the other targets.
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           set -euo pipefail
           chmod +x scripts/package.sh
