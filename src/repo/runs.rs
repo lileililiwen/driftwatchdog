@@ -171,6 +171,15 @@ impl<'a> Runs<'a> {
         Ok(())
     }
 
+    /// All runs, newest first, capped at `limit`. Convenience wrapper for
+    /// callers that want every row (e.g. `driftwatch export`).
+    pub fn all(&self, limit: usize) -> Result<Vec<RunRecord>, Error> {
+        self.list(&ListFilter {
+            limit,
+            ..Default::default()
+        })
+    }
+
     /// List runs, newest first, with optional filters.
     pub fn list(&self, filter: &ListFilter) -> Result<Vec<RunRecord>, Error> {
         // Build the WHERE clause incrementally. Tag matching is a coarse

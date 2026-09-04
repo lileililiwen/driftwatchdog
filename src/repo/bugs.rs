@@ -69,6 +69,19 @@ impl<'a> Bugs<'a> {
         Self { db }
     }
 
+    /// All fingerprints, ordered by `id` ascending. Used by `driftwatch
+    /// export` to enumerate the recurring-bug set without filter.
+    pub fn all(&self) -> Result<Vec<Fingerprint>, Error> {
+        let mut stmt = self.db.conn().prepare(
+            "SELECT id, hash, canonical, summary, first_seen_at, last_seen_at, occurrence_count
+             FROM fingerprints ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], map_fp)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// Look up a fingerprint by its hash. Returns `None` when not present.
     pub fn find_by_hash(&self, hash: &str) -> Result<Option<Fingerprint>, Error> {
         let row = self

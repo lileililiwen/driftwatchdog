@@ -29,6 +29,10 @@ pub enum Command {
     Report(ReportArgs),
     /// Garbage-collect bulky stdout/stderr older than `--days`.
     Gc(GcArgs),
+    /// Export persisted data as JSON, JSONL, or Markdown to stdout.
+    Export(ExportArgs),
+    /// Diagnose the local installation and print pass/warn/fail checks.
+    Doctor(DoctorArgs),
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -118,3 +122,24 @@ pub struct GcArgs {
     #[arg(long)]
     pub dry_run: bool,
 }
+
+/// `driftwatch export <format>` where `<format>` is one of `json`,
+/// `jsonl`, or `markdown`.
+#[derive(Debug, Args, Clone)]
+pub struct ExportArgs {
+    /// Output format. `json` is a single document; `jsonl` is one
+    /// record per line; `markdown` is a human-readable projection.
+    #[arg(value_enum, value_name = "FORMAT")]
+    pub format: ExportFormatArg,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ExportFormatArg {
+    Json,
+    Jsonl,
+    Markdown,
+}
+
+/// `driftwatch doctor` — no flags in v1.
+#[derive(Debug, Args, Default, Clone)]
+pub struct DoctorArgs {}

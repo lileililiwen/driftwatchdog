@@ -12,6 +12,9 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("io error: {0}")]
+    IoBare(#[from] std::io::Error),
+
     #[error("config parse error in {path}: {source}")]
     ConfigParse {
         path: PathBuf,
