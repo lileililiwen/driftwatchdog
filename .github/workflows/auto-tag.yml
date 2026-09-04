@@ -1,0 +1,94 @@
+name: auto-tag
+
+# Auto-increment the vX.Y.Z tag on every push to main, then let the
+# `release` workflow pick it up and publish artifacts. The bump
+# strategy is a conventional-commit heuristic implemented in
+# scripts/bump.sh:
+#
+#   feat!: / BREAKING CHANGE:   -> major
+#   feat:                       -> minor
+#   anything else               -> patch
+#
+# Override:
+#   * Set BUMP=major|minor|patch in the workflow's env to force a
+#     specific level for a given run.
+#   * Include `[no-release]` in the commit subject to skip the bump
+#     for that push entirely.
+#   * Trigger the workflow manually with the `bump` input set to
+#     one of major/minor/patch to force a specific bump level.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Force a specific bump level (leave empty for auto)'
+        required: false
+        type: choice
+        default: 'auto'
+        options: [auto, major, minor, patch]
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    name: bump tag
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Tag creation needs write access; the workflow-level
+          # `contents: write` permission above covers this.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if commit subject contains [no-release]
+        id: skip
+        run: |
+          set -euo pipefail
+          subject="$(git log -1 --format='%s')"
+          printf 'commit subject: %s\n' "$subject"
+          case "$subject" in
+              *'[no-release]'*)
+                  echo 'skip=true' >> "$GITHUB_OUTPUT"
+                  ;;
+              *)
+                  echo 'skip=false' >> "$GITHUB_OUTPUT"
+                  ;;
+          esac
+
+      - name: Compute next version
+        if: steps.skip.outputs.skip != 'true'
+        id: version
+        env:
+          BUMP: ${{ github.event.inputs.bump != '' && github.event.inputs.bump != 'auto' && github.event.inputs.bump || '' }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/bump.sh
+          # Manual dispatch wins over the env override.
+          if [ -n "$BUMP" ]; then
+              next=$(BUMP="$BUMP" sh scripts/bump.sh)
+          else
+              next=$(sh scripts/bump.sh)
+          fi
+          printf 'next version: %s\n' "$next"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+              printf 'tag %s already exists locally; nothing to do\n' "$TAG"
+              exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "$TAG" -m "Auto-bumped by auto-tag workflow."
+          git push origin "$TAG"
+          printf 'created and pushed %s\n' "$TAG"
