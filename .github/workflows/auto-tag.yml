@@ -50,6 +50,23 @@ jobs:
     name: bump tag
     runs-on: ubuntu-22.04
     steps:
+      - name: 'Precondition: REPO_PAT is configured'
+        env:
+          PAT: ${{ secrets.REPO_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PAT" ]; then
+              printf '::error::REPO_PAT secret is not set on this repository.\n' >&2
+              printf 'Create one at: https://github.com/%s/settings/secrets/actions\n' \
+                  "${{ github.repository }}" >&2
+              printf 'Name: REPO_PAT. Required scope: contents: write (or `repo` for classic PAT).\n' >&2
+              exit 1
+          fi
+          # Mask the token so it does not leak into the run log even
+          # by accident; actions/checkout and the tag-push step use
+          # it via ${{ secrets.REPO_PAT }} so this is belt-and-braces.
+          echo "::add-mask::$PAT"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
