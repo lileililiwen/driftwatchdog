@@ -1,6 +1,13 @@
 # Driftwatch local runtime state
 .driftwatch/
 
+# Driftwatch project config. A local `driftwatch init` (smoke test,
+# integration test, or accidental run in the repo root) creates
+# this file. Driftwatch itself is not a driftwatch project, so the
+# config at the repo root is never meaningful and should stay
+# untracked.
+driftwatch.toml
+
 # Rust build output
 /target/
 
