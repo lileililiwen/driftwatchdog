@@ -12,7 +12,7 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
-`project-foundation`, `runtime-memory`, and `fingerprinting-and-retention` are **implemented and archived** (all 2026-09-04). The `driftwatch` Rust binary builds and tests cleanly: `driftwatch init`, `driftwatch run`, `driftwatch list`, `driftwatch top`, `driftwatch show`, `driftwatch report`, and `driftwatch gc` are all functional. The SQLite schema (version 1) covers runs, fingerprints, occurrences, check_snapshots, drift_alerts, correlations, and manual_links. Three capability specs are live under `openspec/specs/`. The remaining three change packages (`export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`) are spec-only.
+`project-foundation`, `runtime-memory`, `fingerprinting-and-retention`, and `export-and-doctor` are **implemented and archived** (all 2026-09-04). The `driftwatch` Rust binary builds and tests cleanly: `driftwatch init`, `driftwatch run`, `driftwatch list`, `driftwatch top`, `driftwatch show`, `driftwatch report`, `driftwatch gc`, `driftwatch export json|jsonl|markdown`, and `driftwatch doctor` are all functional. The SQLite schema (version 1) covers runs, fingerprints, occurrences, check_snapshots, drift_alerts, correlations, and manual_links. Four capability specs are live under `openspec/specs/`. The remaining two change packages (`checker-and-drift-alerts`, `correlation-and-ai-context`) are spec-only.
 
 ## Start here
 
@@ -20,10 +20,10 @@ Read these in order:
 
 1. README.md — product positioning and user-facing command surface.
 2. ROADMAP.md — release sequence and dependency graph.
-3. `openspec/changes/export-and-doctor/` — **next change**: portable export and local diagnostics.
-4. `openspec/changes/checker-and-drift-alerts/` — external checker protocol and drift snapshots.
+3. `openspec/changes/checker-and-drift-alerts/` — **next change**: external checker protocol and drift snapshots.
+4. `openspec/changes/correlation-and-ai-context/` — heuristic links, manual links, AI report.
 
-Then continue with the correlation change in the order documented by the roadmap.
+Then continue with the remaining change in the order documented by the roadmap.
 
 ## Change inventory
 
@@ -32,7 +32,7 @@ Then continue with the correlation change in the order documented by the roadmap
 | project-foundation | archived 2026-09-04 | Rust CLI, config, local directory, SQLite schema, Git metadata | none |
 | runtime-memory | archived 2026-09-04 | Run arbitrary commands, persist/query runs, top-level empty state | foundation |
 | fingerprinting-and-retention | archived 2026-09-04 | Normalize failures, aggregate bugs, report, GC | runtime memory |
-| export-and-doctor | spec-only | Portable export and local diagnostics | foundation; integrates with later data |
+| export-and-doctor | archived 2026-09-04 | Portable export (json/jsonl/markdown) and local doctor diagnostics | foundation |
 | checker-and-drift-alerts | spec-only | External checker protocol, adapters, snapshots, alerts | foundation |
 | correlation-and-ai-context | spec-only | Heuristic links, manual links, AI report | fingerprinting; checker alerts |
 
@@ -52,19 +52,23 @@ Then continue with the correlation change in the order documented by the roadmap
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 136 tests pass: 88 lib unit + 48 integration
+    cargo test             # 167 tests pass: 106 lib unit + 61 integration
     cargo clippy --all-targets --all-features -- -D warnings
     openspec validate --changes --strict --no-interactive   # 3/3 pass
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
     ./target/debug/driftwatch report                        # markdown report
     ./target/debug/driftwatch gc                            # pruned 0 runs (recent)
+    ./target/debug/driftwatch export json                   # valid JSON document
+    ./target/debug/driftwatch export jsonl                  # one record per line
+    ./target/debug/driftwatch export markdown               # human-readable
+    ./target/debug/driftwatch doctor                        # 6/6 checks pass (1 warn)
 
 ## Module map
 
-- `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`.
-- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc}` and arg structs).
-- `src/error.rs` — `thiserror` `Error` enum used by library code, with `BugNotFound { id }`.
+- `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`; dispatches all 9 subcommands.
+- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor}` and arg structs).
+- `src/error.rs` — `thiserror` `Error` enum used by library code, with `Io { path, source }`, `IoBare` for bare `std::io::Error`, `BugNotFound { id }`.
 - `src/fingerprint/mod.rs` — module entry, re-exports `Rules`, `Canonical`, `fingerprint`.
 - `src/fingerprint/normalizer.rs` — `Rule`, `Rules::generic()`, `Canonical`, `summary_of`, `bounded_excerpt`; 13 ordered rules (ANSI, OSC, temp_path, absolute_path, port, line/column, uuid, iso_timestamp, pid, duration_ms, duration_s, long_hex, long_decimal).
 - `src/fingerprint/hash.rs` — `fingerprint(&str) -> String` (64 hex SHA-256).
@@ -76,12 +80,15 @@ Last run on this change:
 - `src/storage/migrations.rs` — versioned migration runner.
 - `src/storage/schema.rs` — `MIGRATION_0001_BASELINE` SQL.
 - `src/repo/mod.rs` — `Db` wrapper, `open`, `open_in_memory`, `conn`, `conn_mut`.
-- `src/repo/runs.rs` — `RunRecord`, `RunStatus`, `RunCompletion`, `ListFilter`; `Runs::{reserve,find,insert_full,list}`.
-- `src/repo/bugs.rs` — `Fingerprint`, `TopRow`, `Occurrence`, `RecentCommit`, `Report`; `Bugs::{find_by_hash,find_by_id,find_by_hash_prefix,hash_for_run,hash_for_runs,upsert_for_occurrence,insert_occurrence,occurrences_for,recent_commits,report_for,top,prune_streams}`.
-- `src/repo/alerts.rs` — `Alerts::snapshot_count` (placeholder for checker change).
-- `src/repo/correlations.rs`, `src/repo/links.rs` — placeholders with constructors.
+- `src/repo/runs.rs` — `RunRecord`, `RunStatus`, `RunCompletion`, `ListFilter`; `Runs::{reserve,find,insert_full,list,all}`.
+- `src/repo/bugs.rs` — `Fingerprint`, `TopRow`, `Occurrence`, `RecentCommit`, `Report`; `Bugs::{all,find_by_hash,find_by_id,find_by_hash_prefix,hash_for_run,hash_for_runs,upsert_for_occurrence,insert_occurrence,occurrences_for,recent_commits,report_for,top,prune_streams}`.
+- `src/repo/alerts.rs` — `Alerts::{snapshot_count,alert_count,list_snapshots,list_alerts}`; also `schema_version(conn)` and `foundation_tables_present(conn)` helpers.
+- `src/repo/correlations.rs` — `Correlations::{list_all,count}`; placeholder DTOs populated by correlation change.
+- `src/repo/links.rs` — `Links::{list_all,count}`; placeholder DTOs populated by correlation change.
+- `src/export/{dto,build,json,jsonl,markdown,mod}.rs` — versioned export DTOs (`SCHEMA_VERSION = 1`) and three serializers.
+- `src/doctor/{check,mod}.rs` — `Check`, `Status { Pass|Warn|Fail }`, and the `Report` aggregator (5 check categories: project paths, DB/schema, config, Git, dirs, checkers).
 - `src/runtime/runner.rs` — `CommandSpec`, `CapturedStream`, `RunOutcome`, `run`; two-thread drain past capture limit.
-- `src/commands/{run,list,top,show,report,gc}.rs` — per-subcommand orchestration returning process exit code.
+- `src/commands/{run,list,top,show,report,gc,export,doctor}.rs` — per-subcommand orchestration returning process exit code.
 
 ## Known environment note
 
@@ -89,4 +96,4 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 
 ## Next action
 
-Implement exactly one active change at a time, beginning with `export-and-doctor`. The runtime + fingerprinting + retention foundation is now stable: `Runs::list` filters, `Bugs::top/report_for/prune_streams`, and the `Driftwatch.toml` config surface are all ready to be consumed. The new change should add `driftwatch export json|jsonl|markdown` and `driftwatch doctor` without touching the checker or correlation surface. When the change is done, follow the "Change completion workflow" at the top of this file.
+Implement exactly one active change at a time, beginning with `checker-and-drift-alerts`. The export + doctor surface is now stable: `ExportDocument` already covers `check_snapshots` and `drift_alerts`, so populating those tables in the next change will make `driftwatch export` immediately reflect them with no further DTO work. Follow the "Change completion workflow" at the top of this file.
