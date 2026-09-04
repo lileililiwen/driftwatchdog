@@ -101,3 +101,19 @@ pub const MIGRATION_0002_SNAPSHOT_GIT: &str = r#"
 ALTER TABLE check_snapshots ADD COLUMN git_commit TEXT;
 ALTER TABLE check_snapshots ADD COLUMN git_branch TEXT;
 "#;
+
+/// Migration: extend `correlations` with the per-component similarity
+/// scores and the algorithm version. The `correlation-and-ai-context`
+/// change requires the correlator to persist message/symbol/file/tag
+/// scores independently (so future re-tuning can recompute without
+/// losing the breakdown) and to tag every row with the algorithm
+/// version that produced it. The migration is purely additive: existing
+/// rows gain `NULL` for the new score columns and the unchanged
+/// aggregate `score` column remains the authoritative total.
+pub const MIGRATION_0003_CORRELATION_DETAIL: &str = r#"
+ALTER TABLE correlations ADD COLUMN score_message REAL;
+ALTER TABLE correlations ADD COLUMN score_symbol REAL;
+ALTER TABLE correlations ADD COLUMN score_file REAL;
+ALTER TABLE correlations ADD COLUMN score_tag REAL;
+ALTER TABLE correlations ADD COLUMN algorithm_version TEXT NOT NULL DEFAULT 'v1';
+"#;

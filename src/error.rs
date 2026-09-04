@@ -39,6 +39,12 @@ pub enum Error {
 
     #[error("no fingerprint matches '{id}'")]
     BugNotFound { id: String },
+
+    #[error("could not resolve {side} reference '{raw}'")]
+    LinkTarget { side: &'static str, raw: String },
+
+    #[error("manual link #{id} not found")]
+    ManualLinkNotFound { id: i64 },
 }
 
 impl Error {

@@ -93,6 +93,17 @@ pub fn check(args: CheckArgs, cwd: &Path) -> Result<i32, Error> {
     let had_failure = outcomes.iter().any(|o| o.status.is_failure());
     let all_failed = !outcomes.is_empty() && outcomes.iter().all(|o| o.status.is_failure());
 
+    // Heuristic correlation runs after every successful check so
+    // subsequent `report --ai` invocations can read the persisted
+    // rows without re-scoring. A correlation failure is a warning,
+    // not a hard error: it must not abort the check (the
+    // "isolate checker failures" rule applies to correlation too).
+    if !args.dry_run && !all_failed {
+        if let Err(e) = crate::correlate::run_after_check(&mut db) {
+            eprintln!("driftwatch: correlation skipped: {e}");
+        }
+    }
+
     if args.dry_run {
         return Ok(EXIT_OK);
     }
@@ -297,7 +308,10 @@ fn print_summary(outcomes: &[CheckerOutcome], dry_run: bool) {
         println!("(dry-run; nothing was persisted)");
     }
     println!();
-    println!("{:<24}  {:<12}  {:<7}  DIAGNOSTIC", "CHECKER", "STATUS", "ALERTS");
+    println!(
+        "{:<24}  {:<12}  {:<7}  DIAGNOSTIC",
+        "CHECKER", "STATUS", "ALERTS"
+    );
     for o in outcomes {
         let diag = o.diagnostic.as_deref().unwrap_or("-");
         println!(

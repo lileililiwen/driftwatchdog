@@ -1,5 +1,6 @@
 //! `driftwatch report`: render a Markdown report of recurring bugs.
 
+use std::io::Write;
 use std::path::Path;
 
 use crate::cli::ReportArgs;
@@ -7,10 +8,22 @@ use crate::error::Error;
 use crate::project::ProjectRoot;
 use crate::repo::{bugs::Bugs, Db};
 
-/// Render a Markdown report. Always exits 0 on success.
+/// Render a Markdown report. Always exits 0 on success. When
+/// `args.ai` is set, delegates to `report_ai::render_ai` and prints
+/// the AI-oriented Markdown context instead.
 pub fn report(args: ReportArgs, cwd: &Path) -> Result<i32, Error> {
     let proj = ProjectRoot::discover(cwd)?;
     let mut db = Db::open(&proj.db_path)?;
+
+    if args.ai {
+        let md = crate::commands::report_ai::render_ai(&args, &proj, &mut db)?;
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        handle.write_all(md.as_bytes())?;
+        handle.flush()?;
+        return Ok(0);
+    }
+
     let bugs = Bugs::new(&mut db);
 
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days)).to_rfc3339();

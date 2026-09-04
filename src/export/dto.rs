@@ -10,7 +10,14 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped when the on-disk export shape changes. Consumers should
 /// reject documents whose `schema_version` they do not understand.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// v1: initial.
+/// v2: `CorrelationExport` gained per-component score fields
+///     (`score_message`, `score_symbol`, `score_file`,
+///     `score_tag`) and an `algorithm_version` field. The
+///     `correlation-and-ai-context` change is the source of this
+///     bump.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Top-level JSON document. The `runs`, `fingerprints`, etc. fields are
 /// flat arrays so consumers can index them directly. `project` carries
@@ -114,6 +121,20 @@ pub struct CorrelationExport {
     pub score: f64,
     pub label: String,
     pub created_at: String,
+    /// Per-component score from the heuristic correlator. `None`
+    /// for rows written before the `correlation-and-ai-context`
+    /// migration landed; v2 consumers should expect this.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub score_message: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub score_symbol: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub score_file: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub score_tag: Option<f64>,
+    /// Algorithm version that produced the row. Always `"v1"`
+    /// for rows from this change.
+    pub algorithm_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

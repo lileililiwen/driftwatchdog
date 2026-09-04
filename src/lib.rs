@@ -6,6 +6,7 @@
 pub mod checker;
 pub mod cli;
 pub mod commands;
+pub mod correlate;
 pub mod doctor;
 pub mod error;
 pub mod export;
@@ -13,6 +14,7 @@ pub mod fingerprint;
 pub mod project;
 pub mod repo;
 pub mod runtime;
+pub mod similarity;
 pub mod storage;
 
 pub use error::Error;

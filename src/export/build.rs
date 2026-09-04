@@ -173,6 +173,11 @@ fn corr_to_dto(c: crate::repo::correlations::Correlation) -> CorrelationExport {
         score: c.score,
         label: c.label,
         created_at: c.created_at,
+        score_message: c.score_message,
+        score_symbol: c.score_symbol,
+        score_file: c.score_file,
+        score_tag: c.score_tag,
+        algorithm_version: c.algorithm_version,
     }
 }
 

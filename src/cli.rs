@@ -35,6 +35,10 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Run configured external checkers and record drift alerts.
     Check(CheckArgs),
+    /// Create an explicit link between a recurring bug and a drift alert.
+    Link(LinkArgs),
+    /// Remove a manual link by id.
+    Unlink(UnlinkArgs),
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -112,6 +116,11 @@ pub struct ReportArgs {
     /// Restrict to fingerprints whose occurrences include a run with this tag.
     #[arg(long, value_name = "TAG")]
     pub tag: Option<String>,
+    /// Render the AI-oriented context report instead of the standard Markdown.
+    /// Includes project context, recurring failures, current spec violations,
+    /// possible relationships, and an investigation task section.
+    #[arg(long)]
+    pub ai: bool,
 }
 
 /// `driftwatch gc [--days N] [--dry-run]`
@@ -158,4 +167,28 @@ pub struct CheckArgs {
     /// command without polluting the database.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+/// `driftwatch link bug:<id> spec:<id> [--note "..."]`
+///
+/// Both sides accept the documented `kind:<id>` form. The bug side
+/// also accepts a bare hash prefix (8+ hex chars preferred) or the
+/// numeric `fingerprints.id`; the spec side accepts the numeric
+/// `drift_alerts.id`.
+#[derive(Debug, Args, Clone)]
+pub struct LinkArgs {
+    /// Bug reference. Forms: `bug:<id>`, bare hash prefix, or numeric id.
+    pub bug: String,
+    /// Spec/alert reference. Forms: `spec:<id>` or numeric `drift_alerts.id`.
+    pub spec: String,
+    /// Optional human note persisted alongside the link.
+    #[arg(long, value_name = "NOTE")]
+    pub note: Option<String>,
+}
+
+/// `driftwatch unlink <link-id>`
+#[derive(Debug, Args, Clone)]
+pub struct UnlinkArgs {
+    /// Numeric `manual_links.id` to remove.
+    pub link_id: i64,
 }

@@ -82,6 +82,43 @@ impl<'a> Bugs<'a> {
         Ok(rows)
     }
 
+    /// Convenience: every fingerprint in the database, oldest first.
+    /// Used by the `correlation-and-ai-context` change to enumerate
+    /// the bug set without re-querying SQL.
+    pub fn current_fingerprints(&self) -> Result<Vec<Fingerprint>, Error> {
+        self.all()
+    }
+
+    /// Distinct tag set observed on a fingerprint's occurrences, in
+    /// encounter order. Tags are parsed from the `runs.tags` JSON
+    /// column for each occurrence; duplicates are removed. Returns
+    /// an empty `Vec` when the fingerprint has no occurrences or no
+    /// tagged runs.
+    pub fn tags_for(&self, fingerprint_id: i64) -> Result<Vec<String>, Error> {
+        let mut stmt = self.db.conn().prepare(
+            "SELECT r.tags
+             FROM occurrences o
+             JOIN runs r ON o.run_id = r.id
+             WHERE o.fingerprint_id = ?1",
+        )?;
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut out: Vec<String> = Vec::new();
+        let rows = stmt.query_map(params![fingerprint_id], |r| {
+            let tags_json: String = r.get(0)?;
+            Ok(tags_json)
+        })?;
+        for row in rows {
+            let tags_json = row?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            for t in tags {
+                if seen.insert(t.clone()) {
+                    out.push(t);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Look up a fingerprint by its hash. Returns `None` when not present.
     pub fn find_by_hash(&self, hash: &str) -> Result<Option<Fingerprint>, Error> {
         let row = self
@@ -732,5 +769,78 @@ mod tests {
         assert_eq!(rows, 0);
         let rec = Runs::new(&db).find(recent).unwrap().unwrap();
         assert!(rec.stdout_excerpt.is_some());
+    }
+
+    #[test]
+    fn tags_for_returns_distinct_tags_across_occurrences() {
+        let mut db = db();
+        let fp = Bugs::new(&mut db)
+            .upsert_for_occurrence("err A", "A", "2026-01-01T00:00:00Z")
+            .unwrap();
+        // Two runs with overlapping tag sets.
+        let r1 = reserve_run(&mut db, "2026-01-01T00:00:00Z", None);
+        let r2 = reserve_run(&mut db, "2026-01-02T00:00:00Z", None);
+        // Insert full with JSON tags. We re-open the run rows
+        // afterwards to overwrite the tag column.
+        Runs::new(&db)
+            .insert_full(
+                r1,
+                &RunCompletion {
+                    finished_at: "2026-01-01T00:00:01Z",
+                    duration_ms: 1,
+                    exit_code: Some(1),
+                    status: RunStatus::Failed,
+                    tags: &["auth".to_string(), "db".to_string()],
+                    stdout_excerpt: None,
+                    stderr_excerpt: None,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    git_commit: None,
+                    git_branch: None,
+                    git_dirty: None,
+                },
+            )
+            .unwrap();
+        Runs::new(&db)
+            .insert_full(
+                r2,
+                &RunCompletion {
+                    finished_at: "2026-01-02T00:00:01Z",
+                    duration_ms: 1,
+                    exit_code: Some(1),
+                    status: RunStatus::Failed,
+                    tags: &["db".to_string(), "ci".to_string()],
+                    stdout_excerpt: None,
+                    stderr_excerpt: None,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    git_commit: None,
+                    git_branch: None,
+                    git_dirty: None,
+                },
+            )
+            .unwrap();
+        Bugs::new(&mut db)
+            .insert_occurrence(fp.id, r1, "2026-01-01T00:00:00Z", None)
+            .unwrap();
+        Bugs::new(&mut db)
+            .insert_occurrence(fp.id, r2, "2026-01-02T00:00:00Z", None)
+            .unwrap();
+        let mut tags = Bugs::new(&mut db).tags_for(fp.id).unwrap();
+        tags.sort();
+        assert_eq!(
+            tags,
+            vec!["auth".to_string(), "ci".to_string(), "db".to_string()]
+        );
+    }
+
+    #[test]
+    fn tags_for_returns_empty_when_no_occurrences() {
+        let mut db = db();
+        let fp = Bugs::new(&mut db)
+            .upsert_for_occurrence("err A", "A", "2026-01-01T00:00:00Z")
+            .unwrap();
+        let tags = Bugs::new(&mut db).tags_for(fp.id).unwrap();
+        assert!(tags.is_empty());
     }
 }

@@ -21,6 +21,17 @@ Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in
 | v0.5 Integrate | Future change | Add MCP read tools, Claude Code/OpenCode/Aider examples, and GitHub Actions templates. |
 | v1.0 Stable | Future hardening changes | Stabilize schema, config, checker protocol, CLI, cross-platform behavior, documentation, and real-project validation. |
 
+## Closed change inventory
+
+The following change packages have been implemented and archived:
+
+- `project-foundation` — Rust CLI, config, local directory, SQLite schema, Git metadata.
+- `runtime-memory` — Wrap any command, persist and query runs, top-level empty state.
+- `fingerprinting-and-retention` — Normalize failures, aggregate bugs, report, GC.
+- `export-and-doctor` — Portable export (json/jsonl/markdown) and local doctor diagnostics.
+- `checker-and-drift-alerts` — External checker protocol, adapters, snapshots, alerts, `driftwatch check`.
+- `correlation-and-ai-context` — Heuristic correlation, manual `link`/`unlink`, and `driftwatch report --ai`.
+
 ## Change dependency graph
 
 ```text

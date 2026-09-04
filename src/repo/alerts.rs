@@ -73,6 +73,13 @@ impl<'a> Alerts<'a> {
         count(self.db.conn(), "drift_alerts")
     }
 
+    /// Convenience: every alert in the database, oldest first. Used
+    /// by the `correlation-and-ai-context` change to enumerate the
+    /// alert set without re-querying SQL.
+    pub fn current_alerts(&self) -> Result<Vec<Alert>, Error> {
+        self.list_alerts()
+    }
+
     /// All check snapshots, oldest first. Used by export.
     pub fn list_snapshots(&self) -> Result<Vec<Snapshot>, Error> {
         let mut stmt = self.db.conn().prepare(
@@ -298,9 +305,9 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_reports_two_after_init() {
+    fn schema_version_reports_three_after_init() {
         let db = Db::open_in_memory().unwrap();
-        assert_eq!(schema_version(db.conn()).unwrap(), 2);
+        assert_eq!(schema_version(db.conn()).unwrap(), 3);
     }
 
     #[test]

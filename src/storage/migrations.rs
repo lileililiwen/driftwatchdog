@@ -15,6 +15,7 @@ use crate::storage::schema;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, schema::MIGRATION_0001_BASELINE),
     (2, schema::MIGRATION_0002_SNAPSHOT_GIT),
+    (3, schema::MIGRATION_0003_CORRELATION_DETAIL),
 ];
 
 /// Apply all unapplied migrations and return the current schema version.
@@ -81,9 +82,9 @@ mod tests {
         let p = tmp.path().join("state.db");
         let mut conn = crate::storage::open(&p).unwrap();
         let v = apply(&mut conn).unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 3);
         // Second call is a no-op and still reports the same version.
         let v2 = apply(&mut conn).unwrap();
-        assert_eq!(v2, 2);
+        assert_eq!(v2, 3);
     }
 }

@@ -37,16 +37,39 @@ fn schema_contains_all_foundation_tables() {
 }
 
 #[test]
-fn migration_version_is_two_after_init() {
+fn migration_version_is_three_after_init() {
     let tmp = tempdir().unwrap();
     let path = tmp.path().join("state.db");
     let mut conn = storage::open(&path).unwrap();
     let v = storage::migrations::apply(&mut conn).unwrap();
-    assert_eq!(v, 2);
+    assert_eq!(v, 3);
     let recorded: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(recorded, 2);
+    assert_eq!(recorded, 3);
+}
+
+#[test]
+fn migration_0003_adds_correlation_component_columns() {
+    let db = Db::open_in_memory().unwrap();
+    // The new columns must be present and queryable.
+    for required in [
+        "score_message",
+        "score_symbol",
+        "score_file",
+        "score_tag",
+        "algorithm_version",
+    ] {
+        let present: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('correlations') WHERE name = ?1",
+                rusqlite::params![required],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(present, 1, "missing column {required}");
+    }
 }
 
 #[test]

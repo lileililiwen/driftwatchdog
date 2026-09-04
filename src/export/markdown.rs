@@ -122,12 +122,22 @@ pub fn to_string(doc: &ExportDocument) -> Result<String, Error> {
     })?;
 
     push_records(&mut s, "Correlations", doc.correlations.len(), |s| {
-        s.push_str("| ID | Fingerprint | Alert | Score | Label | Created |\n");
-        s.push_str("|----|-------------|-------|-------|-------|---------|\n");
+        s.push_str("| ID | Fingerprint | Alert | Score | Message | Symbol | File | Tag | Algorithm | Label | Created |\n");
+        s.push_str("|----|-------------|-------|-------|---------|--------|------|-----|-----------|-------|---------|\n");
         for c in &doc.correlations {
             s.push_str(&format!(
-                "| {} | {} | {} | {:.3} | {} | {} |\n",
-                c.id, c.fingerprint_id, c.alert_id, c.score, c.label, c.created_at
+                "| {} | {} | {} | {:.3} | {} | {} | {} | {} | {} | {} | {} |\n",
+                c.id,
+                c.fingerprint_id,
+                c.alert_id,
+                c.score,
+                fmt_opt(c.score_message),
+                fmt_opt(c.score_symbol),
+                fmt_opt(c.score_file),
+                fmt_opt(c.score_tag),
+                c.algorithm_version,
+                md_inline(&c.label),
+                c.created_at,
             ));
         }
         Ok(())
@@ -193,6 +203,13 @@ fn short(h: &str) -> String {
         h[..12].to_string()
     } else {
         h.to_string()
+    }
+}
+
+fn fmt_opt(v: Option<f64>) -> String {
+    match v {
+        Some(x) => format!("{:.3}", x),
+        None => "-".to_string(),
     }
 }
 

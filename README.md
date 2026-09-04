@@ -34,6 +34,7 @@ It is not an APM platform, test framework, spec parser, CI server, code fixer, o
     driftwatch list
     driftwatch top
     driftwatch report
+    driftwatch report --ai > drift.md  # AI-oriented context report
 
 State is stored locally in .driftwatch/state.db. By default Driftwatch does not upload code, logs, or specs, does not use telemetry, and does not call an LLM API.
 
@@ -50,9 +51,10 @@ State is stored locally in .driftwatch/state.db. By default Driftwatch does not 
 After checker integration:
 
     driftwatch check
+    driftwatch link bug:abcdef12 spec:42 --note "see issue #108"
     driftwatch report --ai > drift.md
 
-The AI report contains recurring failures, current spec violations, possible heuristic relationships, recent commits, and instructions to investigate recurrence and add regression coverage. It deliberately does not claim that a similarity score proves root cause.
+The AI report contains recurring failures, current spec violations, possible heuristic relationships and manual links, recent commits, and instructions to investigate recurrence and add regression coverage. It deliberately does not claim that a similarity score proves root cause.
 
 ## Commands
 
@@ -61,9 +63,9 @@ The AI report contains recurring failures, current spec violations, possible heu
     driftwatch list [--limit N] [--failed] [--tag TAG]
     driftwatch top [--limit N] [--days N] [--tag TAG]
     driftwatch show <bug-id>
-    driftwatch report [--ai]
-    driftwatch check
-    driftwatch link bug:<id> spec:<alert-or-source>
+    driftwatch report [--ai] [--limit N] [--days N] [--tag TAG]
+    driftwatch check [--only NAMES] [--dry-run]
+    driftwatch link bug:<id> spec:<alert-id> [--note "..."]
     driftwatch unlink <link-id>
     driftwatch export json|jsonl|markdown
     driftwatch gc [--days N]

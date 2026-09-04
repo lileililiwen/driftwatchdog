@@ -33,14 +33,14 @@ fn export_json_on_empty_db_produces_valid_document() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let v: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}; stdout={stdout}"));
-    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["schema_version"], 2);
     assert!(v["runs"].as_array().unwrap().is_empty());
     assert!(v["fingerprints"].as_array().unwrap().is_empty());
     assert!(v["occurrences"].as_array().unwrap().is_empty());
     assert!(v["alerts"].as_array().unwrap().is_empty());
     assert!(v["correlations"].as_array().unwrap().is_empty());
     assert!(v["manual_links"].as_array().unwrap().is_empty());
-    assert_eq!(v["project"]["local_schema_version"], 2);
+    assert_eq!(v["project"]["local_schema_version"], 3);
 }
 
 #[test]
@@ -96,6 +96,62 @@ fn export_jsonl_emits_one_record_per_line_with_type_and_record_id() {
     for v in &parsed {
         assert!(v["record_id"].is_string(), "missing record_id on {v}");
     }
+}
+
+#[test]
+fn export_json_after_link_includes_manual_link_with_note() {
+    let tmp = init_dir();
+    let db_path = tmp.path().join(".driftwatch/state.db");
+    let mut db = driftwatch::repo::Db::open(&db_path).unwrap();
+    let fp = driftwatch::repo::bugs::Bugs::new(&mut db)
+        .upsert_for_occurrence("err", "err", "2026-01-01T00:00:00Z")
+        .unwrap();
+    driftwatch::repo::alerts::Alerts::record_run(
+        &mut db,
+        &driftwatch::repo::alerts::NewSnapshot {
+            taken_at: "2026-01-01T00:00:00Z",
+            checker_name: "spec",
+            status: "success",
+            diagnostic: None,
+            raw_json: None,
+            git_commit: None,
+            git_branch: None,
+        },
+        &[driftwatch::repo::alerts::NewAlert {
+            severity: "warning",
+            message: "m",
+            source: Some("s"),
+            symbol: Some("S"),
+        }],
+    )
+    .unwrap();
+    let alert_id: i64 = db
+        .conn()
+        .query_row("SELECT id FROM drift_alerts LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    driftwatch()
+        .args([
+            "link",
+            &format!("bug:{}", fp.id),
+            &format!("spec:{}", alert_id),
+            "--note",
+            "see issue #108",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let out = driftwatch()
+        .args(["export", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(out.get_output().stdout.clone()).unwrap()).unwrap();
+    let links = v["manual_links"].as_array().unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["note"], "see issue #108");
+    assert_eq!(links[0]["fingerprint_id"], fp.id);
+    assert_eq!(links[0]["alert_id"], alert_id);
 }
 
 #[test]

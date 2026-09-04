@@ -32,6 +32,10 @@ fn main() -> anyhow::Result<ExitCode> {
                 .with_context(|| "driftwatch doctor failed")?,
             Command::Check(args) => driftwatch::commands::check_cmd(args, &cwd)
                 .with_context(|| "driftwatch check failed")?,
+            Command::Link(args) => driftwatch::commands::link_cmd(args, &cwd)
+                .with_context(|| "driftwatch link failed")?,
+            Command::Unlink(args) => driftwatch::commands::unlink_cmd(args, &cwd)
+                .with_context(|| "driftwatch unlink failed")?,
         };
     Ok(ExitCode::from(code as u8))
 }
