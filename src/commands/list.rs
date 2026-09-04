@@ -7,6 +7,7 @@ use crate::cli::ListArgs;
 use crate::error::Error;
 use crate::project::ProjectRoot;
 use crate::repo::{
+    bugs::Bugs,
     runs::{ListFilter, RunRecord, RunStatus, Runs},
     Db,
 };
@@ -14,7 +15,7 @@ use crate::repo::{
 /// Run the `list` command. Always returns exit 0 on success.
 pub fn list(args: ListArgs, cwd: &Path) -> Result<i32, Error> {
     let proj = ProjectRoot::discover(cwd)?;
-    let db = Db::open(&proj.db_path)?;
+    let mut db = Db::open(&proj.db_path)?;
     let rows = Runs::new(&db).list(&ListFilter {
         limit: args.limit,
         only_failed: args.failed,
@@ -26,22 +27,32 @@ pub fn list(args: ListArgs, cwd: &Path) -> Result<i32, Error> {
         return Ok(0);
     }
 
-    print_table(&rows);
+    // Batch-fetch attached fingerprint hashes so we don't N+1 the
+    // database. The map is empty when no row has a fingerprint.
+    let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let hashes = Bugs::new(&mut db).hash_for_runs(&ids)?;
+
+    print_table(&rows, &hashes);
     Ok(0)
 }
 
-fn print_table(rows: &[RunRecord]) {
+fn print_table(rows: &[RunRecord], hashes: &std::collections::HashMap<i64, String>) {
     println!(
-        "{:<20}  {:<7}  {:<12}  {:<8}  COMMAND",
-        "STARTED", "STATUS", "EXIT", "DURATION"
+        "{:<20}  {:<7}  {:<10}  {:<8}  {:<10}  COMMAND",
+        "STARTED", "STATUS", "EXIT", "DURATION", "HASH"
     );
     for r in rows {
+        let hash = hashes
+            .get(&r.id)
+            .map(|h| h[..8.min(h.len())].to_string())
+            .unwrap_or_else(|| "-".to_string());
         println!(
-            "{:<20}  {:<7}  {:<12}  {:<8}  {}",
+            "{:<20}  {:<7}  {:<10}  {:<8}  {:<10}  {}",
             r.started_at,
             status_label(r.status),
             exit_label(r.exit_code),
             duration_label(r.duration_ms),
+            hash,
             format_command(&r.program, &r.argv_json)
         );
     }

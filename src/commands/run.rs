@@ -1,12 +1,21 @@
 //! `driftwatch run` orchestration. Reserves a run row, executes the child
 //! process via the runtime, finalizes the row, and reports status.
+//!
+//! For `Failed` and `StartFailed` runs, the captured stderr (or stdout
+//! as a fallback) is normalized and attached as a fingerprint with a
+//! single occurrence row. Successful runs are not fingerprinted.
 
 use std::path::Path;
 
 use crate::cli::RunArgs;
 use crate::error::Error;
+use crate::fingerprint::{self, Rules};
 use crate::project::{config::Config, git, ProjectRoot};
-use crate::repo::{runs::Runs, Db};
+use crate::repo::{
+    bugs::Bugs,
+    runs::{RunStatus, Runs},
+    Db,
+};
 use crate::runtime::{self, CaptureLimits, CommandSpec};
 
 const DEFAULT_CAPTURE_BYTES: u64 = 64 * 1024;
@@ -25,7 +34,7 @@ pub fn run(args: RunArgs, cwd: &Path) -> Result<i32, Error> {
     }
 
     let proj = ProjectRoot::discover(cwd)?;
-    let db = Db::open(&proj.db_path)?;
+    let mut db = Db::open(&proj.db_path)?;
     let cfg = Config::load(&proj.config_path)?;
     let limits = capture_limits(&cfg);
 
@@ -71,8 +80,47 @@ pub fn run(args: RunArgs, cwd: &Path) -> Result<i32, Error> {
         },
     )?;
 
+    if let Some(bug) = fingerprint_failure(&mut db, run_id, &outcome, &finished_at)? {
+        eprintln!(
+            "driftwatch: bug {} \"{}\" ({} occurrences)",
+            &bug.hash[..8],
+            bug.summary.as_deref().unwrap_or("(no summary)"),
+            bug.occurrence_count
+        );
+    }
+
     render_summary(&program, &outcome);
     Ok(outcome.exit_code.unwrap_or(127))
+}
+
+/// Build a fingerprint + occurrence row for a failed run. Returns the
+/// updated fingerprint so the caller can print a short summary line.
+fn fingerprint_failure(
+    db: &mut Db,
+    run_id: i64,
+    outcome: &runtime::RunOutcome,
+    finished_at: &str,
+) -> Result<Option<crate::repo::bugs::Fingerprint>, Error> {
+    if !matches!(outcome.status, RunStatus::Failed | RunStatus::StartFailed) {
+        return Ok(None);
+    }
+    // Prefer stderr; fall back to stdout when stderr is empty so
+    // commands like `sh -c 'echo boom; exit 1'` are still
+    // fingerprinted. StartFailed runs use the diagnostic in stderr.
+    let raw = if !outcome.stderr.text.is_empty() {
+        outcome.stderr.text.clone()
+    } else {
+        outcome.stdout.text.clone()
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let canonical = Rules::generic().normalize(&raw);
+    let fp =
+        Bugs::new(db).upsert_for_occurrence(&canonical.text, &canonical.summary, finished_at)?;
+    let excerpt = fingerprint::bounded_excerpt(&raw);
+    Bugs::new(db).insert_occurrence(fp.id, run_id, finished_at, Some(&excerpt))?;
+    Ok(Some(fp))
 }
 
 fn capture_limits(cfg: &Config) -> CaptureLimits {

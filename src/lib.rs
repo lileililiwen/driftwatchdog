@@ -6,6 +6,7 @@
 pub mod cli;
 pub mod commands;
 pub mod error;
+pub mod fingerprint;
 pub mod project;
 pub mod repo;
 pub mod runtime;

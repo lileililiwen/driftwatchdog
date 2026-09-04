@@ -11,11 +11,11 @@ use crate::repo::{bugs::Bugs, Db};
 /// Run the `top` command. Always returns exit 0 on success.
 pub fn top(args: TopArgs, cwd: &Path) -> Result<i32, Error> {
     let proj = ProjectRoot::discover(cwd)?;
-    let db = Db::open(&proj.db_path)?;
+    let mut db = Db::open(&proj.db_path)?;
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days)).to_rfc3339();
     let tag_like = args.tag.as_deref().map(|t| format!("%\"{}\"%", t));
 
-    let rows = Bugs::new(&db).top(args.limit, &cutoff, tag_like.as_deref())?;
+    let rows = Bugs::new(&mut db).top(args.limit, &cutoff, tag_like.as_deref())?;
 
     if rows.is_empty() {
         println!("No recurring failures in the selected window.");

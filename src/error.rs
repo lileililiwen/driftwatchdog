@@ -33,6 +33,9 @@ pub enum Error {
 
     #[error("migration failed at version {version}: {message}")]
     Migration { version: i64, message: String },
+
+    #[error("no fingerprint matches '{id}'")]
+    BugNotFound { id: String },
 }
 
 impl Error {

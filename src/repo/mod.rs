@@ -49,6 +49,12 @@ impl Db {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+
+    /// Borrow the underlying connection mutably. Used by repositories
+    /// that need to open a transaction.
+    pub fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
 }
 
 #[cfg(test)]

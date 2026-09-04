@@ -19,6 +19,13 @@ fn main() -> anyhow::Result<ExitCode> {
                 .with_context(|| "driftwatch list failed")?,
             Command::Top(args) => driftwatch::commands::top_cmd(args, &cwd)
                 .with_context(|| "driftwatch top failed")?,
+            Command::Show(args) => driftwatch::commands::show_cmd(args, &cwd)
+                .with_context(|| "driftwatch show failed")?,
+            Command::Report(args) => driftwatch::commands::report_cmd(args, &cwd)
+                .with_context(|| "driftwatch report failed")?,
+            Command::Gc(args) => {
+                driftwatch::commands::gc_cmd(args, &cwd).with_context(|| "driftwatch gc failed")?
+            }
         };
     Ok(ExitCode::from(code as u8))
 }

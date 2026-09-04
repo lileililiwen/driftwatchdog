@@ -23,6 +23,12 @@ pub enum Command {
     List(ListArgs),
     /// Show grouped recurring failures.
     Top(TopArgs),
+    /// Show a single recurring bug by hash prefix or numeric id.
+    Show(ShowArgs),
+    /// Render a Markdown report of recurring failures and trends.
+    Report(ReportArgs),
+    /// Garbage-collect bulky stdout/stderr older than `--days`.
+    Gc(GcArgs),
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -79,4 +85,36 @@ pub struct TopArgs {
     /// Restrict to fingerprints whose occurrences include a run with this tag.
     #[arg(long, value_name = "TAG")]
     pub tag: Option<String>,
+}
+
+/// `driftwatch show <bug-id>`
+#[derive(Debug, Args, Clone)]
+pub struct ShowArgs {
+    /// Hash prefix (hex chars) or numeric `fingerprints.id`.
+    pub bug_id: String,
+}
+
+/// `driftwatch report [--limit N] [--days N] [--tag TAG]`
+#[derive(Debug, Args, Default, Clone)]
+pub struct ReportArgs {
+    /// Maximum fingerprints to include.
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+    /// Restrict to fingerprints last seen within this many days.
+    #[arg(long, default_value_t = 30)]
+    pub days: i64,
+    /// Restrict to fingerprints whose occurrences include a run with this tag.
+    #[arg(long, value_name = "TAG")]
+    pub tag: Option<String>,
+}
+
+/// `driftwatch gc [--days N] [--dry-run]`
+#[derive(Debug, Args, Clone)]
+pub struct GcArgs {
+    /// Remove bulky streams for runs older than this many days. Default 90.
+    #[arg(long, default_value_t = 90)]
+    pub days: i64,
+    /// Print what would change without modifying the database.
+    #[arg(long)]
+    pub dry_run: bool,
 }
