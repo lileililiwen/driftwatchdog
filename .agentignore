@@ -1,0 +1,18 @@
+# Do not load generated or machine-local state into AI coding context.
+.driftwatch/
+target/
+.git/
+.codex/
+
+# Local secrets and environment-specific files.
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise.
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~

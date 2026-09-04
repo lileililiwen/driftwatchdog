@@ -1,0 +1,20 @@
+# Driftwatch local runtime state
+.driftwatch/
+
+# Rust build output
+/target/
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+
+# Temporary files
+*.swp
+*.swo
+*~
+
+# Keep Cargo.lock committed for this binary application.

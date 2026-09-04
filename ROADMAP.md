@@ -1,0 +1,42 @@
+# Driftwatch Roadmap
+
+Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in AI-assisted coding workflows. It is implemented in Rust, but monitored projects may use Rust, C#, Python, JavaScript/TypeScript, Go, Java, Flutter, or any other toolchain that can be launched as a child process.
+
+## Product boundaries
+
+- Core workflow: record command runs, normalize failures, aggregate recurring bugs, correlate them with external spec-checker alerts, and produce human- and AI-readable reports.
+- Local by default: no account, telemetry, network upload, or LLM API call; state lives under `.driftwatch/`.
+- CLI first: a future viewer is read-only and cannot become a dependency of the core.
+- Integrate existing tools rather than implementing AST parsing, test frameworks, spec standards, CI, code repair, or an embedded LLM.
+- Heuristic correlations are leads, never root-cause claims.
+
+## Delivery sequence
+
+| Release | Change packages | Outcome |
+| --- | --- | --- |
+| v0.1 Remember | `project-foundation`, `runtime-memory`, `fingerprinting-and-retention` | Initialize a project, wrap any command, remember recurring failures, report them, and retain compact history. |
+| v0.2 Observe | `export-and-doctor` | Inspect, export, and diagnose the local installation. |
+| v0.3 Connect | `checker-and-drift-alerts` | Run configured external checkers through a stable JSON protocol and retain drift snapshots. |
+| v0.4 Correlate | `correlation-and-ai-context` | Relate recurring failures to alerts, support manual links, and generate AI context. |
+| v0.5 Integrate | Future change | Add MCP read tools, Claude Code/OpenCode/Aider examples, and GitHub Actions templates. |
+| v1.0 Stable | Future hardening changes | Stabilize schema, config, checker protocol, CLI, cross-platform behavior, documentation, and real-project validation. |
+
+## Change dependency graph
+
+```text
+project-foundation
+        ↓
+runtime-memory → fingerprinting-and-retention → export-and-doctor
+        ↓                                      ↓
+checker-and-drift-alerts ───────────────→ correlation-and-ai-context
+```
+
+The first three packages form the smallest useful runtime-memory release. Checker integration remains optional until that foundation is stable.
+
+## Explicit non-goals for v1
+
+Cloud sync, accounts, team permissions, issue tracking, a Sentry replacement, a CI server, automatic code modification, a built-in LLM, a vector database, a full AST engine, an IDE, and a complex SPA are out of scope.
+
+## Release gates
+
+Each change must include unit/integration coverage for its public behavior, preserve the language-agnostic CLI contract, avoid network access by default, and pass the repository's OpenSpec validation before implementation is considered ready.
