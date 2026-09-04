@@ -101,3 +101,66 @@ jobs:
           files: |
             stage/*.tar.gz
             stage/*-checksums.txt
+
+  npm-publish:
+    name: publish npm package
+    needs: publish
+    runs-on: ubuntu-22.04
+    # The npm package is pinned to the same version as the GitHub
+    # release tag, so the launcher's download URL resolves. Runs only
+    # on tag pushes so re-running the workflow never republishes npm
+    # (npm refuses to overwrite a published version).
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Pin npm version to tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          printf 'tag=%s\n' "$tag"
+          cd npm/driftwatchdog
+          # Write the version directly instead of `npm version` so we
+          # never accidentally tag git. The `--no-git-tag-version` flag
+          # is not enough on its own; we just edit the file.
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const file = path.resolve('package.json');
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+            pkg.version = process.argv[1];
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+          " "$tag"
+          node -e "console.log(require('./package.json').version)"
+
+      - name: Verify npm package contents
+        run: |
+          set -euo pipefail
+          cd npm/driftwatchdog
+          test -f README.md || { echo 'README.md missing' >&2; exit 1; }
+          test -f bin/driftwatch.js || { echo 'bin/driftwatch.js missing' >&2; exit 1; }
+          test -f lib/platform.js || { echo 'lib/platform.js missing' >&2; exit 1; }
+          test -f lib/release.js || { echo 'lib/release.js missing' >&2; exit 1; }
+          test -f lib/verify.js || { echo 'lib/verify.js missing' >&2; exit 1; }
+          npm pack --dry-run
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd npm/driftwatchdog
+          # `--provenance` is opt-in: it attaches an npm-signed
+          # attestation to the published tarball using the workflow's
+          # OIDC identity. Requires an npm trust level of at least
+          # "automation" on the publishing account; comment out if the
+          # token does not have it.
+          npm publish --provenance --access public
