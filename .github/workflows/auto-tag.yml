@@ -32,6 +32,19 @@ on:
 permissions:
   contents: write
 
+# Pushing a tag with the workflow's own GITHUB_TOKEN is treated as
+# a "no-op" push for the purpose of triggering other workflows on
+# the same repository. That race means release.yml would never fire
+# for tags created here. Using a Personal Access Token (PAT) with
+# `contents: write` makes the tag push count as a user push, so
+# release.yml triggers reliably.
+#
+# Create the secret at:
+#   https://github.com/<owner>/<repo>/settings/secrets/actions
+# Name: REPO_PAT. Scopes: repo (classic PAT) or `contents: write`
+# (fine-grained PAT). The same account must have push access to
+# this repository.
+
 jobs:
   bump:
     name: bump tag
@@ -40,9 +53,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Tag creation needs write access; the workflow-level
-          # `contents: write` permission above covers this.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.REPO_PAT }}
 
       - name: Skip if commit subject contains [no-release]
         id: skip
@@ -90,5 +101,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git tag -a "$TAG" -m "$TAG" -m "Auto-bumped by auto-tag workflow."
-          git push origin "$TAG"
+          # Push with the PAT (not GITHUB_TOKEN) so the tag push
+          # counts as a user push and triggers release.yml.
+          git push https://x-access-token:${{ secrets.REPO_PAT }}@github.com/${{ github.repository }}.git "$TAG"
           printf 'created and pushed %s\n' "$TAG"
