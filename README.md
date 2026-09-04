@@ -110,4 +110,4 @@ See AGENTS.md for repository working rules.
 
 ## License
 
-License selection is not yet finalized.
+Licensed under the [MIT License](LICENSE). Copyright © 2026 lileililiwen.
