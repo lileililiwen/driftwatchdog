@@ -1,0 +1,44 @@
+{
+  "name": "driftwatchdog",
+  "version": "0.1.0",
+  "description": "Launcher for the driftwatchdog CLI. Downloads, verifies, and runs the matching native binary.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lileililiwen/driftwatchdog.git"
+  },
+  "homepage": "https://github.com/lileililiwen/driftwatchdog#readme",
+  "bugs": {
+    "url": "https://github.com/lileililiwen/driftwatchdog/issues"
+  },
+  "keywords": [
+    "driftwatchdog",
+    "ai",
+    "cli",
+    "fingerprinting",
+    "runtime",
+    "memory"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "bin": {
+    "driftwatch": "bin/driftwatch.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
