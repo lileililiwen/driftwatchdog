@@ -67,7 +67,7 @@ jobs:
           # it via ${{ secrets.REPO_PAT }} so this is belt-and-braces.
           echo "::add-mask::$PAT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.REPO_PAT }}

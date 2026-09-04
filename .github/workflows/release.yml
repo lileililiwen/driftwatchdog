@@ -33,7 +33,7 @@ jobs:
             artifact: driftwatchdog-darwin-x86_64
             os: macos-13
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -72,7 +72,7 @@ jobs:
           scripts/package.sh "${{ matrix.target }}" "${{ matrix.artifact }}" stage
 
       - name: Upload archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: stage/*.tar.gz
@@ -84,10 +84,10 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download all archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: stage
           merge-multiple: true
@@ -133,10 +133,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
