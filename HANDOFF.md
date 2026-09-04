@@ -12,7 +12,7 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
-The repository is past the spec/bootstrap stage. `project-foundation` is implemented: the `driftwatch` Rust binary builds and tests cleanly, `driftwatch init` is functional, the SQLite schema (version 1) is in place, and all OpenSpec validation gates pass. The remaining five change packages (`runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`) are spec-only.
+`project-foundation` is **implemented and archived** (2026-09-04). The `driftwatch` Rust binary builds and tests cleanly, `driftwatch init` is functional, the SQLite schema (version 1) is in place, and all OpenSpec validation gates pass. The capability spec is live at `openspec/specs/project-foundation/spec.md`. The remaining five change packages (`runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`) are spec-only.
 
 ## Start here
 
@@ -20,7 +20,7 @@ Read these in order:
 
 1. README.md — product positioning and user-facing command surface.
 2. ROADMAP.md — release sequence and dependency graph.
-3. `openspec/changes/runtime-memory/` — next change: arbitrary command runner and run queries. Foundation is ready (`Db`, `Runs::reserve`, schema fields for output/tags/git, project-root discovery, config loader).
+3. `openspec/changes/runtime-memory/` — **next change**: arbitrary command runner and run queries. Foundation is ready (`Db`, `Runs::reserve`, schema fields for output/tags/git, project-root discovery, config loader).
 4. `openspec/changes/fingerprinting-and-retention/` — generic normalization and bug memory.
 
 Then continue with export/diagnostics, checker, and correlation changes in the order documented by the roadmap.
@@ -29,7 +29,7 @@ Then continue with export/diagnostics, checker, and correlation changes in the o
 
 | Change | Status | Purpose | Depends on |
 | --- | --- | --- | --- |
-| project-foundation | implemented | Rust CLI, config, local directory, SQLite schema, Git metadata | none |
+| project-foundation | archived 2026-09-04 | Rust CLI, config, local directory, SQLite schema, Git metadata | none |
 | runtime-memory | spec-only | Run arbitrary commands and persist/query runs | foundation |
 | fingerprinting-and-retention | spec-only | Normalize failures, aggregate bugs, report, GC | runtime memory |
 | export-and-doctor | spec-only | Portable export and local diagnostics | foundation; integrates with later data |
@@ -81,4 +81,4 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 
 ## Next action
 
-Implement exactly one active change at a time, beginning with `runtime-memory`. Reuse the foundation's `Db` + `Runs::reserve`; extend the runner schema, add bounded stream capture, and add the `list`/`top` query surfaces.
+Implement exactly one active change at a time, beginning with `runtime-memory`. Reuse the foundation's `Db` + `Runs::reserve`; extend the runner schema, add bounded stream capture, and add the `list`/`top` query surfaces. When the change is done, follow the "Change completion workflow" at the top of this file.
