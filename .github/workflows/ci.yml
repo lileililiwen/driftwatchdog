@@ -1,0 +1,59 @@
+name: ci
+
+# Continuous-integration gates for every push and pull request.
+# Rust side: formatting check, clippy (warnings are errors), and the
+# full workspace test suite. npm side: the launcher unit tests that
+# exercise lib/platform.js, lib/release.js and lib/verify.js.
+
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: ['*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust (fmt, clippy, test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  npm:
+    name: npm launcher tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Run launcher tests
+        working-directory: npm/driftwatchdog
+        run: npm test
