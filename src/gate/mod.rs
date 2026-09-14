@@ -13,6 +13,7 @@
 pub mod adapt;
 pub mod aggregate;
 pub mod dto;
+pub mod manifest;
 pub mod redact;
 pub mod types;
 
@@ -22,6 +23,10 @@ pub use dto::{
     parse_gate_result_document, to_canonical_json, DtoError, GATE_CONTRACT_VERSION,
     MAX_DIAGNOSTIC_BYTES, MAX_EVIDENCE_REFS, MAX_FINDINGS, MAX_MISSING_EVIDENCE,
     MAX_REMEDIATION_BYTES, MAX_RESULTS_PER_DOC, MAX_RESULT_BYTES,
+};
+pub use manifest::{
+    load as load_gate_manifest, manifest_path as gate_manifest_path, parse as parse_gate_manifest,
+    render_plan as render_gate_plan, resolve as resolve_gate_manifest,
 };
 pub use redact::{bounded_diagnostic, redact_secrets};
 pub use types::{EvidenceRef, Finding, GateResult, GateSeverity, GateStatus};
