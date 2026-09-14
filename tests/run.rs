@@ -231,3 +231,65 @@ fn runs_repository_list_helper_matches_integration_list() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, RunStatus::Failed);
 }
+
+#[test]
+fn run_sigkill_records_signalled_not_start_failed() {
+    let tmp = init_dir();
+    driftwatch()
+        .args(["run", "sh", "-c", "kill -KILL $$"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(127);
+
+    let conn = open_db(&tmp);
+    let rows = list_runs(&conn);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, RunStatus::Signalled);
+    assert!(rows[0].exit_code.is_none());
+}
+
+#[test]
+fn run_timeout_records_timeout_status() {
+    let tmp = init_dir();
+    let started = std::time::Instant::now();
+    driftwatch()
+        .args(["run", "--timeout-ms", "300", "sh", "-c", "sleep 30"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "timed-out run must return promptly"
+    );
+
+    let conn = open_db(&tmp);
+    let rows = list_runs(&conn);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, RunStatus::Timeout);
+}
+
+#[test]
+fn run_failed_filter_includes_signalled_and_timeout() {
+    let tmp = init_dir();
+    driftwatch()
+        .args(["run", "sh", "-c", "kill -KILL $$"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    driftwatch()
+        .args(["run", "--timeout-ms", "200", "sh", "-c", "sleep 30"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+
+    let db = Db::open(&tmp.path().join(".driftwatch/state.db")).unwrap();
+    let rows = Runs::new(&db)
+        .list(&driftwatchdog::repo::runs::ListFilter {
+            limit: 10,
+            only_failed: true,
+            tag: None,
+        })
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+}

@@ -55,6 +55,11 @@ pub struct RunArgs {
     #[arg(long, value_name = "TAG")]
     pub tag: Vec<String>,
 
+    /// Wall-clock timeout in milliseconds. On expiry the whole child
+    /// process group is killed and the run is recorded as `timeout`.
+    #[arg(long, value_name = "MS")]
+    pub timeout_ms: Option<u64>,
+
     /// The program and its arguments. Everything after the optional `--tag`
     /// flags is captured here as a vector, with `command[0]` treated as the
     /// program name. `allow_hyphen_values` keeps clap from trying to parse

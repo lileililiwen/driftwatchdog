@@ -16,6 +16,12 @@ pub enum RunStatus {
     Success,
     Failed,
     StartFailed,
+    /// The child was killed by a signal (`exit code == None` after a
+    /// successful spawn). Distinct from `StartFailed`, which means the
+    /// executable could not be started at all.
+    Signalled,
+    /// The child exceeded the configured `run --timeout-ms` and was killed.
+    Timeout,
 }
 
 impl RunStatus {
@@ -25,6 +31,8 @@ impl RunStatus {
             RunStatus::Success => "success",
             RunStatus::Failed => "failed",
             RunStatus::StartFailed => "start_failed",
+            RunStatus::Signalled => "signalled",
+            RunStatus::Timeout => "timeout",
         }
     }
 
@@ -34,8 +42,18 @@ impl RunStatus {
             "success" => Some(Self::Success),
             "failed" => Some(Self::Failed),
             "start_failed" => Some(Self::StartFailed),
+            "signalled" => Some(Self::Signalled),
+            "timeout" => Some(Self::Timeout),
             _ => None,
         }
+    }
+
+    /// Failure-like statuses shown by `list --failed`.
+    pub fn is_failed_like(self) -> bool {
+        matches!(
+            self,
+            Self::Failed | Self::StartFailed | Self::Signalled | Self::Timeout
+        )
     }
 }
 
@@ -193,7 +211,7 @@ impl<'a> Runs<'a> {
         );
         let mut predicates: Vec<&'static str> = Vec::new();
         if filter.only_failed {
-            predicates.push("status IN ('failed', 'start_failed')");
+            predicates.push("status IN ('failed', 'start_failed', 'signalled', 'timeout')");
         }
         if filter.tag.is_some() {
             predicates.push("tags LIKE ?1");

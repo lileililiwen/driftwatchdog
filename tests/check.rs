@@ -464,3 +464,101 @@ args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts[0].symbol.as_deref(), Some("S"));
 }
+
+#[test]
+fn check_signal_killed_records_unknown_not_failed() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "sig"
+command = "sh"
+args = ["-c", "kill -KILL $$"]
+"#,
+    );
+    let out = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(2);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("unknown"),
+        "missing unknown status: {stdout}"
+    );
+
+    let conn = open_db(&tmp);
+    let status: String = conn
+        .query_row("SELECT status FROM check_snapshots LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "unknown");
+    // Isolation: a signalled checker must not block a healthy one.
+    assert_eq!(snapshot_count(&conn), 1);
+}
+
+#[test]
+fn check_cjk_stderr_does_not_panic() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "cjk"
+command = "sh"
+args = ["-c", "printf '汉%.0s' $(seq 1 300) >&2; exit 1"]
+"#,
+    );
+    let out = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(2);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("cjk"), "missing checker row: {stdout}");
+    assert!(stdout.contains("failed"), "missing failed status: {stdout}");
+
+    let conn = open_db(&tmp);
+    assert_eq!(snapshot_count(&conn), 1);
+    let diag: Option<String> = conn
+        .query_row("SELECT diagnostic FROM check_snapshots LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(diag.is_some());
+}
+
+#[test]
+fn check_grandchild_holding_pipe_times_out() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "grandchild"
+command = "sh"
+args = ["-c", "sleep 30 & exec sleep 30"]
+timeout_ms = 200
+"#,
+    );
+    let out = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(2);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("timeout"), "missing timeout: {stdout}");
+
+    let conn = open_db(&tmp);
+    let status: String = conn
+        .query_row("SELECT status FROM check_snapshots LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "timeout");
+}

@@ -68,3 +68,21 @@ fn top_empty_state_even_with_failed_runs() {
             "No recurring failures in the selected window.",
         ));
 }
+
+#[test]
+fn top_emoji_summary_does_not_panic() {
+    let tmp = init_dir();
+    // Emoji-heavy stderr becomes an emoji-heavy fingerprint summary that
+    // straddles the 59-byte cut point.
+    let msg = format!("error {}{}", "🎉".repeat(40), " boom");
+    driftwatch()
+        .args(["run", "sh", "-c", &format!("echo '{msg}' >&2; exit 1")])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    driftwatch()
+        .arg("top")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+}

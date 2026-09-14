@@ -28,6 +28,7 @@ use crate::cli::CheckArgs;
 use crate::error::Error;
 use crate::project::{config::Config, git, ProjectRoot};
 use crate::repo::alerts::{NewAlert, NewSnapshot};
+use crate::util::truncate_char_boundary;
 
 const EXIT_OK: i32 = 0;
 const EXIT_PARTIAL: i32 = 1;
@@ -185,13 +186,54 @@ fn run_one_checker(
         });
     }
 
-    // Branch 3: the child exited nonzero.
+    // Branch 3: signal-killed (exit code None, not a timeout, spawned OK).
+    // Must precede the nonzero-exit branch so kills are never Failed.
+    if run.signalled {
+        let mut diagnostic = "checker killed by signal (exit code unavailable)".to_string();
+        if let Some(cap) = run.capture_error.as_deref() {
+            if !cap.is_empty() {
+                diagnostic.push_str("; ");
+                diagnostic.push_str(&truncate_diagnostic(cap));
+            }
+        }
+        if !dry_run {
+            crate::repo::alerts::Alerts::record_run(
+                db,
+                &NewSnapshot {
+                    taken_at,
+                    checker_name: &spec.name,
+                    status: Status::Unknown.as_str(),
+                    diagnostic: Some(&diagnostic),
+                    raw_json: Some(run.stdout.as_str()),
+                    git_commit,
+                    git_branch,
+                },
+                &[],
+            )?;
+        }
+        return Ok(CheckerOutcome {
+            name: spec.name.clone(),
+            status: Status::Unknown,
+            alert_count: 0,
+            diagnostic: Some(diagnostic),
+            alerts: vec![],
+            duration_ms: run.duration_ms,
+        });
+    }
+
+    // Branch 4: the child exited nonzero.
     if !matches!(run.exit_code, Some(0)) {
-        let diagnostic = format!(
+        let mut diagnostic = format!(
             "checker exited with status {:?}; stderr: {}",
             run.exit_code,
             truncate_diagnostic(&run.stderr)
         );
+        if let Some(cap) = run.capture_error.as_deref() {
+            if !cap.is_empty() {
+                diagnostic.push_str("; capture: ");
+                diagnostic.push_str(&truncate_diagnostic(cap));
+            }
+        }
         if !dry_run {
             crate::repo::alerts::Alerts::record_run(
                 db,
@@ -217,7 +259,7 @@ fn run_one_checker(
         });
     }
 
-    // Branch 4: the child exited zero. Try to parse the protocol.
+    // Branch 5: the child exited zero. Try to parse the protocol.
     match parse_alerts_document(run.stdout.as_bytes()) {
         Ok(doc) => {
             let status = if doc.alerts.is_empty() {
@@ -226,6 +268,8 @@ fn run_one_checker(
                 Status::Success
             };
             let alert_count = doc.alerts.len();
+            // Surface capture-pipeline notes without changing the status.
+            let capture_note = run.capture_error.clone().filter(|s| !s.is_empty());
             if !dry_run {
                 let new_alerts: Vec<NewAlert<'_>> = doc
                     .alerts
@@ -243,7 +287,7 @@ fn run_one_checker(
                         taken_at,
                         checker_name: &spec.name,
                         status: status.as_str(),
-                        diagnostic: None,
+                        diagnostic: capture_note.as_deref(),
                         raw_json: Some(run.stdout.as_str()),
                         git_commit,
                         git_branch,
@@ -255,7 +299,7 @@ fn run_one_checker(
                 name: spec.name.clone(),
                 status,
                 alert_count,
-                diagnostic: None,
+                diagnostic: capture_note,
                 alerts: doc.alerts,
                 duration_ms: run.duration_ms,
             })
@@ -294,12 +338,7 @@ fn format_protocol_error(err: &ProtocolError) -> String {
 }
 
 fn truncate_diagnostic(s: &str) -> String {
-    const LIMIT: usize = 200;
-    if s.len() <= LIMIT {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..LIMIT])
-    }
+    truncate_char_boundary(s, 200)
 }
 
 fn print_summary(outcomes: &[CheckerOutcome], dry_run: bool) {

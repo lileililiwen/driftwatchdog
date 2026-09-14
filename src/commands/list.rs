@@ -11,6 +11,7 @@ use crate::repo::{
     runs::{ListFilter, RunRecord, RunStatus, Runs},
     Db,
 };
+use crate::util::truncate_char_boundary;
 
 /// Run the `list` command. Always returns exit 0 on success.
 pub fn list(args: ListArgs, cwd: &Path) -> Result<i32, Error> {
@@ -64,6 +65,8 @@ fn status_label(s: RunStatus) -> &'static str {
         RunStatus::Failed => "FAIL",
         RunStatus::StartFailed => "NOEXE",
         RunStatus::Running => "RUN",
+        RunStatus::Signalled => "KILLED",
+        RunStatus::Timeout => "TIMEOUT",
     }
 }
 
@@ -86,9 +89,5 @@ fn format_command(program: &str, argv_json: &str) -> String {
     let mut parts: Vec<String> = vec![program.to_string()];
     parts.extend(argv);
     let joined = parts.join(" ");
-    if joined.len() > 80 {
-        format!("{}…", &joined[..79])
-    } else {
-        joined
-    }
+    truncate_char_boundary(&joined, 79)
 }

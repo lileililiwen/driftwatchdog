@@ -16,6 +16,7 @@ pub mod repo;
 pub mod runtime;
 pub mod similarity;
 pub mod storage;
+pub mod util;
 
 pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;

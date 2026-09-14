@@ -129,3 +129,22 @@ fn list_limit_caps_rows() {
     assert!(stdout.contains("arg3"));
     assert!(!stdout.contains("arg0"), "should be capped; got:\n{stdout}");
 }
+
+#[test]
+fn list_emoji_command_does_not_panic() {
+    let tmp = init_dir();
+    // Long emoji argv straddles the 79-byte truncation cut point.
+    let big = format!("{}{}", "🎉".repeat(40), "tail");
+    driftwatch()
+        .args(["run", "echo", &big])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let out = driftwatch()
+        .arg("list")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("echo"), "got:\n{stdout}");
+}

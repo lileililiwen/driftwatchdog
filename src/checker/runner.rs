@@ -6,6 +6,11 @@
 //! nonzero exit, timeout, or other failure all map to a [`CheckerRun`]
 //! with the appropriate flags, so the caller can persist a failed
 //! snapshot and continue to the next checker.
+//!
+//! Crash-hardening: bytes accumulate raw and decode once (UTF-8 split
+//! safety), signal kills map to `signalled` (never `spawn_error`), timeouts
+//! kill the whole process group, and sink/read/thread failures surface as
+//! `capture_error` instead of silent empty output.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -14,6 +19,9 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 /// Default per-checker timeout when the user does not specify one.
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -67,10 +75,16 @@ pub struct CheckerRun {
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
     pub timed_out: bool,
+    /// True when the child exited without a code and was not a timeout:
+    /// killed by a signal. The caller maps this to `Status::Unknown`.
+    pub signalled: bool,
     /// Set when the child could not be spawned at all (e.g. missing
     /// executable). When set, the snapshot's status should be
     /// `start_failed` and the message is the OS error.
     pub spawn_error: Option<String>,
+    /// Capture-pipeline diagnostics (sink failures, read errors, panics,
+    /// drain timeouts). Never silently dropped.
+    pub capture_error: Option<String>,
     pub duration_ms: i64,
 }
 
@@ -90,6 +104,10 @@ pub fn run_checker(spec: &CheckerSpec) -> CheckerRun {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -101,6 +119,7 @@ pub fn run_checker(spec: &CheckerSpec) -> CheckerRun {
             };
         }
     };
+    let child_id = child.id();
 
     let stdout_handle = child.stdout.take();
     let stderr_handle = child.stderr.take();
@@ -140,7 +159,7 @@ pub fn run_checker(spec: &CheckerSpec) -> CheckerRun {
             Ok(None) => {
                 if Instant::now() >= deadline {
                     timed_out = true;
-                    let _ = child.kill();
+                    kill_child_group(&mut child, child_id);
                     // Reap the child so we do not leave a zombie.
                     let _ = child.wait();
                     break None;
@@ -153,63 +172,120 @@ pub fn run_checker(spec: &CheckerSpec) -> CheckerRun {
 
     // Collect the captured output. The drain threads normally finish
     // very shortly after the child exits because the pipes close. Use
-    // a short recv timeout so a stuck thread does not block the
-    // command forever.
-    let stdout = out_rx
-        .recv_timeout(Duration::from_millis(500))
-        .unwrap_or_default();
-    let stderr = err_rx
-        .recv_timeout(Duration::from_millis(500))
-        .unwrap_or_default();
+    // a bounded recv so a grandchild holding the pipe cannot block the
+    // command forever; a missing message means the thread panicked.
+    let mut capture_errors: Vec<String> = Vec::new();
+    let stdout = match out_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(c) => {
+            if let Some(e) = c.diagnostic {
+                capture_errors.push(format!("stdout: {e}"));
+            }
+            c.capture
+        }
+        Err(_) => {
+            capture_errors.push("stdout capture thread panicked or hung".into());
+            InnerCapture::default()
+        }
+    };
+    let stderr = match err_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(c) => {
+            if let Some(e) = c.diagnostic {
+                capture_errors.push(format!("stderr: {e}"));
+            }
+            c.capture
+        }
+        Err(_) => {
+            capture_errors.push("stderr capture thread panicked or hung".into());
+            InnerCapture::default()
+        }
+    };
+
+    let exit_code = exit_status.and_then(|s| s.code());
+    // No code + no timeout + no spawn error => killed by a signal.
+    let signalled =
+        exit_code.is_none() && !timed_out && matches!(exit_status, Some(s) if s.code().is_none());
 
     CheckerRun {
-        exit_code: exit_status.and_then(|s| s.code()),
+        exit_code,
         stdout: stdout.text,
         stderr: stderr.text,
         stdout_truncated: stdout.truncated,
         stderr_truncated: stderr.truncated,
         timed_out,
+        signalled,
         spawn_error: None,
+        capture_error: if capture_errors.is_empty() {
+            None
+        } else {
+            Some(capture_errors.join("; "))
+        },
         duration_ms: started.elapsed().as_millis() as i64,
     }
 }
 
+fn kill_child_group(child: &mut std::process::Child, pid: u32) {
+    #[cfg(unix)]
+    {
+        let group_killed = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) == 0 };
+        if !group_killed {
+            let _ = child.kill();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+}
+
 #[derive(Debug, Default)]
-struct BoundedCapture {
+struct InnerCapture {
     text: String,
     truncated: bool,
 }
 
+#[derive(Debug, Default)]
+struct BoundedCapture {
+    capture: InnerCapture,
+    diagnostic: Option<String>,
+}
+
+/// Accumulate raw bytes up to `limit`, keep reading past it so the child
+/// never blocks, then decode once. Read errors surface as a diagnostic.
 fn drain_bounded<R: Read>(mut reader: R, limit: u64) -> BoundedCapture {
-    let mut text = String::new();
-    let mut truncated = false;
-    let mut remaining = limit;
+    let mut stored: Vec<u8> = Vec::with_capacity(limit.min(8192) as usize);
+    let mut total_seen: u64 = 0;
+    let mut diagnostic: Option<String> = None;
     let mut buf = [0u8; 8192];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                if !truncated && remaining > 0 {
-                    let take = (n as u64).min(remaining);
-                    text.push_str(&String::from_utf8_lossy(&buf[..take as usize]));
-                    remaining -= take;
-                    if take < n as u64 {
-                        truncated = true;
-                    }
-                } else if n > 0 {
-                    truncated = true;
+                total_seen += n as u64;
+                if (stored.len() as u64) < limit {
+                    let remaining = limit - stored.len() as u64;
+                    let take = (n as u64).min(remaining) as usize;
+                    stored.extend_from_slice(&buf[..take]);
                 }
             }
-            Err(_) => break,
+            Err(e) => {
+                diagnostic = Some(format!("stream read failed: {e}"));
+                break;
+            }
         }
     }
-    BoundedCapture { text, truncated }
+    let truncated = total_seen > limit;
+    let text = String::from_utf8_lossy(&stored).into_owned();
+    BoundedCapture {
+        capture: InnerCapture { text, truncated },
+        diagnostic,
+    }
 }
 
 #[cfg(unix)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -249,6 +325,7 @@ mod tests {
         let run = run_checker(&spec);
         assert_eq!(run.exit_code, Some(0));
         assert!(!run.timed_out);
+        assert!(!run.signalled);
         assert!(run.spawn_error.is_none());
     }
 
@@ -259,6 +336,63 @@ mod tests {
         let run = run_checker(&spec);
         assert_eq!(run.exit_code, Some(7));
         assert!(!run.timed_out);
+        assert!(!run.signalled);
+    }
+
+    #[test]
+    fn signal_killed_checker_is_signalled() {
+        let tmp = tempdir().unwrap();
+        let spec = sh_spec(&tmp, "kill -KILL $$", 2000);
+        let run = run_checker(&spec);
+        assert!(run.exit_code.is_none());
+        assert!(!run.timed_out);
+        assert!(run.spawn_error.is_none());
+        assert!(run.signalled, "expected signalled, got {run:?}");
+    }
+
+    #[test]
+    fn emoji_split_across_reads_is_preserved() {
+        // Feed the drain an emoji split byte-by-byte.
+        struct TinyChunks {
+            data: Vec<u8>,
+            pos: usize,
+        }
+        impl Read for TinyChunks {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.pos >= self.data.len() {
+                    return Ok(0);
+                }
+                buf[0] = self.data[self.pos];
+                self.pos += 1;
+                Ok(1)
+            }
+        }
+        let mut data = b"hi ".to_vec();
+        data.extend_from_slice("🎉".as_bytes());
+        let out = drain_bounded(TinyChunks { data, pos: 0 }, 1024);
+        assert!(out.diagnostic.is_none());
+        assert!(out.capture.text.contains('🎉'));
+        assert!(!out.capture.text.contains('�'));
+    }
+
+    #[test]
+    fn read_error_surfaces_diagnostic() {
+        struct Boom;
+        impl Read for Boom {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+        }
+        let out = drain_bounded(Boom, 1024);
+        assert!(out.diagnostic.is_some());
+    }
+
+    #[test]
+    fn drain_bounded_reads_past_limit_without_blocking_semantics() {
+        let data = vec![b'A'; 5000];
+        let out = drain_bounded(Cursor::new(data), 1024);
+        assert!(out.capture.truncated);
+        assert!(out.capture.text.len() <= 1024);
     }
 
     #[test]
@@ -269,6 +403,17 @@ mod tests {
         let run = run_checker(&spec);
         assert!(run.timed_out);
         assert!(run.exit_code.is_none());
+    }
+
+    #[test]
+    fn timeout_kills_grandchild_holding_pipe() {
+        let tmp = tempdir().unwrap();
+        // Background sleep inherits stdout; only a group kill closes it.
+        let spec = sh_spec(&tmp, "sleep 30 & exec sleep 30", 200);
+        let started = Instant::now();
+        let run = run_checker(&spec);
+        assert!(run.timed_out, "got {run:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]

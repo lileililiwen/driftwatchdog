@@ -7,6 +7,7 @@ use crate::cli::TopArgs;
 use crate::error::Error;
 use crate::project::ProjectRoot;
 use crate::repo::{bugs::Bugs, Db};
+use crate::util::truncate_char_boundary;
 
 /// Run the `top` command. Always returns exit 0 on success.
 pub fn top(args: TopArgs, cwd: &Path) -> Result<i32, Error> {
@@ -30,11 +31,7 @@ pub fn top(args: TopArgs, cwd: &Path) -> Result<i32, Error> {
         let summary = r
             .summary
             .unwrap_or_else(|| "(no summary yet — fingerprinting pending)".to_string());
-        let summary = if summary.len() > 60 {
-            format!("{}…", &summary[..59])
-        } else {
-            summary
-        };
+        let summary = truncate_char_boundary(&summary, 59);
         let hash = if r.hash.len() >= 8 {
             &r.hash[..8]
         } else {

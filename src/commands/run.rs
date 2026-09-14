@@ -1,7 +1,7 @@
 //! `driftwatch run` orchestration. Reserves a run row, executes the child
 //! process via the runtime, finalizes the row, and reports status.
 //!
-//! For `Failed` and `StartFailed` runs, the captured stderr (or stdout
+//! For `Failed`, `StartFailed`, `Signalled`, and `Timeout` runs, the captured stderr (or stdout
 //! as a fallback) is normalized and attached as a fingerprint with a
 //! single occurrence row. Successful runs are not fingerprinted.
 
@@ -56,6 +56,7 @@ pub fn run(args: RunArgs, cwd: &Path) -> Result<i32, Error> {
         cwd: cwd.to_path_buf(),
         tags: args.tag.clone(),
         capture_limits: limits,
+        timeout_ms: args.timeout_ms,
     };
 
     let outcome = runtime::run(&spec)?;
@@ -95,13 +96,18 @@ pub fn run(args: RunArgs, cwd: &Path) -> Result<i32, Error> {
 
 /// Build a fingerprint + occurrence row for a failed run. Returns the
 /// updated fingerprint so the caller can print a short summary line.
+/// Signalled and timed-out runs are fingerprinted like failures: a
+/// recurring kill/timeout is a bug worth remembering.
 fn fingerprint_failure(
     db: &mut Db,
     run_id: i64,
     outcome: &runtime::RunOutcome,
     finished_at: &str,
 ) -> Result<Option<crate::repo::bugs::Fingerprint>, Error> {
-    if !matches!(outcome.status, RunStatus::Failed | RunStatus::StartFailed) {
+    if !matches!(
+        outcome.status,
+        RunStatus::Failed | RunStatus::StartFailed | RunStatus::Signalled | RunStatus::Timeout
+    ) {
         return Ok(None);
     }
     // Prefer stderr; fall back to stdout when stderr is empty so
@@ -147,6 +153,11 @@ fn excerpt(text: &str) -> Option<&str> {
 }
 
 fn render_summary(program: &str, outcome: &runtime::RunOutcome) {
+    if let Some(diag) = outcome.diagnostic.as_deref() {
+        if !diag.is_empty() {
+            eprintln!("driftwatch: note: {diag}");
+        }
+    }
     match outcome.status {
         crate::repo::runs::RunStatus::Success => {
             println!("driftwatch: {} ({}ms)", program, outcome.duration_ms);
@@ -166,6 +177,18 @@ fn render_summary(program: &str, outcome: &runtime::RunOutcome) {
             eprintln!(
                 "driftwatch: could not start {}: {}",
                 program, outcome.stderr.text
+            );
+        }
+        crate::repo::runs::RunStatus::Signalled => {
+            eprintln!(
+                "driftwatch: {} killed by signal (exit unavailable) duration={}ms",
+                program, outcome.duration_ms
+            );
+        }
+        crate::repo::runs::RunStatus::Timeout => {
+            eprintln!(
+                "driftwatch: {} timed out duration={}ms",
+                program, outcome.duration_ms
             );
         }
         crate::repo::runs::RunStatus::Running => {
