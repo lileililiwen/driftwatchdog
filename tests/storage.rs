@@ -50,7 +50,7 @@ fn migration_rerun_after_partial_0002_is_safe() {
     drop(conn);
     let mut conn = storage::open(&path).unwrap();
     let v = storage::migrations::apply(&mut conn).unwrap();
-    assert_eq!(v, 4);
+    assert_eq!(v, 5);
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn migration_rerun_after_partial_0003_is_safe() {
     drop(conn);
     let mut conn = storage::open(&path).unwrap();
     let v = storage::migrations::apply(&mut conn).unwrap();
-    assert_eq!(v, 4);
+    assert_eq!(v, 5);
 }
 
 #[test]
@@ -76,11 +76,11 @@ fn migration_version_is_three_after_init() {
     let path = tmp.path().join("state.db");
     let mut conn = storage::open(&path).unwrap();
     let v = storage::migrations::apply(&mut conn).unwrap();
-    assert_eq!(v, 4);
+    assert_eq!(v, 5);
     let recorded: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(recorded, 4);
+    assert_eq!(recorded, 5);
 }
 
 #[test]

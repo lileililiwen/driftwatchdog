@@ -163,6 +163,45 @@ fn gc_recent_runs_untouched() {
 }
 
 #[test]
+fn gc_prunes_artifact_files_but_keeps_identity_rows() {
+    let tmp = init_dir();
+    let artifact_dir = tmp.path().join(".driftwatch/artifacts");
+    std::fs::create_dir_all(&artifact_dir).unwrap();
+    std::fs::write(artifact_dir.join("old-out.log"), b"old bytes").unwrap();
+    let conn = open_db(&tmp);
+    conn.execute(
+        "INSERT INTO gate_artifacts
+             (key, kind, producer, created_at, byte_size, digest,
+              rel_path, redacted, available, preview)
+         VALUES ('old/out', 'command_output', 'probe', '2020-01-01T00:00:00Z',
+                 9, 'sha256:abc', 'artifacts/old-out.log', 1, 1, 'old bytes')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let out = driftwatch()
+        .arg("gc")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("1 artifacts"));
+    assert!(!artifact_dir.join("old-out.log").exists());
+    let conn = open_db(&tmp);
+    // Identity row survives: key, producer, digest retained, unavailable.
+    let (producer, digest, available): (String, String, i64) = conn
+        .query_row(
+            "SELECT producer, digest, available FROM gate_artifacts WHERE key = 'old/out'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(producer, "probe");
+    assert_eq!(digest, "sha256:abc");
+    assert_eq!(available, 0);
+}
+
+#[test]
 fn gc_preserves_fingerprint_history() {
     // After GC, the fingerprint row and its occurrence rows remain;
     // only the bulky excerpts on the underlying run are gone.

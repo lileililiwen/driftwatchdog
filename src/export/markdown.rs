@@ -163,6 +163,24 @@ pub fn to_string(doc: &ExportDocument) -> Result<String, Error> {
         Ok(())
     })?;
 
+    push_records(&mut s, "Gate evidence", doc.gate_artifacts.len(), |s| {
+        s.push_str("| ID | Key | Kind | Producer | Digest | Available | Preview |\n");
+        s.push_str("|----|-----|------|----------|--------|-----------|---------|\n");
+        for g in &doc.gate_artifacts {
+            s.push_str(&format!(
+                "| {} | `{}` | {} | `{}` | `{}` | {} | {} |\n",
+                g.id,
+                md_inline(&g.key),
+                md_inline(&g.kind),
+                md_inline(&g.producer),
+                md_inline(&short(&g.digest)),
+                if g.available { "yes" } else { "no" },
+                md_inline(g.preview.as_deref().unwrap_or("-")),
+            ));
+        }
+        Ok(())
+    })?;
+
     Ok(s)
 }
 
@@ -235,6 +253,7 @@ mod tests {
             alerts: vec![],
             correlations: vec![],
             manual_links: vec![],
+            gate_artifacts: vec![],
         }
     }
 

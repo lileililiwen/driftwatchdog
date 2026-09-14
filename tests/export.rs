@@ -33,14 +33,15 @@ fn export_json_on_empty_db_produces_valid_document() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let v: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}; stdout={stdout}"));
-    assert_eq!(v["schema_version"], 2);
+    assert_eq!(v["schema_version"], 3);
     assert!(v["runs"].as_array().unwrap().is_empty());
     assert!(v["fingerprints"].as_array().unwrap().is_empty());
     assert!(v["occurrences"].as_array().unwrap().is_empty());
     assert!(v["alerts"].as_array().unwrap().is_empty());
     assert!(v["correlations"].as_array().unwrap().is_empty());
     assert!(v["manual_links"].as_array().unwrap().is_empty());
-    assert_eq!(v["project"]["local_schema_version"], 4);
+    assert!(v["gate_artifacts"].as_array().unwrap().is_empty());
+    assert_eq!(v["project"]["local_schema_version"], 5);
 }
 
 #[test]
@@ -226,4 +227,48 @@ fn export_help_works() {
         .assert()
         .success()
         .stdout(contains("FORMAT"));
+}
+
+#[test]
+fn export_json_includes_retained_gate_artifact_metadata() {
+    use rusqlite::Connection;
+    let tmp = init_dir();
+    let db_path = tmp.path().join(".driftwatch/state.db");
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute(
+        "INSERT INTO gate_artifacts
+             (key, kind, producer, producer_version, created_at, byte_size,
+              digest, media_type, rel_path, redacted, available, preview)
+         VALUES ('gate/out', 'command_output', 'probe', '1.0',
+                 '2020-01-01T00:00:00Z', 11, 'sha256:abc', 'text/plain',
+                 'artifacts/gate_out-abc.log', 1, 1, 'redacted out')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let out = driftwatch()
+        .args(["export", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let artifacts = v["gate_artifacts"].as_array().unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0]["key"], "gate/out");
+    assert_eq!(artifacts[0]["kind"], "command_output");
+    assert_eq!(artifacts[0]["digest"], "sha256:abc");
+    assert_eq!(artifacts[0]["available"], true);
+}
+
+#[test]
+fn export_markdown_renders_gate_evidence_section() {
+    let tmp = init_dir();
+    let out = driftwatch()
+        .args(["export", "markdown"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("## Gate evidence"));
 }

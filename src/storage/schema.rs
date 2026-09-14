@@ -139,3 +139,31 @@ DELETE FROM manual_links WHERE id NOT IN (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_links_pair
     ON manual_links(fingerprint_id, alert_id);
 "#;
+
+/// Migration: gate evidence identity table. The
+/// `evidence-and-artifacts` change persists one row per artifact with
+/// key, kind, producer identity, size, digest, confined relative path,
+/// redaction status, availability, and a redacted bounded preview.
+/// Cleanup flips `available` to 0 and clears `rel_path`/`preview` but
+/// never deletes the row, so references stay auditable after bulky
+/// content is removed. Purely additive; rerunnable via
+/// `IF NOT EXISTS`.
+pub const MIGRATION_0005_GATE_EVIDENCE: &str = r#"
+CREATE TABLE IF NOT EXISTS gate_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    producer TEXT NOT NULL,
+    producer_version TEXT,
+    created_at TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    digest TEXT NOT NULL,
+    media_type TEXT,
+    rel_path TEXT,
+    redacted INTEGER NOT NULL DEFAULT 0,
+    available INTEGER NOT NULL DEFAULT 1,
+    preview TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_gate_artifacts_created
+    ON gate_artifacts(created_at);
+"#;

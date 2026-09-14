@@ -33,6 +33,7 @@ mod tests {
             alerts: vec![],
             correlations: vec![],
             manual_links: vec![],
+            gate_artifacts: vec![],
         }
     }
 
@@ -95,6 +96,7 @@ mod tests {
                 algorithm_version: "v1".into(),
             }],
             manual_links: vec![],
+            gate_artifacts: vec![],
         };
         let s = to_string(&doc).unwrap();
         let back: ExportDocument = serde_json::from_str(&s).unwrap();
@@ -133,6 +135,7 @@ mod tests {
                 algorithm_version: "v1".into(),
             }],
             manual_links: vec![],
+            gate_artifacts: vec![],
         };
         let s = to_string(&doc).unwrap();
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();

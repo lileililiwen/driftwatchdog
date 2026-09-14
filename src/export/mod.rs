@@ -17,8 +17,9 @@ use crate::repo::Db;
 
 pub use build::{build, build_with_cap, EXPORT_RUN_CAP};
 pub use dto::{
-    AlertExport, CorrelationExport, ExportDocument, FingerprintExport, ManualLinkExport,
-    OccurrenceExport, ProjectExport, RecordKind, RunExport, SnapshotExport, SCHEMA_VERSION,
+    AlertExport, CorrelationExport, ExportDocument, FingerprintExport, GateArtifactExport,
+    ManualLinkExport, OccurrenceExport, ProjectExport, RecordKind, RunExport, SnapshotExport,
+    SCHEMA_VERSION,
 };
 
 /// Output format requested by the CLI.

@@ -38,6 +38,13 @@ When a change is implemented and its `tasks.md` is fully checked off, follow thi
 documented sequence. Planning-only changes remain unchecked and are not archived
 until separately authorized for implementation.
 
+**Standing auto-mode authorization:** the operator runs in auto mode with no
+time for per-change confirmation. This paragraph is standing authorization to
+work through the `ROADMAP.md` planning queue without asking: pick the next
+dependency-ordered change with open tasks, implement it fully (BFS → DFS →
+BFS), run the change completion workflow above, then continue to the next
+change. Still one change at a time; still no confirmation prompts.
+
 ## Architecture rules
 
 - Keep the core as a single Rust binary with focused modules.

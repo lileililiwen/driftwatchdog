@@ -17,7 +17,12 @@ use serde::{Deserialize, Serialize};
 ///     `score_tag`) and an `algorithm_version` field. The
 ///     `correlation-and-ai-context` change is the source of this
 ///     bump.
-pub const SCHEMA_VERSION: u32 = 2;
+/// v3: `ExportDocument` gained a `gate_artifacts` array of
+///     `GateArtifactExport` rows. The field defaults to empty when
+///     reading older documents, and old readers ignore unknown
+///     fields, so v2 documents stay readable both ways. The
+///     `evidence-and-artifacts` change is the source of this bump.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Top-level JSON document. The `runs`, `fingerprints`, etc. fields are
 /// flat arrays so consumers can index them directly. `project` carries
@@ -35,6 +40,11 @@ pub struct ExportDocument {
     pub alerts: Vec<AlertExport>,
     pub correlations: Vec<CorrelationExport>,
     pub manual_links: Vec<ManualLinkExport>,
+    /// Retained gate evidence metadata. Empty for databases that
+    /// predate the `evidence-and-artifacts` migration; defaults to
+    /// empty when reading older documents.
+    #[serde(default)]
+    pub gate_artifacts: Vec<GateArtifactExport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -146,6 +156,29 @@ pub struct ManualLinkExport {
     pub created_at: String,
 }
 
+/// One retained gate artifact: identity metadata only, never bulky
+/// content. `available == false` means the file was pruned by
+/// retention (or never stored); the row stays auditable with its
+/// digest and an unavailable-content marker. `preview` is the
+/// redacted, bounded preview while retained.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GateArtifactExport {
+    pub id: i64,
+    pub key: String,
+    pub kind: String,
+    pub producer: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub producer_version: Option<String>,
+    pub created_at: String,
+    pub byte_size: u64,
+    pub digest: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub media_type: Option<String>,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub preview: Option<String>,
+}
+
 /// Discriminator used by the JSONL serializer. One record per line, each
 /// self-contained, with `type` selecting the DTO and `id` providing a
 /// stable identifier per record kind.
@@ -159,6 +192,7 @@ pub enum RecordKind {
     Alert,
     Correlation,
     ManualLink,
+    GateArtifact,
 }
 
 impl RecordKind {
@@ -174,6 +208,7 @@ impl RecordKind {
             RecordKind::Alert => "alert",
             RecordKind::Correlation => "correlation",
             RecordKind::ManualLink => "manual_link",
+            RecordKind::GateArtifact => "gate_artifact",
         }
     }
 }

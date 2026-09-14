@@ -13,14 +13,15 @@ use crate::repo::{
     alerts::{schema_version, Alert, Alerts, Snapshot},
     bugs::Bugs,
     correlations::Correlations,
+    evidence::Artifacts,
     links::Links,
     runs::Runs,
     Db,
 };
 
 use super::dto::{
-    AlertExport, CorrelationExport, ExportDocument, FingerprintExport, ManualLinkExport,
-    OccurrenceExport, ProjectExport, RunExport, SnapshotExport, SCHEMA_VERSION,
+    AlertExport, CorrelationExport, ExportDocument, FingerprintExport, GateArtifactExport,
+    ManualLinkExport, OccurrenceExport, ProjectExport, RunExport, SnapshotExport, SCHEMA_VERSION,
 };
 
 /// Maximum run rows included in an export. The cap keeps exports
@@ -56,6 +57,7 @@ pub fn build_with_cap(
     let alerts = alerts_repo.list_alerts()?;
     let correlations = Correlations::new(db).list_all()?;
     let manual_links = Links::new(db).list_all()?;
+    let gate_artifacts = Artifacts::new(db).list_all_with_ids()?;
     let local_schema_version = schema_version(db.conn())?;
 
     let doc = ExportDocument {
@@ -74,6 +76,10 @@ pub fn build_with_cap(
         alerts: alerts.into_iter().map(alert_to_dto).collect(),
         correlations: correlations.into_iter().map(corr_to_dto).collect(),
         manual_links: manual_links.into_iter().map(link_to_dto).collect(),
+        gate_artifacts: gate_artifacts
+            .into_iter()
+            .map(|(id, a)| artifact_to_dto(id, a))
+            .collect(),
     };
     Ok((doc, truncated))
 }
@@ -209,6 +215,22 @@ fn link_to_dto(l: crate::repo::links::ManualLink) -> ManualLinkExport {
         alert_id: l.alert_id,
         note: l.note,
         created_at: l.created_at,
+    }
+}
+
+fn artifact_to_dto(id: i64, a: crate::gate::evidence::ArtifactRecord) -> GateArtifactExport {
+    GateArtifactExport {
+        id,
+        key: a.key,
+        kind: a.kind.as_str().to_string(),
+        producer: a.producer,
+        producer_version: a.producer_version,
+        created_at: a.created_at,
+        byte_size: a.byte_size,
+        digest: a.digest,
+        media_type: a.media_type,
+        available: a.available,
+        preview: a.preview,
     }
 }
 

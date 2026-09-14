@@ -20,6 +20,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (2, schema::MIGRATION_0002_SNAPSHOT_GIT),
     (3, schema::MIGRATION_0003_CORRELATION_DETAIL),
     (4, schema::MIGRATION_0004_LINK_IDENTITY),
+    (5, schema::MIGRATION_0005_GATE_EVIDENCE),
 ];
 
 /// Apply all unapplied migrations and return the current schema version.
@@ -147,10 +148,10 @@ mod tests {
         let p = tmp.path().join("state.db");
         let mut conn = crate::storage::open(&p).unwrap();
         let v = apply(&mut conn).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
         // Second call is a no-op and still reports the same version.
         let v2 = apply(&mut conn).unwrap();
-        assert_eq!(v2, 4);
+        assert_eq!(v2, 5);
     }
 
     #[test]
@@ -190,7 +191,7 @@ mod tests {
             .unwrap();
         // Full apply must complete without `duplicate column` errors.
         let v = apply(&mut conn).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
         // Both git columns present exactly once.
         let n: i64 = conn
             .query_row(
@@ -213,7 +214,7 @@ mod tests {
         conn.execute_batch("ALTER TABLE correlations ADD COLUMN score_message REAL;")
             .unwrap();
         let v = apply(&mut conn).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
         let n: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('correlations') WHERE name LIKE 'score_%' OR name = 'algorithm_version'",
@@ -263,11 +264,11 @@ mod tests {
         for h in handles {
             versions.push(h.join().expect("thread panicked").expect("apply failed"));
         }
-        assert!(versions.iter().all(|&v| v == 4), "got {versions:?}");
+        assert!(versions.iter().all(|&v| v == 5), "got {versions:?}");
         let conn = crate::storage::open(&p).unwrap();
         let recorded: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(recorded, 4);
+        assert_eq!(recorded, 5);
     }
 }

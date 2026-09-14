@@ -43,6 +43,28 @@ pub fn redact_secrets(s: &str) -> String {
     out
 }
 
+/// Like [`redact_secrets`], but also redacts caller-configured
+/// sensitive values (e.g. tokens from the project environment) with a
+/// plain substring match. Values are applied longest-first so overlapping
+/// tokens redact deterministically. Empty values are ignored.
+pub fn redact_secrets_with_extra(s: &str, extra: &[&str]) -> String {
+    let mut out = redact_secrets(s);
+    let mut ordered: Vec<&str> = extra.iter().copied().filter(|v| !v.is_empty()).collect();
+    ordered.sort_by_key(|a| std::cmp::Reverse(a.len()));
+    for secret in ordered {
+        if out.contains(secret) {
+            out = out.replace(secret, "[REDACTED]");
+        }
+    }
+    out
+}
+
+/// Redact (with configured extra values) then truncate to `limit`
+/// bytes at a char boundary. Always returns valid UTF-8; never panics.
+pub fn bound_text_with_extra(s: &str, extra: &[&str], limit: usize) -> String {
+    truncate_char_boundary(&redact_secrets_with_extra(s, extra), limit)
+}
+
 /// Redact then truncate to `limit` bytes at a char boundary.
 /// Always returns valid UTF-8; never panics.
 pub fn bound_text(s: &str, limit: usize) -> String {
@@ -84,5 +106,19 @@ mod tests {
         let out = bound_text(&s, 64);
         assert!(out.len() <= 67);
         assert!(!out.contains("secret"));
+    }
+
+    #[test]
+    fn redacts_configured_extra_values_longest_first() {
+        let out = redact_secrets_with_extra("token abc123 (abc)", &["abc", "abc123"]);
+        assert!(!out.contains("abc123"));
+        assert!(!out.contains("(abc)"));
+        assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn extra_redaction_ignores_empty_values() {
+        let out = redact_secrets_with_extra("plain text", &[""]);
+        assert_eq!(out, "plain text");
     }
 }
