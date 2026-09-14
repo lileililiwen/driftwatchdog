@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install pinned MSRV toolchain
-        uses: dtolnay/rust-toolchain@1.74
+        uses: dtolnay/rust-toolchain@1.120
         with:
           components: clippy
 
