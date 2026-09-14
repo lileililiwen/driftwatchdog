@@ -24,4 +24,11 @@ driftwatch.toml
 *.swo
 *~
 
+# Assistant / agent tooling state. These directories are written
+# by the dev environment's AI assistant and have no relationship
+# to the Driftwatch source tree. Earlier `git add -A` runs
+# accidentally tracked them; untrack + ignore to keep `git status`
+# clean.
+.ariadex/
+
 # Keep Cargo.lock committed for this binary application.
