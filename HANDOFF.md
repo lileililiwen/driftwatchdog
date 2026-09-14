@@ -13,7 +13,7 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
-All v0.x change packages through v0.5 are **implemented and archived**: `project-foundation`, `runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`, and `linux-macos-distribution`. The `crash-hardening` change is also **implemented and archived** (2026-09-14): char-boundary truncation helper, UTF-8-once capture, signal-aware statuses (`RunStatus::Signalled`/`Timeout`, checker `Status::Unknown`), opt-in `run --timeout-ms` with process-group kill, and capture diagnostics. The `quality-cicd-docs-ux` change is also **implemented and archived** (2026-09-14): `[lints.clippy] all = "deny"` + `rust-version = "1.74"` MSRV (with `is_none_or`/`repeat_n` lowered to 1.74-compatible APIs), `deny.toml` advisory/license policy, proptest seeds for the normalizer, CI breadth (`--all-features` clippy, MSRV check, cargo-deny, tarpaulin coverage, `macos-14` matrix, shellcheck + script-mode enforcement, `npm audit`, smoke), release integrity (npm provenance via `id-token: write`, `macos-14` runner, tag==Cargo version assertion, SPDX SBOM, CHANGELOG.md, cold-start `bump.sh` at 0.1.0, PAT-missing skip + no-tag-spam auto-tag, Dependabot), and docs/UX (binary-naming rule, `driftwatch completions`/`man`, per-command examples, error `hint:` lines, honest doctor INFO, mandatory-verify installer with early `--dry-run` + `cargo install` fallback, npm darwin-arm64 preinstall guard, `driftwatch.toml.example`, repo-hygiene packaging test). The `driftwatchdog` Rust binary builds and tests cleanly (369 tests pass). The full CLI surface is functional: `init`, `run`, `list`, `top`, `show`, `report` (with `--ai`), `gc`, `export json|jsonl|markdown`, `doctor`, `check`, `link`, `unlink`, `completions`, `man`. The SQLite schema (version 3) covers runs, fingerprints, occurrences, check_snapshots (with `git_commit`/`git_branch`), drift_alerts, correlations (with per-component scores and `algorithm_version`), and manual_links. Seven capability specs are live under `openspec/specs/` (including `quality-cicd-docs-ux`; `ci-test-gates` and `release-distribution` Purposes filled). Native release archives plus an SHA-256 manifest are produced for Linux x86_64, Linux arm64, and macOS x86_64 by `.github/workflows/release.yml`; the shell installer (`scripts/install.sh`), the npm launcher (`npm/driftwatchdog/`), direct downloads, and `cargo install` are documented in README.md. The next change is the v0.6 integration work (MCP read tools + examples + GitHub Actions templates); see ROADMAP.md.
+All v0.x change packages through v0.5 are **implemented and archived**: `project-foundation`, `runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`, and `linux-macos-distribution`. The `crash-hardening` change is also **implemented and archived** (2026-09-14): char-boundary truncation helper, UTF-8-once capture, signal-aware statuses (`RunStatus::Signalled`/`Timeout`, checker `Status::Unknown`), opt-in `run --timeout-ms` with process-group kill, and capture diagnostics. The `quality-cicd-docs-ux` change is also **implemented and archived** (2026-09-14): `[lints.clippy] all = "deny"` + `rust-version = "1.74"` MSRV (with `is_none_or`/`repeat_n` lowered to 1.74-compatible APIs), `deny.toml` advisory/license policy, proptest seeds for the normalizer, CI breadth (`--all-features` clippy, MSRV check, cargo-deny, tarpaulin coverage, `macos-14` matrix, shellcheck + script-mode enforcement, `npm audit`, smoke), release integrity (npm provenance via `id-token: write`, `macos-14` runner, tag==Cargo version assertion, SPDX SBOM, CHANGELOG.md, cold-start `bump.sh` at 0.1.0, PAT-missing skip + no-tag-spam auto-tag, Dependabot), and docs/UX (binary-naming rule, `driftwatch completions`/`man`, per-command examples, error `hint:` lines, honest doctor INFO, mandatory-verify installer with early `--dry-run` + `cargo install` fallback, npm darwin-arm64 preinstall guard, `driftwatch.toml.example`, repo-hygiene packaging test). The `driftwatchdog` Rust binary builds and tests cleanly (396 tests pass). The full CLI surface is functional: `init`, `run`, `list`, `top`, `show`, `report` (with `--ai`), `gc`, `export json|jsonl|markdown`, `doctor`, `check`, `link`, `unlink`, `completions`, `man`, `mcp`. The MCP server speaks JSON-RPC 2.0 on stdio with four read-only tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`) and opens the database read-only. The SQLite schema (version 3) covers runs, fingerprints, occurrences, check_snapshots (with `git_commit`/`git_branch`), drift_alerts, correlations (with per-component scores and `algorithm_version`), and manual_links. Seven capability specs are live under `openspec/specs/` (including `quality-cicd-docs-ux`; `ci-test-gates` and `release-distribution` Purposes filled). Native release archives plus an SHA-256 manifest are produced for Linux x86_64, Linux arm64, and macOS x86_64 by `.github/workflows/release.yml`; the shell installer (`scripts/install.sh`), the npm launcher (`npm/driftwatchdog/`), direct downloads, and `cargo install` are documented in README.md. The next change is the v0.6 integration work (MCP read tools + examples + GitHub Actions templates); see ROADMAP.md.
 
 ## Start here
 
@@ -21,8 +21,8 @@ Read these in order:
 
 1. README.md — product positioning, user-facing command surface, and installation channels.
 2. ROADMAP.md — release sequence, closed change inventory, and dependency graph.
-3. `openspec/specs/` — the seven capability specifications the implementation satisfies.
-4. The archived v0.6 change proposal (still spec-only) under `openspec/changes/` once it lands.
+3. `openspec/specs/` — the eight capability specifications the implementation satisfies.
+4. The remaining v0.6 proposal changes (spec-only) under `openspec/changes/`: implement `agent-examples` next, then `github-actions-templates`, one at a time.
 
 ## Change inventory
 
@@ -36,6 +36,9 @@ Read these in order:
 | correlation-and-ai-context | archived 2026-09-04 | Heuristic correlations, manual `link`/`unlink`, `driftwatch report --ai` | fingerprinting; checker alerts |
 | linux-macos-distribution | archived 2026-09-04 | Shell installer, npm launcher, release workflow, SHA-256-verified native archives for Linux x86_64, Linux arm64, and macOS x86_64 | any prior archive |
 | crash-hardening | archived 2026-09-14 | No-panic truncation, UTF-8-safe capture, signal-aware status, bounded run/checker execution | runtime-memory; checker-and-drift-alerts |
+| mcp-read-tools | archived 2026-09-14 | stdio MCP server with read-only bug tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`) | stable CLI surface |
+| agent-examples | proposed (spec-only) | Tested Claude Code/OpenCode/Aider MCP + workflow examples | mcp-read-tools |
+| github-actions-templates | proposed (spec-only) | Reusable CI check template publishing the AI report | mcp-read-tools (sequenced third; stable CLI only) |
 
 ## Implementation constraints
 
@@ -53,7 +56,7 @@ Read these in order:
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 230+ tests pass: lib + integration (incl. packaging)
+    cargo test             # 396 tests pass: lib + integration (incl. packaging)
     cargo clippy --all-targets --all-features -- -D warnings
     openspec validate --changes --strict --no-interactive   # 0/0 pass (changes archived)
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
@@ -72,8 +75,8 @@ Last run on this change:
 
 ## Module map
 
-- `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`; dispatches all 12 subcommands.
-- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Link,Unlink}` and arg structs; `RunArgs` carries opt-in `--timeout-ms`).
+- `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`; dispatches all 13 subcommands.
+- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Link,Unlink,Completions,Man,Mcp}`) and arg structs; `RunArgs` carries opt-in `--timeout-ms`.
 - `src/error.rs` — `thiserror` `Error` enum used by library code; includes `LinkTarget` and `ManualLinkNotFound` variants.
 - `src/fingerprint/mod.rs` — module entry, re-exports `Rules`, `Canonical`, `fingerprint`.
 - `src/fingerprint/normalizer.rs` — generic normalizer (13 ordered rules).
@@ -102,8 +105,9 @@ Last run on this change:
 - `src/runtime/runner.rs` — `CommandSpec` (incl. opt-in `timeout_ms`), `CapturedStream`, `RunOutcome` (incl. `timed_out` + `diagnostic`), `run`; byte-accumulating UTF-8-once drain, signal-aware status, process-group kill on timeout.
 - `src/util.rs` — `truncate_char_boundary` shared helper (byte limit, char-boundary cut, ellipsis).
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
-- `src/commands/{run,list,top,show,report,gc,export,doctor,check,link,unlink,report_ai}.rs` — per-subcommand orchestration returning process exit code.
+- `src/commands/{run,list,top,show,report,gc,export,doctor,check,link,unlink,report_ai}.rs` — per-subcommand orchestration returning process exit code. `top.rs` and `show.rs` expose `render` functions that return the same bytes the CLI prints; `report_ai.rs` exposes `render_ai_for_mcp` for the read-only MCP path.
 - `src/commands/meta.rs` — `completions` (all five shells via `clap_complete`) and `man` (via `clap_mangen`) generators.
+- `src/mcp/{mod,server,tools}.rs` — Model Context Protocol server over stdio. `server.rs` is the JSON-RPC 2.0 dispatch loop (newline-delimited, `PROTOCOL_VERSION = "2024-11-05"`, `-32700`/`-32601`/`-32602` error codes, EOF exits 0). `tools.rs` defines four read-only tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`) that reuse the existing CLI builders; every input schema is closed (`additionalProperties: false`). The DB is opened with `SQLITE_OPEN_READ_ONLY` via the existing `Db::open_read_only` so a write attempt fails at the driver level.
 - `src/cli.rs` — `clap` derive types plus `Completions`/`Man` subcommands, `long_about` with examples, per-command `after_help` examples, and the binary-naming rule doc comment.
 - `src/error.rs` — `thiserror` `Error` enum plus `hint()` single-wrap remediation for every user-facing variant.
 - `src/doctor/check.rs` — `Status::{Pass,Info,Warn,Fail}` with `Check::info` constructor (unconfigured-but-ok states).
@@ -135,4 +139,9 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 
 ## Next action
 
-`quality-cicd-docs-ux` is closed (archived 2026-09-14). Four hardening proposals remain untracked under `openspec/changes/`: `config-checker-protocol`, `fingerprint-similarity`, `identity-resolution`, `storage-concurrency` (all 0 tasks). Implement one at a time in a follow-up session. v0.6 (MCP read tools + examples + GitHub Actions templates) is still the next release per ROADMAP.md. Follow the "Change completion workflow" at the top of this file when the next change is ready to archive.
+**Recommended next spec: `agent-examples`** (`openspec/changes/agent-examples/`). It is a documentation + example-only change that attaches to the now-archived `mcp-read-tools` server. `github-actions-templates` follows once the example shape is established. Implement in this order:
+
+1. `agent-examples` — `examples/{claude-code,opencode,aider}/` collateral + consistency test (depends on the server from `mcp-read-tools`, which is now archived).
+2. `github-actions-templates` — `templates/github-actions/driftwatch-check.yml` + shape test (stable CLI only).
+
+`mcp-read-tools` is closed (archived 2026-09-14). v0.6 (MCP read tools + examples + GitHub Actions templates) now needs only the two remaining example/template changes per ROADMAP.md. Follow the "Change completion workflow" at the top of this file when the next change is ready to archive.
