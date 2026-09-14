@@ -3,10 +3,11 @@
 //! Tokenization rules:
 //! * split on any non-alphanumeric character;
 //! * lowercase every token;
-//! * drop tokens shorter than 3 characters (eliminates noise like
-//!   `s`, `t`, `42` from line/column);
-//! * drop a small English stopword set so generic words do not
-//!   dominate the Jaccard intersection.
+//! * keep short domain tokens on an allowlist (`db`, `io`, `os`,
+//!   `s3`, `ui`, `go`) and otherwise drop tokens shorter than 3
+//!   characters (eliminates noise like `s`, `t`, `42`);
+//! * drop an English + failure-domain stopword set so generic words
+//!   (`the`, `error`, `failed`, ...) do not dominate Jaccard.
 //!
 //! The tokenizer is intentionally language-agnostic: it does not
 //! stem, lemmatize, or recognize compound words. The output is
@@ -15,13 +16,60 @@
 use std::collections::HashSet;
 
 /// Common English words that appear in so many failure messages that
-/// they add noise without discriminating power. The list is short on
-/// purpose: driftwatch's job is to surface leads, not to score essays.
+/// they add noise without discriminating power, plus generic
+/// failure-domain words (`error`, `failed`, ...) that would otherwise
+/// let any two failures match. Kept short on purpose: driftwatch's
+/// job is to surface leads, not to score essays.
 pub const STOPWORDS: &[&str] = &[
-    "the", "and", "for", "with", "this", "that", "from", "into", "have", "has", "had", "was",
-    "were", "are", "but", "not", "you", "your", "our", "their", "while", "when", "then", "than",
-    "over", "under", "such", "also",
+    "the",
+    "and",
+    "for",
+    "with",
+    "this",
+    "that",
+    "from",
+    "into",
+    "have",
+    "has",
+    "had",
+    "was",
+    "were",
+    "are",
+    "but",
+    "not",
+    "you",
+    "your",
+    "our",
+    "their",
+    "while",
+    "when",
+    "then",
+    "than",
+    "over",
+    "under",
+    "such",
+    "also",
+    "error",
+    "errors",
+    "failed",
+    "failure",
+    "failures",
+    "exception",
+    "exceptions",
+    "traceback",
+    "warning",
+    "warnings",
+    "invalid",
+    "cannot",
+    "unable",
+    "expected",
+    "unexpected",
+    "occurred",
 ];
+
+/// Short tokens that carry domain meaning and must survive the
+/// minimum-length filter.
+pub const SHORT_TOKEN_ALLOWLIST: &[&str] = &["db", "io", "os", "s3", "ui", "go"];
 
 /// Tokenize `s` into a deterministic list of normalized tokens.
 /// The order is preserved; duplicates are kept (the Jaccard
@@ -29,7 +77,10 @@ pub const STOPWORDS: &[&str] = &[
 pub fn tokenize(s: &str) -> Vec<String> {
     s.split(|c: char| !c.is_alphanumeric())
         .map(|t| t.to_ascii_lowercase())
-        .filter(|t| t.len() >= 3 && !STOPWORDS.contains(&t.as_str()))
+        .filter(|t| {
+            (t.len() >= 3 || SHORT_TOKEN_ALLOWLIST.contains(&t.as_str()))
+                && !STOPWORDS.contains(&t.as_str())
+        })
         .map(|t| t.to_string())
         .collect()
 }
@@ -70,12 +121,28 @@ mod tests {
     #[test]
     fn tokenize_lowercases_and_drops_short() {
         let t = tokenize("Error: a b c BadToken xyz");
-        // "a", "b", "c", "BadToken" stay after lowercasing and length
-        // check. We assert the lowercased form survived.
-        assert!(t.contains(&"errortoken".to_string()) || t.contains(&"badtoken".to_string()));
-        // short tokens are dropped.
+        // "Error" is a generic failure-domain stopword; "a"/"b"/"c"
+        // are too short. "badtoken"/"xyz" survive lowercased.
+        assert!(!t.iter().any(|w| w == "error"));
+        assert!(t.contains(&"badtoken".to_string()));
         assert!(!t.iter().any(|w| w == "a"));
         assert!(!t.iter().any(|w| w == "b"));
+    }
+
+    #[test]
+    fn tokenize_keeps_short_domain_tokens() {
+        let t = tokenize("s3 db io read failed");
+        // "failed" is a stopword; s3/db/io survive via the allowlist.
+        assert!(t.contains(&"s3".to_string()));
+        assert!(t.contains(&"db".to_string()));
+        assert!(t.contains(&"io".to_string()));
+        assert!(!t.iter().any(|w| w == "failed"));
+    }
+
+    #[test]
+    fn tokenize_drops_generic_failure_words() {
+        let t = tokenize("error exception failed warning");
+        assert!(t.is_empty(), "got: {t:?}");
     }
 
     #[test]

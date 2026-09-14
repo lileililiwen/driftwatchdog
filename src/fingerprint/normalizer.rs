@@ -7,8 +7,13 @@
 //! generic profile is the v1 compatibility baseline: it accepts
 //! arbitrary text and never rejects an unknown toolchain.
 //!
-//! After the rules run, post-processing collapses whitespace and trims
-//! each line. The resulting canonical text is what we hash and persist.
+//! After the rules run, post-processing normalizes line endings,
+//! trims trailing whitespace per line, and preserves leading
+//! indentation (so Python/YAML blocks stay distinct). The resulting
+//! canonical text is what we hash and persist.
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use fancy_regex::Regex;
 
@@ -36,9 +41,18 @@ pub struct Rule {
 
 impl Rule {
     /// Apply this rule to `text`, returning the post-replacement copy.
+    /// A rule whose pattern fails to compile is skipped (input
+    /// returned unchanged) so normalization never panics. Use
+    /// [`Rule::try_apply`] when the caller needs the error.
     pub fn apply(&self, text: &str) -> String {
-        let re = compile(self.name, self.pattern);
-        re.replace_all(text, self.replacement).into_owned()
+        self.try_apply(text).unwrap_or_else(|_| text.to_string())
+    }
+
+    /// Fallible application: returns the replaced text, or an error
+    /// naming the rule when its pattern does not compile.
+    pub fn try_apply(&self, text: &str) -> Result<String, String> {
+        let re = try_compile(self.name, self.pattern)?;
+        Ok(re.replace_all(text, self.replacement).into_owned())
     }
 }
 
@@ -105,13 +119,31 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 fn post_process(text: &str) -> String {
-    // 1. Collapse runs of horizontal whitespace to a single space.
-    // 2. Collapse 3+ consecutive blank lines to 2.
-    // 3. Trim each line.
-    let mut out = String::with_capacity(text.len());
+    // Normalize line endings, preserve leading indentation (Python/YAML
+    // blocks stay distinct), collapse interior horizontal whitespace
+    // to a single space, trim trailing whitespace per line, and
+    // collapse 3+ consecutive blank lines to 2.
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::with_capacity(normalized.len());
     let mut blank_run = 0usize;
-    for line in text.lines() {
-        let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    for line in normalized.split('\n') {
+        // Split off leading indentation before collapsing.
+        let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let (indent, rest) = line.split_at(indent_len);
+        // Collapse interior runs of spaces/tabs; drop trailing space.
+        let mut collapsed = String::with_capacity(rest.len());
+        let mut in_space = false;
+        for ch in rest.chars() {
+            if ch == ' ' || ch == '\t' {
+                in_space = true;
+            } else {
+                if in_space && !collapsed.is_empty() {
+                    collapsed.push(' ');
+                }
+                in_space = false;
+                collapsed.push(ch);
+            }
+        }
         if collapsed.is_empty() {
             blank_run += 1;
             if blank_run <= 2 {
@@ -119,6 +151,7 @@ fn post_process(text: &str) -> String {
             }
         } else {
             blank_run = 0;
+            out.push_str(indent);
             out.push_str(&collapsed);
             out.push('\n');
         }
@@ -130,32 +163,30 @@ fn post_process(text: &str) -> String {
     out
 }
 
-fn compile(name: &'static str, pattern: &'static str) -> &'static Regex {
-    // `OnceLock` does not give us `&'static Regex` directly; we leak a
-    // boxed Regex to obtain a static reference. This happens at most once
-    // per rule for the lifetime of the process.
-    thread_local! {
-        static CACHE: std::cell::RefCell<Option<Vec<(&'static str, &'static Regex)>>> =
-            const { std::cell::RefCell::new(None) };
+/// Pattern-keyed regex cache. Returns a cloned `Regex`; invalid
+/// patterns produce an `Err` naming the rule instead of panicking.
+/// No leaking: entries live in a `OnceLock<Mutex<...>>` for the
+/// process lifetime.
+fn cache() -> &'static Mutex<HashMap<(String, String), Regex>> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String), Regex>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Fallible compilation with a `(name, pattern)` cache key.
+pub fn try_compile(name: &str, pattern: &str) -> Result<Regex, String> {
+    {
+        let guard = cache()
+            .lock()
+            .map_err(|e| format!("regex cache poisoned: {e}"))?;
+        if let Some(re) = guard.get(&(name.to_string(), pattern.to_string())) {
+            return Ok(re.clone());
+        }
     }
-    CACHE.with(|cell| {
-        let mut cache = cell.borrow_mut();
-        if let Some(list) = cache.as_ref() {
-            for (n, r) in list.iter() {
-                if *n == name {
-                    return *r;
-                }
-            }
-        }
-        let compiled = Box::leak(Box::new(
-            Regex::new(pattern).unwrap_or_else(|e| panic!("invalid rule {name}: {e}")),
-        ));
-        if cache.is_none() {
-            *cache = Some(Vec::new());
-        }
-        cache.as_mut().unwrap().push((name, compiled));
-        compiled
-    })
+    let re = Regex::new(pattern).map_err(|e| format!("invalid rule {name}: {e}"))?;
+    if let Ok(mut guard) = cache().lock() {
+        guard.insert((name.to_string(), pattern.to_string()), re.clone());
+    }
+    Ok(re)
 }
 
 /// Compile a one-off regex (used by tests for negative cases). Not part
@@ -182,11 +213,11 @@ const GENERIC_RULES: &[Rule] = &[
         name: "temp_path",
         // Linux /tmp and macOS /var/folders/... per-user temp dirs.
         // Must run BEFORE absolute_path so `/tmp/...` is captured as a
-        // temp path rather than a generic absolute path. The
-        // `(?:^|\s)` anchor prevents matching inside relative paths
-        // like `src/tmp/foo`; the leading context is captured as
-        // `prefix` and put back in the replacement.
-        pattern: "(?P<prefix>^|\\s)(?:/tmp/[^\\s\"'\\)]+|/var/folders/[^/\\s\"'\\)]+/[^\\s\"'\\)]+)",
+        // temp path rather than a generic absolute path. The leading
+        // context covers start-of-line plus whitespace and the common
+        // quoting/wrapping characters (`(`, `"`, `'`, `=`, `:`) so
+        // `("/tmp/foo")` normalizes identically to ` /tmp/foo`.
+        pattern: "(?P<prefix>^|[\\s\\(\\\"'=:])(?:/tmp/[^\\s\"'\\)]+|/var/folders/[^/\\s\"'\\)]+/[^\\s\"'\\)]+)",
         replacement: "${prefix}<tmp>",
     },
     Rule {
@@ -202,23 +233,28 @@ const GENERIC_RULES: &[Rule] = &[
     },
     Rule {
         name: "port",
-        // Must run BEFORE line/column so `localhost:5432` is captured
-        // as a port rather than triggering the line/column rule.
-        pattern: "\\b(?:port|localhost:|127\\.0\\.0\\.1:)\\d{1,5}\\b",
+        // Must run BEFORE line/column so `host:5432` is captured as a
+        // port rather than triggering the line/column rule. Covers
+        // `localhost`, loopback, bare `host`/`port` cues, common
+        // service names, and dotted hostnames like `example.com:5432`.
+        // The dotted-host alternative requires a non-path boundary
+        // (not preceded by `/`, word char, `.`, or `-`) so filenames
+        // like `src/main.rs:183` never match, and refuses a trailing
+        // `:digits` so `file:line:col` chains fall through to the
+        // line/column rule.
+        pattern: "(?:\\b(?:localhost|127\\.0\\.0\\.1|host|port|postgres(?:ql)?|mysql|redis|mongo(?:db)?):\\d{2,5}\\b|(?<![/\\w.-])[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+:\\d{2,5}\\b(?!:\\d))",
         replacement: "port=<port>",
     },
     Rule {
         name: "line_column",
-        // Capture the leading `:` separately so the replacement can
-        // put it back. The lookbehind `(?<!\d)` ensures the colon is
-        // not part of a timestamp like `T03:04:05`; the absence of
-        // `:` in the lookbehind (vs. the simpler `(?<![:\\d])`)
-        // means the rule is allowed to match a second `:` in a
-        // `host:port:col` chain only if the port rule has already
-        // collapsed `host:NNN` into `port=<port>`. Runs after
-        // `port` and `absolute_path`.
-        pattern: "(?<!\\d)(?P<sep>:)(?P<line>\\d+)(?::(?P<col>\\d+))?",
-        replacement: "${sep}<line>:<col>",
+        // File-shaped prefix required: a dotted filename (`path.rs`),
+        // a slash path (`src/main`), or a normalizer placeholder
+        // (`<path>`, `<tmp>`) left by earlier rules. Bare `host:port`
+        // chains never reach here because `port` runs first. The
+        // lookbehind `(?<!\d)` keeps timestamps like `T03:04:05`
+        // intact. Runs after `port` and `absolute_path`.
+        pattern: "(?<!\\d)(?P<file>(?:[\\w\\-./\\\\]+\\.[A-Za-z0-9]+|[\\w\\-./\\\\]*[/\\\\][\\w\\-./\\\\]+|<path>|<tmp>))(?P<sep>:)(?P<line>\\d+)(?::(?P<col>\\d+))?",
+        replacement: "${file}${sep}<line>:<col>",
     },
     Rule {
         name: "uuid",
@@ -242,10 +278,13 @@ const GENERIC_RULES: &[Rule] = &[
     },
     Rule {
         name: "duration_s",
-        // Apply *after* `duration_ms` so the `ms` form is captured first
-        // and we don't accidentally match `1500ms` as `<num>ms` and
-        // then chew the trailing `s` of something else.
-        pattern: "\\b\\d+(?:\\.\\d+)?\\s*s\\b",
+        // Apply *after* `duration_ms` so the `ms` form is captured first.
+        // Only true durations collapse: compact `30s`, explicit
+        // `30 sec(s)` / `30 second(s)`, or `<num> <unit>` with a
+        // minute/hour unit. A bare `<num> s` with a space (e.g.
+        // `retry 5 s`, `5 tests failed`) is intentionally left alone
+        // so counts never merge with durations.
+        pattern: "\\b\\d+(?:\\.\\d+)?s\\b|\\b\\d+(?:\\.\\d+)?\\s*(?:sec|secs|second|seconds|min|mins|minute|minutes|h|hr|hrs|hour|hours)\\b",
         replacement: "<duration>",
     },
     Rule {
@@ -501,9 +540,12 @@ error[E0425]: cannot find value `foo` in this scope
     #[test]
     fn rule_compile_is_idempotent() {
         // Force the cache to populate twice; should return the same
-        // compiled regex without panic.
-        let _ = compile("ansi_escape", GENERIC_RULES[0].pattern);
-        let _ = compile("ansi_escape", GENERIC_RULES[0].pattern);
+        // compiled regex without panic. Cache is keyed by
+        // (name, pattern), so same-name/different-pattern entries
+        // do not collide.
+        let a = try_compile("ansi_escape", GENERIC_RULES[0].pattern).unwrap();
+        let b = try_compile("ansi_escape", GENERIC_RULES[0].pattern).unwrap();
+        assert_eq!(a.as_str(), b.as_str());
     }
 
     #[test]
@@ -511,5 +553,72 @@ error[E0425]: cannot find value `foo` in this scope
         // Sanity check that the test-only helper works.
         let re = compile_for_test(r"\d+");
         assert!(re.is_match("123").unwrap());
+    }
+
+    #[test]
+    fn invalid_pattern_returns_error_not_panic() {
+        let rule = Rule {
+            name: "bad",
+            pattern: "([unclosed",
+            replacement: "x",
+        };
+        let err = rule.try_apply("input").unwrap_err();
+        assert!(err.contains("invalid rule bad"), "got: {err}");
+        // The infallible path skips the rule instead of panicking.
+        assert_eq!(rule.apply("input"), "input");
+    }
+
+    #[test]
+    fn db_host_port_does_not_share_fingerprint_with_line_col() {
+        let host = gen("connect to example.com:5432 failed");
+        let line = gen("error at src/main.rs:10:5");
+        assert!(host.text.contains("port=<port>"), "got: {}", host.text);
+        assert!(
+            line.text.contains("src/main.rs:<line>:<col>"),
+            "got: {}",
+            line.text
+        );
+        assert_ne!(host.text, line.text);
+    }
+
+    #[test]
+    fn bare_count_is_not_a_duration() {
+        let bare = gen("retry 5 s later");
+        assert!(!bare.text.contains("<duration>"), "got: {}", bare.text);
+        let count = gen("5 tests failed");
+        assert!(count.text.contains('5'), "got: {}", count.text);
+        assert!(!count.text.contains("<duration>"));
+        let real_compact = gen("after 30s the job died");
+        assert!(
+            real_compact.text.contains("<duration>"),
+            "got: {}",
+            real_compact.text
+        );
+        let real_long = gen("elapsed 30 seconds total");
+        assert!(
+            real_long.text.contains("<duration>"),
+            "got: {}",
+            real_long.text
+        );
+    }
+
+    #[test]
+    fn quoted_tmp_path_collapses() {
+        let quoted = gen("open (\"/tmp/foo-bar\") now");
+        let plain = gen("open /tmp/foo-bar now");
+        // Both collapse the tmp portion; surrounding syntax (parens,
+        // quotes) is preserved, so assert placeholder presence rather
+        // than byte identity.
+        assert!(quoted.text.contains("<tmp>"), "got: {}", quoted.text);
+        assert!(plain.text.contains("<tmp>"), "got: {}", plain.text);
+        assert!(!quoted.text.contains("/tmp/foo-bar"));
+        assert!(!plain.text.contains("/tmp/foo-bar"));
+    }
+
+    #[test]
+    fn python_traceback_indentation_is_preserved() {
+        let a = "Traceback (most recent call last):\n  File \"app.py\", line 1\n    foo()\nValueError: bad";
+        let b = "Traceback (most recent call last):\n  File \"app.py\", line 1\n        foo()\nValueError: bad";
+        assert_ne!(gen(a).text, gen(b).text);
     }
 }

@@ -141,14 +141,14 @@ mod tests {
     #[test]
     fn generate_emits_pair_only_when_total_above_threshold() {
         // Bug fingerprint identifies `DbPool` and references `db.md`.
-        // The matching alert has the same `DbPool` symbol and the
-        // same `db.md` source. Score: message=1.0 * 0.50 = 0.50,
-        // symbol=1.0 * 0.20 = 0.20, file=1.0 * 0.20 = 0.20 → total
-        // = 0.90, well above THRESHOLD. The unrelated alert scores
-        // 0 on every component and is filtered.
+        // The matching alert has overlapping message text, the same
+        // `DbPool` symbol, and the same `db.md` source. Score:
+        // message=1.0 * 0.55 + symbol>0 * 0.25 + file=1.0 * 0.20 →
+        // above THRESHOLD. The unrelated alert scores 0 on every
+        // component and is filtered.
         let bugs = vec![fp(
             1,
-            "DbPool: connection refused to db.md while reading pool",
+            "DbPool connection refused to db.md while reading pool",
         )];
         let alerts = vec![
             alert_with(
@@ -168,8 +168,8 @@ mod tests {
     #[test]
     fn generate_orders_results_by_fingerprint_then_alert() {
         let bugs = vec![
-            fp(2, "DbPool alpha bravo charlie"),
-            fp(1, "DbPool alpha bravo charlie"),
+            fp(2, "DbPool alpha bravo charlie db.md"),
+            fp(1, "DbPool alpha bravo charlie db.md"),
         ];
         let alerts = vec![
             alert_with(

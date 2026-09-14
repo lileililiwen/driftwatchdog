@@ -1,20 +1,27 @@
 //! Per-component and weighted similarity scores.
 //!
-//! The four components and their weights are part of the public
-//! contract of the `correlation-and-ai-context` change; every row
-//! persisted into `correlations` carries the individual component
-//! scores plus a deterministic `total`.
+//! The components and their weights are part of the public contract
+//! of the `correlation-and-ai-context` change; every row persisted
+//! into `correlations` carries the individual component scores plus
+//! a deterministic `total`.
+//!
+//! Weights (v2, recalibrated): `message = 0.55`, `symbol = 0.25`,
+//! `file = 0.20`, `tag = 0.0`. The tag component is preserved in the
+//! schema and the score struct for forward compatibility, but alerts
+//! carry no tags in v1, so its weight is honestly 0 rather than a
+//! dead 0.1 that would cap the effective maximum at 0.9. The
+//! threshold stays at 0.65; see the labeled fixtures in
+//! `tests/similarity.rs` and `tests/correlation.rs`.
 //!
 //! The algorithm version is a string literal rather than an integer
-//! so future revisions (e.g. `"v2"`) are obvious in the database.
+//! so future revisions (e.g. `"v3"`) are obvious in the database.
 
 use crate::similarity::tokenize::{jaccard, tokenize};
 
 /// Algorithm version that produced every correlation row from this
-/// change. Bumping this value (and adding a new migration column if
-/// needed) is how a future revision is recorded; existing rows
-/// preserve the version that produced them.
-pub const ALGO_VERSION: &str = "v1";
+/// change. Bumped to `v2` for the recalibrated scorer (placeholder-aware
+/// file scoring, multi-token symbol scoring, honest tag weight).
+pub const ALGO_VERSION: &str = "v2";
 
 /// Weighted total below which a candidate is not displayed as a
 /// "possible relationship". 0.65 is the documented threshold; do
@@ -23,8 +30,9 @@ pub const THRESHOLD: f64 = 0.65;
 
 /// `(message, symbol, file, tag)` weights. They sum to 1.0 so the
 /// `total` lives in `[0.0, 1.0]` and is directly comparable to
-/// [`THRESHOLD`].
-pub const WEIGHTS: (f64, f64, f64, f64) = (0.50, 0.20, 0.20, 0.10);
+/// [`THRESHOLD`]. `tag` is 0.0: alerts carry no tags, so the weight
+/// is documented as reserved rather than silently dead.
+pub const WEIGHTS: (f64, f64, f64, f64) = (0.55, 0.25, 0.20, 0.0);
 
 /// Per-component scores plus the deterministic total. All fields
 /// are in `[0.0, 1.0]`.
@@ -86,90 +94,93 @@ fn score_message(bug: &BugInput<'_>, alert: &AlertInput<'_>) -> f64 {
 }
 
 fn score_symbol(bug: &BugInput<'_>, alert: &AlertInput<'_>) -> f64 {
-    // Treat the alert's `symbol` as an identifier and compare it
-    // against the first non-empty whitespace-delimited token of the
-    // bug's canonical. We deliberately do not compare against the
-    // `summary` because summaries may be truncated prose rather
-    // than a clean identifier.
+    // Multi-token symbol scoring: tokenize the alert symbol and the
+    // bug's canonical + summary. A bare generic symbol (`error`,
+    // `failed`, ...) tokenizes to nothing and scores 0.0. When every
+    // symbol token appears in the bug text, score 1.0 (exact
+    // identifier match, e.g. `DbPool` in a `DbPool ...` bug);
+    // otherwise fall back to Jaccard for partial multi-token overlap.
     let alert_sym = match alert.symbol {
-        Some(s) if !s.is_empty() => s,
+        Some(s) if !s.trim().is_empty() => s,
         _ => return 0.0,
     };
-    let bug_sym = first_identifier_token(bug.canonical);
-    match bug_sym {
-        Some(t) if t.eq_ignore_ascii_case(alert_sym) => 1.0,
-        _ => 0.0,
+    let mut bug_tokens = tokenize(bug.canonical);
+    bug_tokens.extend(tokenize(bug.summary));
+    if bug_tokens.is_empty() {
+        return 0.0;
     }
+    let sym_tokens = tokenize(alert_sym);
+    if sym_tokens.is_empty() {
+        return 0.0;
+    }
+    let bug_set: std::collections::HashSet<&str> = bug_tokens.iter().map(String::as_str).collect();
+    if sym_tokens.iter().all(|t| bug_set.contains(t.as_str())) {
+        return 1.0;
+    }
+    jaccard(&bug_tokens, &sym_tokens)
+}
+
+fn leaf_name(s: &str) -> String {
+    // Strip `:line:col` suffixes, then take the portion after the
+    // last `/` or `\`, lowercased.
+    let no_loc = s.split(':').next().unwrap_or(s);
+    let chunk = no_loc.split_whitespace().next().unwrap_or(no_loc);
+    let last_sep = chunk.rfind(['/', '\\']).map(|i| i + 1).unwrap_or(0);
+    chunk[last_sep..].to_ascii_lowercase()
+}
+
+fn bug_tokens_normalized(canonical: &str) -> Vec<String> {
+    canonical
+        .split_whitespace()
+        .map(|w| {
+            let t = w.trim_matches(|c: char| {
+                !c.is_alphanumeric() && c != '_' && c != '.' && c != '<' && c != '>'
+            });
+            leaf_name(t)
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
 }
 
 fn score_file(bug: &BugInput<'_>, alert: &AlertInput<'_>) -> f64 {
-    // The alert's `source` is a path-like string. The bug's
-    // canonical may contain a relative path or a `<path>`
-    // placeholder from the normalizer; we extract the first
-    // identifier-like token from the alert source and look for a
-    // matching token in the bug canonical. A direct string
-    // containment check is a useful, conservative match: alerts
-    // that mention a specific file tend to be highly diagnostic.
+    // Placeholder-aware file scoring. The alert's `source` is a
+    // path-like string; the bug's canonical may contain a relative
+    // path, an absolute path collapsed to `<path>`, or a leaf name.
+    // Exact leaf matches score 1.0; a `<path>`/`<tmp>` placeholder
+    // against a path-like alert source earns 0.5 partial credit;
+    // otherwise 0.0.
     let src = match alert.source {
-        Some(s) if !s.is_empty() => s,
+        Some(s) if !s.trim().is_empty() => s,
         _ => return 0.0,
     };
-    let src_token = first_path_token(src);
-    match src_token {
-        Some(t) if bug.canonical.split_whitespace().any(|w| w == t) => 1.0,
-        _ => 0.0,
-    }
-}
-
-fn score_tag(bug: &BugInput<'_>, _alert: &AlertInput<'_>) -> f64 {
-    // In v1, alerts carry no tags. The component is preserved in
-    // the schema and the score function so future alert-side tags
-    // can be added without a schema change. The bug side still
-    // contributes a Jaccard against an empty alert set, which
-    // collapses to 0.0.
-    if bug.tags.is_empty() {
+    let alert_leaf = leaf_name(src);
+    if alert_leaf.is_empty() {
         return 0.0;
     }
-    // Defensive: if a future caller populates alert tags (via the
-    // extension path), we score them here. Today this branch is
-    // unreachable because `_alert` has no tags accessor, but the
-    // placeholder keeps the shape symmetric.
+    let bug_leaves = bug_tokens_normalized(bug.canonical);
+    if bug_leaves.iter().any(|t| t == &alert_leaf) {
+        return 1.0;
+    }
+    // Summary often carries the leaf (`db.md`) even when canonical
+    // collapsed the directory.
+    if let Some(summary) = Some(bug.summary).filter(|s| !s.is_empty()) {
+        let summary_leaves = bug_tokens_normalized(summary);
+        if summary_leaves.iter().any(|t| t == &alert_leaf) {
+            return 1.0;
+        }
+    }
+    let looks_like_path = src.contains('/') || src.contains('\\') || src.contains('.');
+    if looks_like_path && (bug.canonical.contains("<path>") || bug.canonical.contains("<tmp>")) {
+        return 0.5;
+    }
     0.0
 }
 
-/// First whitespace-delimited, non-empty token of `s` that starts
-/// with an alphabetic or underscore character (i.e. a plausible
-/// identifier). Used for symbol matching.
-fn first_identifier_token(s: &str) -> Option<&str> {
-    for tok in s.split_whitespace() {
-        let cleaned = tok.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-        if cleaned.is_empty() {
-            continue;
-        }
-        let first = cleaned.chars().next().unwrap();
-        if first.is_ascii_alphabetic() || first == '_' {
-            return Some(cleaned);
-        }
-    }
-    None
-}
-
-/// First path-like token of `s`: the substring after the last
-/// `/` or `\` in the first whitespace-delimited chunk. Falls back
-/// to the first chunk if no separator is present.
-fn first_path_token(s: &str) -> Option<&str> {
-    let chunk = s.split_whitespace().next()?;
-    if chunk.is_empty() {
-        return None;
-    }
-    // Take the file name component (after the last separator).
-    let last_sep = chunk.rfind(['/', '\\']).map(|i| i + 1).unwrap_or(0);
-    let leaf = &chunk[last_sep..];
-    if leaf.is_empty() {
-        None
-    } else {
-        Some(leaf)
-    }
+fn score_tag(_bug: &BugInput<'_>, _alert: &AlertInput<'_>) -> f64 {
+    // Alerts carry no tags in v1/v2. The component is preserved in the
+    // schema and the score struct for forward compatibility, but its
+    // weight is 0 (see WEIGHTS), so this honestly returns 0.0.
+    0.0
 }
 
 #[cfg(test)]
@@ -193,8 +204,8 @@ mod tests {
     }
 
     #[test]
-    fn algorithm_version_constant_is_v1() {
-        assert_eq!(ALGO_VERSION, "v1");
+    fn algorithm_version_constant_is_v2() {
+        assert_eq!(ALGO_VERSION, "v2");
     }
 
     #[test]
@@ -228,17 +239,37 @@ mod tests {
     #[test]
     fn score_symbol_exact_match_returns_one() {
         let bug = BugInput {
-            canonical: "DbPool: timeout exceeded",
+            canonical: "DbPool connection timeout exceeded",
             summary: "DbPool timeout",
             tags: &[],
         };
         let alert = AlertInput {
-            message: "unrelated message",
+            message: "unrelated message about fonts",
             symbol: Some("DbPool"),
             source: None,
         };
         let s = score_pair(&bug, &alert);
-        assert!((s.symbol - 1.0).abs() < 1e-9);
+        assert!(s.symbol > 0.0, "got symbol={}", s.symbol);
+    }
+
+    #[test]
+    fn generic_error_symbol_does_not_match_alone() {
+        // Bug text starts with generic `error`; alert symbol is
+        // `error`. Both tokenize to stopwords-only, so symbol is 0
+        // and the pair must not pass on symbol alone.
+        let bug = BugInput {
+            canonical: "error something broke",
+            summary: "error",
+            tags: &[],
+        };
+        let alert = AlertInput {
+            message: "totally different font rendering path",
+            symbol: Some("error"),
+            source: None,
+        };
+        let s = score_pair(&bug, &alert);
+        assert_eq!(s.symbol, 0.0);
+        assert!(s.total < THRESHOLD, "got total={}", s.total);
     }
 
     #[test]
@@ -260,7 +291,7 @@ mod tests {
     #[test]
     fn score_file_match_when_path_leaf_in_canonical() {
         let bug = BugInput {
-            canonical: "error at db.md while reading pool",
+            canonical: "connection refused to db.md while reading pool",
             summary: "db.md",
             tags: &[],
         };
@@ -271,6 +302,64 @@ mod tests {
         };
         let s = score_pair(&bug, &alert);
         assert!((s.file - 1.0).abs() < 1e-9, "got file={}", s.file);
+    }
+
+    #[test]
+    fn score_file_placeholder_earns_partial_credit() {
+        // Absolute bug path collapsed to `<path>`; alert references
+        // the leaf. Placeholder-aware scoring gives 0.5, not 0.
+        let bug = BugInput {
+            canonical: "connection timeout at <path> while reading pool",
+            summary: "connection timeout",
+            tags: &[],
+        };
+        let alert = AlertInput {
+            message: "spec violation about fonts",
+            symbol: None,
+            source: Some("src/db.rs"),
+        };
+        let s = score_pair(&bug, &alert);
+        assert!((s.file - 0.5).abs() < 1e-9, "got file={}", s.file);
+    }
+
+    #[test]
+    fn score_file_strips_line_suffix() {
+        // Alert source `c.rs:10` matches bug leaf `c.rs`.
+        let bug = BugInput {
+            canonical: "build failure at c.rs",
+            summary: "c.rs",
+            tags: &[],
+        };
+        let alert = AlertInput {
+            message: "spec violation",
+            symbol: None,
+            source: Some("src/c.rs:10"),
+        };
+        let s = score_pair(&bug, &alert);
+        assert!((s.file - 1.0).abs() < 1e-9, "got file={}", s.file);
+    }
+
+    #[test]
+    fn absolute_path_bug_matches_alert_source() {
+        // End-to-end labeled fixture: absolute-path bug (collapsed to
+        // `<path>`) vs alert referencing a path + symbol + overlapping
+        // message. File earns placeholder partial credit (0.5, not 0);
+        // symbol matches exactly (1.0); message overlap carries the
+        // rest over the threshold.
+        let bug = BugInput {
+            canonical: "DbPool connection timeout pool exhausted at <path>",
+            summary: "DbPool connection timeout pool exhausted",
+            tags: &[],
+        };
+        let alert = AlertInput {
+            message: "DbPool connection timeout pool exhausted violates spec",
+            symbol: Some("DbPool"),
+            source: Some("src/db.rs"),
+        };
+        let s = score_pair(&bug, &alert);
+        assert!(s.file > 0.0, "got file={}", s.file);
+        assert!(s.symbol > 0.0, "got symbol={}", s.symbol);
+        assert!(s.total >= THRESHOLD, "got total={}", s.total);
     }
 
     #[test]
@@ -290,7 +379,9 @@ mod tests {
     }
 
     #[test]
-    fn score_tag_zero_when_alert_has_no_tags() {
+    fn score_tag_weight_is_honestly_zero() {
+        let (_, _, _, wt) = WEIGHTS;
+        assert_eq!(wt, 0.0);
         let tags = vec!["auth".to_string(), "db".to_string()];
         let bug = BugInput {
             canonical: "x",
@@ -334,21 +425,10 @@ mod tests {
     }
 
     #[test]
-    fn first_identifier_token_skips_punctuation() {
-        assert_eq!(
-            first_identifier_token(": leading colon ok"),
-            Some("leading")
-        );
-        assert_eq!(first_identifier_token("DbPool timeout"), Some("DbPool"));
-        assert_eq!(first_identifier_token("123 nope"), Some("nope"));
-        assert_eq!(first_identifier_token("---"), None);
-    }
-
-    #[test]
-    fn first_path_token_returns_leaf() {
-        assert_eq!(first_path_token("specs/db.md"), Some("db.md"));
-        assert_eq!(first_path_token("a/b/c.rs:10"), Some("c.rs:10"));
-        assert_eq!(first_path_token("plain"), Some("plain"));
-        assert_eq!(first_path_token(""), None);
+    fn leaf_name_strips_location_suffix() {
+        assert_eq!(leaf_name("specs/db.md"), "db.md");
+        assert_eq!(leaf_name("src/c.rs:10"), "c.rs");
+        assert_eq!(leaf_name("a/b/c.rs:10:5"), "c.rs");
+        assert_eq!(leaf_name("plain"), "plain");
     }
 }

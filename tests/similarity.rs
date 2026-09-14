@@ -79,15 +79,15 @@ fn score_pair_uses_documented_weights_and_threshold() {
         source: Some("specs/db.md"),
     };
     let s = score_pair(&bug, &alert);
-    // All four components reach 1.0; the total is 0.9 (= 0.5 +
-    // 0.2 + 0.2; tag stays at 0). Floating-point: 0.9 ± ε.
-    assert!((s.total - 0.9).abs() < 1e-9, "got {}", s.total);
+    // Message, symbol, and file all reach 1.0; tag is honestly 0.0
+    // with weight 0. Total is 1.0 (= 0.55 + 0.25 + 0.20).
+    assert!((s.total - 1.0).abs() < 1e-9, "got {}", s.total);
     assert!(s.total >= THRESHOLD);
 }
 
 #[test]
 fn score_pair_algorithm_version_constant_is_stable() {
-    assert_eq!(ALGO_VERSION, "v1");
+    assert_eq!(ALGO_VERSION, "v2");
 }
 
 #[test]

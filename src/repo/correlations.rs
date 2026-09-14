@@ -311,7 +311,6 @@ mod tests {
             )
             .unwrap();
         let all = Correlations::new(&db).list_all().unwrap();
-        assert_eq!(all[0].algorithm_version, "v1");
         assert_eq!(all[0].algorithm_version, ALGO_VERSION);
     }
 

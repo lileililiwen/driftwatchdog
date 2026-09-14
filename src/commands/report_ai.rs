@@ -335,7 +335,7 @@ mod tests {
         let md = render_ai(&args(), &proj, &mut db).unwrap();
         assert!(md.contains("| heuristic |"));
         assert!(md.contains("0.900"));
-        assert!(md.contains("v1"));
+        assert!(md.contains(crate::similarity::score::ALGO_VERSION));
     }
 
     #[test]
