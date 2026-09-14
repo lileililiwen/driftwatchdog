@@ -251,11 +251,13 @@ impl<'a> Bugs<'a> {
     }
 
     /// Insert a new fingerprint or update the existing one for `hash`.
-    /// The first_seen_at is preserved when the row already exists;
-    /// last_seen_at and occurrence_count are updated. `summary` is set
-    /// on insert and preserved on update (first canonical text wins).
-    /// Returns the resulting fingerprint row. Takes `&mut self` because
-    /// the underlying SQLite transaction requires a mutable connection.
+    /// `first_seen_at` tracks the earliest `seen_at` (`MIN`), so
+    /// backdated occurrences move it earlier; `last_seen_at` tracks
+    /// the latest (`MAX`); `occurrence_count` always increments.
+    /// `summary` is set on insert and preserved on update (first
+    /// canonical text wins). Returns the resulting fingerprint row.
+    /// Takes `&mut self` because the underlying SQLite transaction
+    /// requires a mutable connection.
     pub fn upsert_for_occurrence(
         &mut self,
         canonical: &str,
@@ -278,7 +280,8 @@ impl<'a> Bugs<'a> {
         if inserted == 0 {
             tx.execute(
                 "UPDATE fingerprints
-                 SET last_seen_at = MAX(last_seen_at, ?2),
+                 SET first_seen_at = MIN(first_seen_at, ?2),
+                     last_seen_at = MAX(last_seen_at, ?2),
                      occurrence_count = occurrence_count + 1,
                      summary = COALESCE(summary, ?3)
                  WHERE hash = ?1",
@@ -390,8 +393,9 @@ impl<'a> Bugs<'a> {
     /// Return the top recurring failures, ordered by occurrence count then
     /// recency. `cutoff` is an RFC3339 timestamp; rows with `last_seen_at`
     /// older than the cutoff are excluded. `tag_like` is an optional `LIKE`
-    /// pattern that filters to fingerprints whose occurrences include a run
-    /// whose tags column matches (e.g. `'%"auth"%'`).
+    /// pattern (see [`crate::repo::tag_like_pattern`]) that filters to
+    /// fingerprints whose occurrences include a run carrying exactly that
+    /// tag. Wildcards are escaped, so `auth` never matches `oauth`.
     pub fn top(
         &self,
         limit: usize,
@@ -405,7 +409,7 @@ impl<'a> Bugs<'a> {
             Some(pattern) => (
                 "f.last_seen_at >= ?1 AND EXISTS (
                     SELECT 1 FROM occurrences o JOIN runs r ON o.run_id = r.id
-                    WHERE o.fingerprint_id = f.id AND r.tags LIKE ?2
+                    WHERE o.fingerprint_id = f.id AND r.tags LIKE ?2 ESCAPE '\\'
                 )",
                 vec![Box::new(cutoff.to_string()), Box::new(pattern.to_string())],
             ),
@@ -578,18 +582,20 @@ mod tests {
     }
 
     #[test]
-    fn upsert_preserves_first_seen_on_backdated_run() {
+    fn upsert_moves_first_seen_earlier_on_backdated_run() {
         let mut db = db();
         let fp1 = Bugs::new(&mut db)
             .upsert_for_occurrence("err A", "summary A", "2026-05-01T00:00:00Z")
             .unwrap();
+        assert_eq!(fp1.occurrence_count, 1);
         let fp2 = Bugs::new(&mut db)
             .upsert_for_occurrence("err A", "summary A", "2026-01-01T00:00:00Z")
             .unwrap();
-        // The newer first_seen wins; the older upsert should not
-        // overwrite it.
-        assert_eq!(fp1.first_seen_at, fp2.first_seen_at);
-        assert_eq!(fp2.first_seen_at, "2026-05-01T00:00:00Z");
+        // Backdated occurrences increment the count, move first_seen
+        // earlier, and leave last_seen at the max.
+        assert_eq!(fp2.id, fp1.id);
+        assert_eq!(fp2.occurrence_count, 2);
+        assert_eq!(fp2.first_seen_at, "2026-01-01T00:00:00Z");
         assert_eq!(fp2.last_seen_at, "2026-05-01T00:00:00Z");
     }
 

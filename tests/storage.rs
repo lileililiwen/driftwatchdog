@@ -37,6 +37,40 @@ fn schema_contains_all_foundation_tables() {
 }
 
 #[test]
+fn migration_rerun_after_partial_0002_is_safe() {
+    // Crash mid-migration: baseline + one column of 0002, no version
+    // row. A fresh open must complete without `duplicate column`.
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("state.db");
+    let conn = storage::open(&path).unwrap();
+    conn.execute_batch(driftwatchdog::storage::schema::MIGRATION_0001_BASELINE)
+        .unwrap();
+    conn.execute_batch("ALTER TABLE check_snapshots ADD COLUMN git_commit TEXT;")
+        .unwrap();
+    drop(conn);
+    let mut conn = storage::open(&path).unwrap();
+    let v = storage::migrations::apply(&mut conn).unwrap();
+    assert_eq!(v, 4);
+}
+
+#[test]
+fn migration_rerun_after_partial_0003_is_safe() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("state.db");
+    let conn = storage::open(&path).unwrap();
+    conn.execute_batch(driftwatchdog::storage::schema::MIGRATION_0001_BASELINE)
+        .unwrap();
+    conn.execute_batch(driftwatchdog::storage::schema::MIGRATION_0002_SNAPSHOT_GIT)
+        .unwrap();
+    conn.execute_batch("ALTER TABLE correlations ADD COLUMN score_message REAL;")
+        .unwrap();
+    drop(conn);
+    let mut conn = storage::open(&path).unwrap();
+    let v = storage::migrations::apply(&mut conn).unwrap();
+    assert_eq!(v, 4);
+}
+
+#[test]
 fn migration_version_is_three_after_init() {
     let tmp = tempdir().unwrap();
     let path = tmp.path().join("state.db");

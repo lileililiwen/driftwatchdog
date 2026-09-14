@@ -29,7 +29,7 @@ use crate::repo::{alerts::Alerts, bugs::Bugs, correlations::Correlations, links:
 pub fn render_ai(args: &ReportArgs, proj: &ProjectRoot, db: &mut Db) -> Result<String, Error> {
     let now = chrono::Utc::now().to_rfc3339();
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days)).to_rfc3339();
-    let tag_like = args.tag.as_deref().map(|t| format!("%\"{}\"%", t));
+    let tag_like = args.tag.as_deref().map(crate::repo::tag_like_pattern);
 
     // Reads happen sequentially because each repo struct holds a
     // borrow on `db`. The mutable borrow is released between calls

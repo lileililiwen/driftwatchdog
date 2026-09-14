@@ -27,7 +27,7 @@ pub fn report(args: ReportArgs, cwd: &Path) -> Result<i32, Error> {
     let bugs = Bugs::new(&mut db);
 
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days)).to_rfc3339();
-    let tag_like = args.tag.as_deref().map(|t| format!("%\"{}\"%", t));
+    let tag_like = args.tag.as_deref().map(crate::repo::tag_like_pattern);
     let top = bugs.top(args.limit, &cutoff, tag_like.as_deref())?;
 
     println!("# Driftwatch report");
@@ -86,38 +86,71 @@ pub fn report(args: ReportArgs, cwd: &Path) -> Result<i32, Error> {
     println!();
     println!("| Bug | Today | -1d | -2d | -3d | -4d | -5d | -6d |");
     println!("|-----|-------|-----|-----|-----|-----|-----|-----|");
+    // One aggregate query for all trend cells (no N+1), with DB
+    // errors propagated instead of swallowed.
+    let trends = trend_counts(&db, 7)?;
     for t in &top {
-        let cells = trend_cells(&db, &t.hash, 7);
+        let cells = trend_cells_for(&trends, &t.hash, 7);
         println!("| `{}` | {} |", short_hash(&t.hash), cells.join(" | "));
     }
     Ok(0)
 }
 
-fn trend_cells(db: &Db, hash: &str, days: usize) -> Vec<String> {
+/// Per-(hash, UTC-day) occurrence counts for the last `days` days in
+/// a single aggregate query. `seen_at` values carrying non-UTC
+/// offsets are normalized by SQLite's `date()` (which applies the
+/// offset) so runs land on the correct UTC day. Errors propagate to
+/// the caller.
+fn trend_counts(
+    db: &Db,
+    days: usize,
+) -> Result<std::collections::HashMap<(String, String), i64>, Error> {
     use rusqlite::params;
     let today = chrono::Utc::now().date_naive();
-    let mut out = Vec::with_capacity(days);
-    for d in 0..days {
-        let day = today - chrono::Duration::days(d as i64);
-        let start = day.and_hms_opt(0, 0, 0).unwrap().and_utc().to_rfc3339();
-        let end = (day + chrono::Duration::days(1))
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .to_rfc3339();
-        let n: i64 = db
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM occurrences o
-                 JOIN fingerprints f ON o.fingerprint_id = f.id
-                 WHERE f.hash = ?1 AND o.seen_at >= ?2 AND o.seen_at < ?3",
-                params![hash, start, end],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        out.push(n.to_string());
+    let earliest = today - chrono::Duration::days(days as i64 - 1);
+    let start = earliest
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .to_rfc3339();
+    let mut stmt = db.conn().prepare(
+        "SELECT f.hash, date(o.seen_at) AS day, COUNT(*)
+         FROM occurrences o
+         JOIN fingerprints f ON o.fingerprint_id = f.id
+         WHERE o.seen_at >= ?1
+         GROUP BY f.hash, day",
+    )?;
+    let rows = stmt.query_map(params![start], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    })?;
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        let (hash, day, n) = row?;
+        map.insert((hash, day), n);
     }
-    out
+    Ok(map)
+}
+
+fn trend_cells_for(
+    trends: &std::collections::HashMap<(String, String), i64>,
+    hash: &str,
+    days: usize,
+) -> Vec<String> {
+    let today = chrono::Utc::now().date_naive();
+    (0..days)
+        .map(|d| {
+            let day = today - chrono::Duration::days(d as i64);
+            trends
+                .get(&(hash.to_string(), day.format("%Y-%m-%d").to_string()))
+                .copied()
+                .unwrap_or(0)
+                .to_string()
+        })
+        .collect()
 }
 
 fn short_hash(h: &str) -> String {

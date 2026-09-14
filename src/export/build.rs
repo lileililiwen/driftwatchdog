@@ -23,10 +23,30 @@ use super::dto::{
     OccurrenceExport, ProjectExport, RunExport, SnapshotExport, SCHEMA_VERSION,
 };
 
+/// Maximum run rows included in an export. The cap keeps exports
+/// bounded; when hit, the exporter warns on stderr (see
+/// `commands/export`) and documents the cap.
+pub const EXPORT_RUN_CAP: usize = 100_000;
+
 /// Build an `ExportDocument` from the open database at `db` rooted at
 /// `proj`. `exported_at` is the timestamp embedded in the document.
 pub fn build(db: &mut Db, proj: &ProjectRoot) -> Result<ExportDocument, Error> {
-    let runs = Runs::new(db).all(100_000)?;
+    let (doc, truncated) = build_with_cap(db, proj, EXPORT_RUN_CAP)?;
+    let _ = truncated;
+    Ok(doc)
+}
+
+/// Build with an explicit run-row cap, reporting whether the cap
+/// truncated the run list. Used by `build` (production cap) and by
+/// tests with a small cap.
+pub fn build_with_cap(
+    db: &mut Db,
+    proj: &ProjectRoot,
+    run_cap: usize,
+) -> Result<(ExportDocument, bool), Error> {
+    let runs = Runs::new(db).all(run_cap + 1)?;
+    let truncated = runs.len() > run_cap;
+    let runs: Vec<_> = runs.into_iter().take(run_cap).collect();
     let mut fingerprints = Bugs::new(db).all()?;
     // Sort fingerprints by hash for stable, content-ordered output.
     fingerprints.sort_by(|a, b| a.hash.cmp(&b.hash));
@@ -38,7 +58,7 @@ pub fn build(db: &mut Db, proj: &ProjectRoot) -> Result<ExportDocument, Error> {
     let manual_links = Links::new(db).list_all()?;
     let local_schema_version = schema_version(db.conn())?;
 
-    Ok(ExportDocument {
+    let doc = ExportDocument {
         schema_version: SCHEMA_VERSION,
         exported_at: chrono::Utc::now().to_rfc3339(),
         project: ProjectExport {
@@ -54,7 +74,8 @@ pub fn build(db: &mut Db, proj: &ProjectRoot) -> Result<ExportDocument, Error> {
         alerts: alerts.into_iter().map(alert_to_dto).collect(),
         correlations: correlations.into_iter().map(corr_to_dto).collect(),
         manual_links: manual_links.into_iter().map(link_to_dto).collect(),
-    })
+    };
+    Ok((doc, truncated))
 }
 
 fn load_occurrences(conn: &Connection) -> Result<Vec<OccRow>, Error> {
@@ -188,5 +209,33 @@ fn link_to_dto(l: crate::repo::links::ManualLink) -> ManualLinkExport {
         alert_id: l.alert_id,
         note: l.note,
         created_at: l.created_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_with_cap_reports_truncation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = ProjectRoot::at(tmp.path());
+        let mut db = Db::open_in_memory().unwrap();
+        for i in 0..3 {
+            Runs::new(&db)
+                .reserve(
+                    &format!("2026-01-0{}T00:00:00Z", i + 1),
+                    "prog",
+                    "[]",
+                    "/tmp",
+                )
+                .unwrap();
+        }
+        let (doc, truncated) = build_with_cap(&mut db, &proj, 2).unwrap();
+        assert_eq!(doc.runs.len(), 2);
+        assert!(truncated);
+        let (doc, truncated) = build_with_cap(&mut db, &proj, 10).unwrap();
+        assert_eq!(doc.runs.len(), 3);
+        assert!(!truncated);
     }
 }

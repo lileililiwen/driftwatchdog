@@ -14,7 +14,7 @@ pub fn top(args: TopArgs, cwd: &Path) -> Result<i32, Error> {
     let proj = ProjectRoot::discover(cwd)?;
     let mut db = Db::open(&proj.db_path)?;
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days)).to_rfc3339();
-    let tag_like = args.tag.as_deref().map(|t| format!("%\"{}\"%", t));
+    let tag_like = args.tag.as_deref().map(crate::repo::tag_like_pattern);
 
     let rows = Bugs::new(&mut db).top(args.limit, &cutoff, tag_like.as_deref())?;
 

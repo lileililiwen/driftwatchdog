@@ -18,6 +18,29 @@ use rusqlite::Connection;
 use crate::error::Error;
 use crate::storage;
 
+/// Escape `LIKE` wildcards (`\`, `%`, `_`) so tag filters match
+/// literally. Used with `ESCAPE '\'`.
+///
+/// Tags are stored as a JSON array (e.g. `["auth","db"]`); the
+/// pattern matches the quoted JSON string (`%"auth"%`) so `auth`
+/// never matches `oauth`, and embedded `%_` match literally.
+pub fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch == '\\' || ch == '%' || ch == '_' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// `LIKE` pattern matching exactly one JSON-encoded tag value.
+/// Pair with `ESCAPE '\'` in SQL.
+pub fn tag_like_pattern(tag: &str) -> String {
+    format!("%\"{}\"%", escape_like(tag))
+}
+
 /// Thin wrapper around `rusqlite::Connection` passed to each repository.
 /// Repositories take `&Db` (or `&mut Db` when they need a transaction) and
 /// operate on the shared connection.
@@ -42,6 +65,20 @@ impl Db {
         Ok(me)
     }
 
+    /// Open the database at `path` read-only without running
+    /// migrations. Used by `driftwatch doctor` so diagnostics never
+    /// mutate the production database. Fails when the file is
+    /// missing or not a valid database.
+    pub fn open_read_only(path: &Path) -> Result<Self, Error> {
+        use rusqlite::OpenFlags;
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        Ok(Self { conn })
+    }
+
     /// Borrow the underlying connection. Used by repository implementations
     /// and exposed publicly for diagnostic queries (e.g. `PRAGMA` checks in
     /// tests and the future `doctor` command). Prefer the typed repository
@@ -60,6 +97,18 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_like_escapes_wildcards() {
+        assert_eq!(escape_like("auth"), "auth");
+        assert_eq!(escape_like("a%b_c\\d"), "a\\%b\\_c\\\\d");
+    }
+
+    #[test]
+    fn tag_pattern_quotes_value() {
+        assert_eq!(tag_like_pattern("auth"), "%\"auth\"%");
+        assert_eq!(tag_like_pattern("a%b"), "%\"a\\%b\"%");
+    }
 
     #[test]
     fn open_in_memory_creates_schema() {

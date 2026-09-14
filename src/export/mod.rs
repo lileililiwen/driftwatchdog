@@ -15,7 +15,7 @@ use crate::error::Error;
 use crate::project::ProjectRoot;
 use crate::repo::Db;
 
-pub use build::build;
+pub use build::{build, build_with_cap, EXPORT_RUN_CAP};
 pub use dto::{
     AlertExport, CorrelationExport, ExportDocument, FingerprintExport, ManualLinkExport,
     OccurrenceExport, ProjectExport, RecordKind, RunExport, SnapshotExport, SCHEMA_VERSION,
@@ -41,8 +41,13 @@ impl Format {
 }
 
 /// Build the export document and render it in the requested format.
+/// When the run list hits [`EXPORT_RUN_CAP`], a `capped at N` warning
+/// is printed to stderr so truncation is never silent.
 pub fn format(db: &mut Db, proj: &ProjectRoot, fmt: Format) -> Result<String, Error> {
-    let doc = build(db, proj)?;
+    let (doc, truncated) = build_with_cap(db, proj, EXPORT_RUN_CAP)?;
+    if truncated {
+        eprintln!("driftwatch: export capped at {EXPORT_RUN_CAP} runs; older runs omitted");
+    }
     match fmt {
         Format::Json => json::to_string(&doc),
         Format::Jsonl => jsonl::to_string(&doc),

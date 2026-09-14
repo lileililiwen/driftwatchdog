@@ -25,6 +25,10 @@ fn configure(conn: &Connection) -> Result<(), Error> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    // Serialize concurrent first-runs: wait on locked pages instead
+    // of failing immediately so two processes opening a fresh DB at
+    // once both complete migration cleanly.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(())
 }
 

@@ -1,9 +1,12 @@
 //! Versioned SQL migrations.
 //!
 //! Each migration has a monotonic integer version. Applied versions are
-//! recorded in the `schema_version` table. Running `apply` is idempotent: it
-//! only executes migrations whose version is greater than the current
-//! `MAX(version)`.
+//! recorded in the `schema_version` table. Running `apply` is idempotent:
+//! it only executes migrations whose version is greater than the current
+//! `MAX(version)`, and every migration's DDL is rerunnable (column and
+//! index creation guard on `PRAGMA table_info` / `sqlite_master`) so a
+//! crash mid-migration or a concurrent first-run completes cleanly on
+//! the next open instead of failing with `duplicate column`.
 
 use rusqlite::Connection;
 
@@ -20,10 +23,18 @@ const MIGRATIONS: &[(i64, &str)] = &[
 ];
 
 /// Apply all unapplied migrations and return the current schema version.
+/// The tracking-table creation, version read, DDL, and version write
+/// all happen inside a single `IMMEDIATE` transaction so two processes
+/// opening a fresh DB concurrently serialize: exactly one migration
+/// set applies and neither process errors.
 pub fn apply(conn: &mut Connection) -> Result<i64, Error> {
-    ensure_tracking_table(conn)?;
-
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_version (
+             version INTEGER PRIMARY KEY,
+             applied_at TEXT NOT NULL
+         )",
+    )?;
     let current: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_version",
@@ -37,12 +48,9 @@ pub fn apply(conn: &mut Connection) -> Result<i64, Error> {
         if *version <= current {
             continue;
         }
-        tx.execute_batch(sql).map_err(|e| Error::Migration {
-            version: *version,
-            message: e.to_string(),
-        })?;
+        apply_one(&tx, *version, sql)?;
         tx.execute(
-            "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, ?2)",
             rusqlite::params![*version, &now],
         )?;
     }
@@ -51,14 +59,70 @@ pub fn apply(conn: &mut Connection) -> Result<i64, Error> {
     current_max(conn)
 }
 
-fn ensure_tracking_table(conn: &mut Connection) -> Result<(), Error> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_version (
-             version INTEGER PRIMARY KEY,
-             applied_at TEXT NOT NULL
-         )",
-    )?;
+/// Execute one migration's batch, skipping DDL that is already in
+/// effect so reruns after a crash are safe. `CREATE TABLE` / `CREATE
+/// INDEX` statements already carry `IF NOT EXISTS`; `ALTER TABLE ADD
+/// COLUMN` does not exist in that form in SQLite, so those lines are
+/// guarded via `PRAGMA table_info`.
+fn apply_one(tx: &rusqlite::Transaction<'_>, version: i64, sql: &str) -> Result<(), Error> {
+    for stmt in sql.split(';') {
+        let stmt = stmt.trim();
+        if stmt.is_empty() {
+            continue;
+        }
+        if let Some((table, column)) = parse_add_column(stmt) {
+            if column_exists(tx, &table, &column)? {
+                continue;
+            }
+        }
+        tx.execute_batch(stmt).map_err(|e| Error::Migration {
+            version,
+            message: e.to_string(),
+        })?;
+    }
     Ok(())
+}
+
+/// Parse `ALTER TABLE <table> ADD COLUMN <column> ...` (case-insensitive),
+/// returning `(table, column)` when the statement has that shape.
+fn parse_add_column(stmt: &str) -> Option<(String, String)> {
+    let upper = stmt.to_ascii_uppercase();
+    let alter = upper.find("ALTER TABLE")?;
+    let add = upper.find("ADD COLUMN")?;
+    if add < alter {
+        return None;
+    }
+    let table_part = stmt[alter + "ALTER TABLE".len()..add].trim();
+    let table = table_part
+        .trim_matches('"')
+        .split_whitespace()
+        .next()?
+        .to_string();
+    let after = stmt[add + "ADD COLUMN".len()..].trim();
+    let column = after
+        .trim_matches('"')
+        .split_whitespace()
+        .next()?
+        .trim_matches('"')
+        .to_string();
+    if table.is_empty() || column.is_empty() {
+        return None;
+    }
+    Some((table, column))
+}
+
+fn column_exists(tx: &rusqlite::Transaction<'_>, table: &str, column: &str) -> Result<bool, Error> {
+    // Identifiers come from our own migration constants, so inline
+    // quoting with doubled `"` is sufficient.
+    let table_q = table.replace('"', "\"\"");
+    let mut stmt = tx.prepare(&format!("PRAGMA table_info(\"{table_q}\")"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn current_max(conn: &Connection) -> Result<i64, Error> {
@@ -112,5 +176,80 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().to_lowercase().contains("check"));
+    }
+
+    #[test]
+    fn rerun_after_partial_migration_0002_is_safe() {
+        // Simulate a crash mid-migration: baseline applied, one of
+        // migration 2's columns present, version row missing.
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("state.db");
+        let mut conn = crate::storage::open(&p).unwrap();
+        conn.execute_batch(schema::MIGRATION_0001_BASELINE).unwrap();
+        conn.execute_batch("ALTER TABLE check_snapshots ADD COLUMN git_commit TEXT;")
+            .unwrap();
+        // Full apply must complete without `duplicate column` errors.
+        let v = apply(&mut conn).unwrap();
+        assert_eq!(v, 4);
+        // Both git columns present exactly once.
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('check_snapshots') WHERE name IN ('git_commit','git_branch')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn rerun_after_partial_migration_0003_is_safe() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("state.db");
+        let mut conn = crate::storage::open(&p).unwrap();
+        conn.execute_batch(schema::MIGRATION_0001_BASELINE).unwrap();
+        conn.execute_batch(schema::MIGRATION_0002_SNAPSHOT_GIT)
+            .unwrap();
+        conn.execute_batch("ALTER TABLE correlations ADD COLUMN score_message REAL;")
+            .unwrap();
+        let v = apply(&mut conn).unwrap();
+        assert_eq!(v, 4);
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('correlations') WHERE name LIKE 'score_%' OR name = 'algorithm_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn concurrent_first_run_applies_migrations_once() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("state.db");
+        let barrier = Arc::new(Barrier::new(4));
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let path = p.clone();
+            let b = barrier.clone();
+            handles.push(thread::spawn(move || {
+                b.wait();
+                let mut conn = crate::storage::open(&path).unwrap();
+                apply(&mut conn)
+            }));
+        }
+        let mut versions = Vec::new();
+        for h in handles {
+            versions.push(h.join().expect("thread panicked").expect("apply failed"));
+        }
+        assert!(versions.iter().all(|&v| v == 4), "got {versions:?}");
+        let conn = crate::storage::open(&p).unwrap();
+        let recorded: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recorded, 4);
     }
 }

@@ -198,11 +198,13 @@ impl<'a> Runs<'a> {
         })
     }
 
-    /// List runs, newest first, with optional filters.
+    /// List runs, newest first, with optional filters. Tag filters
+    /// match whole JSON-encoded tag values (`auth` never matches
+    /// `oauth`); `LIKE` wildcards in the tag are escaped.
     pub fn list(&self, filter: &ListFilter) -> Result<Vec<RunRecord>, Error> {
-        // Build the WHERE clause incrementally. Tag matching is a coarse
-        // substring on the JSON-serialized tags column — fingerprinting is not
-        // online yet, so we cannot rely on a normalized table.
+        // Build the WHERE clause incrementally. Tags live in a JSON
+        // array column; the pattern matches the quoted value with
+        // wildcards escaped, plus `ESCAPE '\'`.
         let mut sql = String::from(
             "SELECT id, started_at, finished_at, duration_ms, program, argv, cwd, exit_code, status,
                     tags, stdout_excerpt, stderr_excerpt, stdout_truncated, stderr_truncated,
@@ -214,7 +216,7 @@ impl<'a> Runs<'a> {
             predicates.push("status IN ('failed', 'start_failed', 'signalled', 'timeout')");
         }
         if filter.tag.is_some() {
-            predicates.push("tags LIKE ?1");
+            predicates.push("tags LIKE ?1 ESCAPE '\\'");
         }
         if !predicates.is_empty() {
             sql.push_str(" WHERE ");
@@ -225,7 +227,7 @@ impl<'a> Runs<'a> {
 
         let mut stmt = self.db.conn().prepare(&sql)?;
         let rows: Vec<RunRecord> = if let Some(tag) = &filter.tag {
-            let pattern = format!("%\"{}\"%", tag);
+            let pattern = crate::repo::tag_like_pattern(tag);
             stmt.query_map(params![pattern], map_run)?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
@@ -465,5 +467,84 @@ mod tests {
             })
             .unwrap();
         assert_eq!(rows.len(), 3);
+    }
+
+    fn complete_with_tags(db: &Db, id: i64, tags: &[String]) {
+        Runs::new(db)
+            .insert_full(
+                id,
+                &RunCompletion {
+                    finished_at: "2026-01-01T00:00:01Z",
+                    duration_ms: 1,
+                    exit_code: Some(0),
+                    status: RunStatus::Success,
+                    tags,
+                    stdout_excerpt: None,
+                    stderr_excerpt: None,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    git_commit: None,
+                    git_branch: None,
+                    git_dirty: None,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn list_filter_tag_does_not_match_oauth_for_auth() {
+        let db = Db::open_in_memory().unwrap();
+        let id_oauth = reserve_running(&db, "2026-01-01T00:00:00Z", "a", "[]");
+        complete_with_tags(&db, id_oauth, &["oauth".to_string()]);
+        let rows = Runs::new(&db)
+            .list(&ListFilter {
+                limit: 10,
+                only_failed: false,
+                tag: Some("auth".to_string()),
+            })
+            .unwrap();
+        assert!(rows.is_empty(), "auth must not match oauth: {rows:?}");
+        let rows = Runs::new(&db)
+            .list(&ListFilter {
+                limit: 10,
+                only_failed: false,
+                tag: Some("oauth".to_string()),
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn list_filter_tag_treats_wildcards_literally() {
+        let db = Db::open_in_memory().unwrap();
+        let id_plain = reserve_running(&db, "2026-01-01T00:00:00Z", "a", "[]");
+        complete_with_tags(&db, id_plain, &["abc".to_string()]);
+        // `%` and `_` in the filter are escaped: searching for them
+        // matches nothing literally present.
+        for pat in ["%", "_", "a%c", "a_c"] {
+            let rows = Runs::new(&db)
+                .list(&ListFilter {
+                    limit: 10,
+                    only_failed: false,
+                    tag: Some(pat.to_string()),
+                })
+                .unwrap();
+            assert!(
+                rows.is_empty(),
+                "pattern {pat} must match literally: {rows:?}"
+            );
+        }
+        // A tag that itself contains wildcards matches literally.
+        let id_wild = reserve_running(&db, "2026-01-02T00:00:00Z", "b", "[]");
+        complete_with_tags(&db, id_wild, &["a%b".to_string()]);
+        let rows = Runs::new(&db)
+            .list(&ListFilter {
+                limit: 10,
+                only_failed: false,
+                tag: Some("a%b".to_string()),
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id_wild);
     }
 }

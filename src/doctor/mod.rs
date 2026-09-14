@@ -4,9 +4,18 @@
 //! a [`Report`]. The doctor never aborts early: a single failing check
 //! must not skip the rest. All checks are independent and tolerate
 //! missing optional tools (those are `Warn`, not `Fail`).
+//!
+//! The doctor is read-only: database checks open the DB without
+//! running migrations, the writability probe uses an atomic
+//! `create_new` file cleaned up by a `Drop` guard, and external
+//! version probes are bounded so a hanging checker cannot stall the
+//! command.
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use crate::project::{config::Config, git, root::ProjectRoot};
 use crate::repo::{alerts::foundation_tables_present, alerts::schema_version, Db};
@@ -118,7 +127,19 @@ fn check_project_paths(proj: &ProjectRoot) -> Vec<Check> {
 }
 
 fn check_db(proj: &ProjectRoot) -> Check {
-    match Db::open(&proj.db_path) {
+    // Read-only: doctor must never migrate or modify the DB.
+    if !proj.db_path.exists() {
+        return Check::fail(
+            "db.open",
+            "Database could not be opened",
+            format!("{}: file not found", proj.db_path.display()),
+        )
+        .with_remediation(format!(
+            "If the file is corrupt, delete `{}` and run `driftwatch init` again.",
+            proj.db_path.display()
+        ));
+    }
+    match Db::open_read_only(&proj.db_path) {
         Ok(db) => {
             let version = schema_version(db.conn()).unwrap_or(0);
             if !foundation_tables_present(db.conn()).unwrap_or(false) {
@@ -228,15 +249,46 @@ fn writability_check(id: &'static str, name: &'static str, dir: &Path) -> Check 
                 dir.display()
             ));
     }
-    // A scratch file is the most portable writability probe. `create_new`
-    // would also work but fails on cleanup races; we use `create` and
-    // remove the probe unconditionally.
-    let probe = dir.join(".driftwatch-doctor-probe");
-    match std::fs::write(&probe, b"") {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&probe);
-            Check::pass(id, name)
+    // Atomic probe: `create_new` fails when the file already exists
+    // (no clobbering, no TOCTOU truncate race). A `Drop` guard
+    // removes the probe even on early return. A stale leftover from
+    // a crashed run is removed and retried once.
+    struct ProbeGuard<'a> {
+        path: std::path::PathBuf,
+        _marker: std::marker::PhantomData<&'a ()>,
+    }
+    impl Drop for ProbeGuard<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
         }
+    }
+    let probe = dir.join(".driftwatch-doctor-probe");
+    let attempt = || -> std::io::Result<ProbeGuard<'_>> {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+        {
+            Ok(_) => Ok(ProbeGuard {
+                path: probe.clone(),
+                _marker: std::marker::PhantomData,
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = std::fs::remove_file(&probe);
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&probe)
+                    .map(|_| ProbeGuard {
+                        path: probe.clone(),
+                        _marker: std::marker::PhantomData,
+                    })
+            }
+            Err(e) => Err(e),
+        }
+    };
+    match attempt() {
+        Ok(_guard) => Check::pass(id, name),
         Err(e) => {
             Check::fail(id, name, format!("{}: {e}", dir.display())).with_remediation(format!(
                 "Adjust permissions on `{}` so the current user can write to it.",
@@ -265,6 +317,34 @@ fn check_checkers(proj: &ProjectRoot) -> Vec<Check> {
     out
 }
 
+/// Budget for a checker's `--version` probe. A hanging checker
+/// reports a timeout instead of stalling `doctor`.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run `program --version` with argv (never shell-split) and a
+/// timeout. `Ok(Ok(text))` is a successful probe, `Ok(Err(code))`
+/// is a nonzero exit, `Err` is spawn/timeout.
+fn version_probe(program: &str) -> Result<Result<String, Option<i32>>, String> {
+    let program = program.to_string();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let out = Command::new(&program).arg("--version").output();
+        let _ = tx.send(out);
+    });
+    let out = match rx.recv_timeout(VERSION_TIMEOUT) {
+        Ok(o) => o,
+        Err(_) => return Err("timed out after 5s".to_string()),
+    };
+    match out {
+        Ok(o) if o.status.success() => {
+            let version = String::from_utf8_lossy(&o.stdout);
+            Ok(Ok(version.lines().next().unwrap_or("").trim().to_string()))
+        }
+        Ok(o) => Ok(Err(o.status.code())),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn check_one_checker(checker: &crate::project::config::CheckerEntry) -> Check {
     let id = "checker.executable";
     // `command` is the program; `args` carry the flags. Never
@@ -281,20 +361,24 @@ fn check_one_checker(checker: &crate::project::config::CheckerEntry) -> Check {
             checker.name
         ));
     }
-    match Command::new(program).arg("--version").output() {
-        Ok(out) if out.status.success() => {
-            let version = String::from_utf8_lossy(&out.stdout);
-            let version = version.lines().next().unwrap_or("").trim();
-            Check::pass(id, format!("Checker `{}` is installed", checker.name))
-                .with_remediation(format!("program: {program}, version: {version}"))
-        }
-        Ok(out) => Check::warn(
+    match version_probe(program) {
+        Ok(Ok(version)) => Check::pass(id, format!("Checker `{}` is installed", checker.name))
+            .with_remediation(format!("program: {program}, version: {version}")),
+        Ok(Err(code)) => Check::warn(
             id,
             format!("Checker `{}` responded with an error", checker.name),
-            format!("program: {program}, exit: {:?}", out.status.code()),
+            format!("program: {program}, exit: {code:?}"),
         )
         .with_remediation(format!(
             "Verify that `{program}` runs successfully on its own before invoking driftwatch."
+        )),
+        Err(e) if e.contains("timed out") => Check::warn(
+            id,
+            format!("Checker `{}` timed out", checker.name),
+            format!("program: {program}, error: {e}"),
+        )
+        .with_remediation(format!(
+            "Verify that `{program} --version` responds within 5s."
         )),
         Err(e) => Check::warn(
             id,
@@ -320,7 +404,10 @@ fn check_recent_check_runs(proj: &ProjectRoot) -> Vec<Check> {
     if cfg.checkers.is_empty() {
         return Vec::new();
     }
-    let db = match Db::open(&proj.db_path) {
+    // Read-only: a doctor failure to open the DB is already reported
+    // by `db.open`; per-checker snapshot errors are skipped (the
+    // doctor never aborts early) rather than propagated.
+    let db = match Db::open_read_only(&proj.db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(), // Already reported by `db.open`.
     };
@@ -465,5 +552,73 @@ mod tests {
         assert!(s.contains("[FAIL] B (b)"));
         assert!(s.contains("remediation: fix"));
         assert!(s.contains("1 of 2 checks failed"));
+    }
+
+    #[test]
+    fn doctor_does_not_modify_the_db() {
+        use crate::repo::alerts::schema_version;
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".driftwatch")).unwrap();
+        let db_path = root.join(".driftwatch/state.db");
+        let mut db = Db::open(&db_path).unwrap();
+        crate::storage::migrations::apply(db.conn_mut()).unwrap();
+        drop(db);
+        let version_before: i64 = {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+                .unwrap()
+        };
+        let mtime_before = std::fs::metadata(&db_path).unwrap().modified().unwrap();
+        std::fs::write(root.join("driftwatch.toml"), "").unwrap();
+        let _ = run(root).unwrap();
+        let version_after: i64 = {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+                .unwrap()
+        };
+        let mtime_after = std::fs::metadata(&db_path).unwrap().modified().unwrap();
+        assert_eq!(version_before, version_after);
+        assert_eq!(mtime_before, mtime_after);
+        let _ = schema_version;
+    }
+
+    #[test]
+    fn version_probe_timeout_reports_warn_instead_of_hanging() {
+        // A checker whose `--version` hangs must surface a timeout
+        // quickly instead of stalling doctor.
+        let tmp = tempdir().unwrap();
+        let script = tmp.path().join("hang-checker");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+        let entry = crate::project::config::CheckerEntry {
+            name: "hang".into(),
+            command: script.to_string_lossy().into_owned(),
+            args: vec![],
+            working_dir: None,
+            env: std::collections::BTreeMap::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+        };
+        let started = std::time::Instant::now();
+        let check = check_one_checker(&entry);
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "probe hung: {:?}",
+            started.elapsed()
+        );
+        // A hanging `--version` is a Warn (not Fail, not hang).
+        assert_eq!(check.status, Status::Warn);
+        let detail = check.detail.unwrap_or_default();
+        assert!(
+            detail.contains("timed out") || detail.contains("hang"),
+            "got: {detail}"
+        );
     }
 }
