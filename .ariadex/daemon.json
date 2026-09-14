@@ -1,0 +1,8 @@
+{
+  "endpoint": ".ariadex/daemon.sock",
+  "pid": 515096,
+  "session_id": "11d974c09d0a",
+  "started_at": "2026-09-14T02:37:38+00:00",
+  "status": "running",
+  "version": 1
+}

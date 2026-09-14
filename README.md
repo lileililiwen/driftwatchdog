@@ -187,6 +187,28 @@ command at `driftwatch mcp` (or `driftwatchdog mcp` when installed via
 Cargo / the shell installer). The server is offline and never spawns
 child processes, so it is safe to enable in unattended contexts.
 
+## Integrations
+
+Tested, copy-paste MCP client configs and investigation workflows
+live under `examples/`. Each directory is a self-contained drop-in
+for one agent harness.
+
+| Directory                       | Harness       | Notes |
+| ------------------------------- | ------------- | ----- |
+| `examples/claude-code/`         | Claude Code   | stdio MCP server + investigation loop. |
+| `examples/opencode/`            | OpenCode      | stdio MCP server + investigation loop. |
+| `examples/aider/`               | Aider         | stdio MCP server (optional) and the `report --ai > drift.md` fallback recommended for every Aider version. |
+
+The investigation loops restate the same instructions the `report
+--ai` command emits, so behaviour stays consistent with the
+documented contract regardless of which harness the agent runs
+inside. The human drives every command that mutates state; the MCP
+surface is read-only and never executes Driftwatch commands on the
+agent's behalf. See `examples/README.md` for the full copy map and
+caveats, and `tests/packaging/test_agent_examples.sh` for the
+consistency test that guards every JSON fragment and every
+referenced subcommand.
+
 ## External checkers
 
 Driftwatchdog does not define a spec format. Copy `driftwatch.toml.example`

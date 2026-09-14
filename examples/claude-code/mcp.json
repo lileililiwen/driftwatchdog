@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "driftwatch": {
+      "type": "stdio",
+      "command": "driftwatch",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}

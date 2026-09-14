@@ -1,0 +1,12 @@
+{
+  "conversation_id": "c-c666c8b76cfe",
+  "current_spec": "agent-examples",
+  "queue": [
+    "agent-examples",
+    "github-actions-templates"
+  ],
+  "role": "confirmation",
+  "spec_path": "openspec/changes/agent-examples",
+  "started_at": "2026-09-14T02:50:47+00:00",
+  "version": 1
+}

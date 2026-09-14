@@ -1,0 +1,8 @@
+## Approach
+- One directory per harness under `examples/`: `claude-code/`, `opencode/`, `aider/`. Each holds `mcp.json` (minimal client-config fragment: stdio command `driftwatch`, args `["mcp"]`, working directory placeholder) and `workflow.md` (5–10 step loop: reproduce → `top_bugs`/`show_bug` → read `ai_report` → inspect specs → add regression test → re-run).
+- `workflow.md` files MUST reuse the exact investigation instructions already shipped in `report --ai` (investigate recurrence, review related specs, inspect prior implementations, add/update regression tests, do not modify specs to silence warnings) rather than paraphrasing them.
+- Aider has no native MCP stdio attach in every version, so its directory ALSO documents the portable fallback: `driftwatch report --ai > drift.md` then attach the file to the chat. The other two directories mention the fallback in one line.
+- Consistency test (bash, same harness as packaging tests): parse each `mcp.json` with `node -e`/`python3 -c` (both already assumed by existing tests? no — use `node`, already required for launcher tests... safer: validate with the repo's own `driftwatch` binary? JSON parsing needs a tool. `python3 -c json.load` is near-universal on dev hosts and CI ubuntu/macOS images; fall back to `node -e` when python3 is absent). Extract `driftwatch <token>` occurrences from `workflow.md` and assert each token appears in `driftwatch --help` subcommand list. Assert no `workflow.md` mentions `driftwatch run`/`check` as an agent-invoked step (read-only contract).
+
+## Non-goals
+- No per-harness plugin code; no example executes anything at test time beyond `--help` introspection.

@@ -1,0 +1,15 @@
+schema: 1
+session: 11d974c09d0a
+spec: (none)
+action: daemon-start
+started: 2026-09-14T02:37:28+00:00
+ended: 2026-09-14T02:37:28+00:00
+exit code: 0
+validation: n/a
+reset: (none)
+retries: 0
+redactions: 0
+--- input ---
+
+--- output ---
+daemon pid 514727 owns /home/paul/code/driftwatchdog
