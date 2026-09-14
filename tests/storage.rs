@@ -42,11 +42,11 @@ fn migration_version_is_three_after_init() {
     let path = tmp.path().join("state.db");
     let mut conn = storage::open(&path).unwrap();
     let v = storage::migrations::apply(&mut conn).unwrap();
-    assert_eq!(v, 3);
+    assert_eq!(v, 4);
     let recorded: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(recorded, 3);
+    assert_eq!(recorded, 4);
 }
 
 #[test]

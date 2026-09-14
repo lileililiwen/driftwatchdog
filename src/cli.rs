@@ -105,7 +105,10 @@ pub struct TopArgs {
 /// `driftwatch show <bug-id>`
 #[derive(Debug, Args, Clone)]
 pub struct ShowArgs {
-    /// Hash prefix (hex chars) or numeric `fingerprints.id`.
+    /// Hash prefix (hex chars), numeric `fingerprints.id`, or
+    /// `id:<n>` for an explicit numeric lookup. Bare all-digit input
+    /// tries the hash prefix first and only falls back to the numeric
+    /// id when no hash matches.
     pub bug_id: String,
 }
 
@@ -177,12 +180,14 @@ pub struct CheckArgs {
 /// `driftwatch link bug:<id> spec:<id> [--note "..."]`
 ///
 /// Both sides accept the documented `kind:<id>` form. The bug side
-/// also accepts a bare hash prefix (8+ hex chars preferred) or the
-/// numeric `fingerprints.id`; the spec side accepts the numeric
-/// `drift_alerts.id`.
+/// also accepts a bare hash prefix (8+ hex chars preferred) or
+/// `id:<n>` for an explicit numeric `fingerprints.id`; bare
+/// all-digit input tries the hash prefix first and only falls back
+/// to the numeric id when no hash matches. The spec side accepts
+/// the numeric `drift_alerts.id`.
 #[derive(Debug, Args, Clone)]
 pub struct LinkArgs {
-    /// Bug reference. Forms: `bug:<id>`, bare hash prefix, or numeric id.
+    /// Bug reference. Forms: `bug:<id>`, `id:<n>`, or bare hash prefix.
     pub bug: String,
     /// Spec/alert reference. Forms: `spec:<id>` or numeric `drift_alerts.id`.
     pub spec: String,

@@ -118,3 +118,62 @@ fn show_ambiguous_short_prefix_exits_nonzero() {
         .assert()
         .failure();
 }
+
+#[test]
+fn show_ambiguous_eight_char_prefix_lists_candidates() {
+    let tmp = init_dir();
+    // Two synthetic fingerprints sharing the 8-char prefix `abcdef12`.
+    // Resolution must fail explicitly (never silently pick rows[0]).
+    let db_path = tmp.path().join(".driftwatch/state.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    for (i, hash) in [
+        "abcdef1200000000000000000000000000000000000000000000000000000000",
+        "abcdef12ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    ]
+    .iter()
+    .enumerate()
+    {
+        conn.execute(
+            "INSERT INTO fingerprints (hash, canonical, summary, first_seen_at, last_seen_at, occurrence_count)
+             VALUES (?1, ?2, ?3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)",
+            rusqlite::params![hash, format!("canon {i}"), format!("sum {i}")],
+        )
+        .unwrap();
+    }
+    drop(conn);
+    let out = driftwatch()
+        .args(["show", "abcdef12"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("ambiguous"), "got stderr: {stderr}");
+    assert!(stderr.contains("longer prefix"), "got stderr: {stderr}");
+}
+
+#[test]
+fn show_unknown_prefix_suggests_list() {
+    let tmp = init_dir();
+    run_failing(&tmp, "boom_suggest");
+    let out = driftwatch()
+        .args(["show", "deadbeef"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.to_lowercase().contains("no fingerprint") || stderr.contains("deadbeef"),
+        "got stderr: {stderr}"
+    );
+}
+
+#[test]
+fn show_id_prefix_resolves_numeric_id() {
+    let tmp = init_dir();
+    run_failing(&tmp, "boom_idprefix");
+    driftwatch()
+        .args(["show", "id:1"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+}

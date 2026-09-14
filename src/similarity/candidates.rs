@@ -5,8 +5,10 @@
 //! small (single-digit fingerprints, dozens of alerts). The
 //! [`MAX_PAIRS`] cap guards against pathological cases (e.g. a
 //! checker that emits thousands of alerts per snapshot); when the
-//! cross product exceeds the cap, the alert list is deterministically
-//! truncated by `id` so the persisted set is reproducible.
+//! cross product exceeds the cap, the newest alerts (highest `id`)
+//! are retained so fresh drift is never dropped in favor of stale
+//! rows. Output order is stable (fingerprint `id` ascending, then
+//! alert `id` ascending) and the total never exceeds [`MAX_PAIRS`].
 
 use std::collections::HashMap;
 
@@ -17,7 +19,8 @@ use super::score::{score_pair, AlertInput, BugInput, ComponentScores, ALGO_VERSI
 /// Maximum number of (fingerprint, alert) pairs considered per
 /// generation. Sized to keep a worst-case generation under a
 /// fraction of a second on commodity hardware. When exceeded, the
-/// alert list is truncated by `id` to `MAX_PAIRS / fingerprints`.
+/// newest alerts are retained and the final output is hard-truncated
+/// to this bound.
 pub const MAX_PAIRS: usize = 5_000;
 
 /// Result of [`generate`]: each entry is a (fingerprint_id, alert_id,
@@ -27,7 +30,8 @@ pub type Candidate = (i64, i64, ComponentScores);
 
 /// Score every (fingerprint, alert) pair, drop the ones below
 /// [`THRESHOLD`], and return the survivors in a stable order:
-/// fingerprint `id` ascending, then alert `id` ascending.
+/// fingerprint `id` ascending, then alert `id` ascending. The
+/// returned vec never exceeds [`MAX_PAIRS`].
 pub fn generate(
     bugs: &[Fingerprint],
     alerts: &[Alert],
@@ -36,32 +40,23 @@ pub fn generate(
     if bugs.is_empty() || alerts.is_empty() {
         return Vec::new();
     }
-    // Cap the alert list deterministically. We sort a copy by `id`
-    // and take the first `MAX_PAIRS / len(bugs)` entries. The
-    // `max(1)` prevents underflow when `bugs.len()` > MAX_PAIRS.
+    // Cap newest-first: sort a copy by `id` descending and take the
+    // first `MAX_PAIRS / len(bugs)` entries. The `max(1)` prevents
+    // underflow when `bugs.len()` > MAX_PAIRS.
     let alerts_to_score: Vec<&Alert> = if bugs.len() * alerts.len() > MAX_PAIRS {
         let mut sorted: Vec<&Alert> = alerts.iter().collect();
-        sorted.sort_by_key(|a| a.id);
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.id));
         let per_bug = (MAX_PAIRS / bugs.len()).max(1);
         sorted.into_iter().take(per_bug).collect()
     } else {
         alerts.iter().collect()
     };
-    if alerts_to_score.len() * bugs.len() > MAX_PAIRS {
-        // Defensive: even after the per-bug cap, the cartesian
-        // product may still exceed MAX_PAIRS when bugs.len() is
-        // large. Truncate the alert list further so the inner loop
-        // stays bounded.
-        let mut sorted: Vec<&Alert> = alerts_to_score.into_iter().collect();
-        sorted.sort_by_key(|a| a.id);
-        let per_bug = (MAX_PAIRS / bugs.len()).max(1);
-        return generate_with(
-            bugs,
-            &sorted.into_iter().take(per_bug).collect::<Vec<_>>(),
-            bug_tags,
-        );
-    }
-    generate_with(bugs, &alerts_to_score, bug_tags)
+    let mut out = generate_with(bugs, &alerts_to_score, bug_tags);
+    // True global bound: the per-bug slice keeps the inner loop
+    // bounded, but truncate the output so callers never persist more
+    // than MAX_PAIRS rows.
+    out.truncate(MAX_PAIRS);
+    out
 }
 
 fn generate_with(
@@ -195,7 +190,7 @@ mod tests {
     fn generate_caps_at_max_pairs_deterministically() {
         // 100 bugs x 100 alerts = 10_000 pairs, exceeds the 5_000
         // cap. Every pair scores >= threshold (full overlap on
-        // message + symbol + file). After the cap, only the first
+        // message + symbol + file). After the cap, only the newest
         // 50 alerts (per_bug = 5_000 / 100 = 50) are scored
         // against every bug.
         let bugs: Vec<Fingerprint> = (1..=100)
@@ -215,9 +210,31 @@ mod tests {
         // Every scored pair passes the threshold; expect 100 bugs x
         // 50 alerts = 5_000.
         assert_eq!(out.len(), MAX_PAIRS);
-        // All selected alert ids are <= 50 (deterministic truncation).
+        // Newest-first: all selected alert ids are > 50.
         for (_f, a, _) in &out {
-            assert!(*a <= 50, "alert id {a} should be in first 50");
+            assert!(*a > 50, "alert id {a} should be in newest 50");
         }
+    }
+
+    #[test]
+    fn generate_output_never_exceeds_global_cap() {
+        // 200 bugs x 100 alerts = 20_000 pairs. per_bug =
+        // 5_000/200 = 25 newest alerts each; output truncated to
+        // MAX_PAIRS.
+        let bugs: Vec<Fingerprint> = (1..=200)
+            .map(|i| fp(i, "DbPool connection refused to db.md while reading pool"))
+            .collect();
+        let alerts: Vec<Alert> = (1..=100)
+            .map(|i| {
+                alert_with(
+                    i,
+                    "DbPool connection refused to db.md while reading pool",
+                    Some("DbPool"),
+                    Some("db.md"),
+                )
+            })
+            .collect();
+        let out = generate(&bugs, &alerts, &HashMap::new());
+        assert!(out.len() <= MAX_PAIRS, "got {}", out.len());
     }
 }

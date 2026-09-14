@@ -40,7 +40,7 @@ fn export_json_on_empty_db_produces_valid_document() {
     assert!(v["alerts"].as_array().unwrap().is_empty());
     assert!(v["correlations"].as_array().unwrap().is_empty());
     assert!(v["manual_links"].as_array().unwrap().is_empty());
-    assert_eq!(v["project"]["local_schema_version"], 3);
+    assert_eq!(v["project"]["local_schema_version"], 4);
 }
 
 #[test]

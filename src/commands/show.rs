@@ -65,12 +65,33 @@ pub fn show(args: ShowArgs, cwd: &Path) -> Result<i32, Error> {
 }
 
 fn resolve(bugs: &Bugs<'_>, id: &str) -> Result<Option<crate::repo::bugs::Fingerprint>, Error> {
-    if let Ok(n) = id.parse::<i64>() {
-        if let Some(fp) = bugs.find_by_id(n)? {
-            return Ok(Some(fp));
+    let trimmed = id.trim();
+    // Explicit `id:<n>` always means the numeric primary key.
+    if let Some(rest) = trimmed.strip_prefix("id:") {
+        let n: i64 = rest
+            .trim()
+            .parse()
+            .map_err(|_| Error::BugNotFound { id: id.to_string() })?;
+        return bugs.find_by_id(n);
+    }
+    // Otherwise try the hash prefix first so a digit-only string
+    // that happens to match a hash never silently resolves to the
+    // wrong numeric row. Ambiguity errors propagate (never fall
+    // back to id). Only when no hash matches AND the input is
+    // all digits do we try the numeric id.
+    match bugs.find_by_hash_prefix(trimmed)? {
+        Some(fp) => Ok(Some(fp)),
+        None => {
+            if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(n) = trimmed.parse::<i64>() {
+                    if let Some(fp) = bugs.find_by_id(n)? {
+                        return Ok(Some(fp));
+                    }
+                }
+            }
+            Ok(None)
         }
     }
-    bugs.find_by_hash_prefix(id)
 }
 
 fn short_hash(h: &str) -> String {

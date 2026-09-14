@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn schema_version_reports_three_after_init() {
         let db = Db::open_in_memory().unwrap();
-        assert_eq!(schema_version(db.conn()).unwrap(), 3);
+        assert_eq!(schema_version(db.conn()).unwrap(), 4);
     }
 
     #[test]

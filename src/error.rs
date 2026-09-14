@@ -43,6 +43,16 @@ pub enum Error {
     #[error("no fingerprint matches '{id}'")]
     BugNotFound { id: String },
 
+    #[error("ambiguous bug prefix '{prefix}': {count} fingerprints match ({candidates}); use a longer prefix (try 'driftwatch list' to see candidates)")]
+    BugAmbiguous {
+        prefix: String,
+        count: usize,
+        candidates: String,
+    },
+
+    #[error("already linked (id {id})")]
+    DuplicateLink { id: i64 },
+
     #[error("could not resolve {side} reference '{raw}'")]
     LinkTarget { side: &'static str, raw: String },
 

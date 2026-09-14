@@ -2,12 +2,13 @@
 //! bug fingerprints and drift alerts. The
 //! `correlation-and-ai-context` change extends this placeholder
 //! with the `create`/`delete`/`find_by_id` helpers used by
-//! `driftwatch link`/`driftwatch unlink`.
+//! `driftwatch link`/`driftwatch unlink`; the `identity-resolution`
+//! change adds migration 4 (`UNIQUE(fingerprint_id, alert_id)` +
+//! dedupe) and the application-level duplicate guard in `create`.
 //!
-//! The schema is already adequate (`manual_links` was created in
-//! the baseline migration with `fingerprint_id`/`alert_id` nullable
-//! and a `CHECK` that at least one is set), so no migration is
-//! needed.
+//! The schema keeps the baseline OR `CHECK` (at least one endpoint
+//! set): `driftwatch link` always persists both endpoints, so an XOR
+//! check would reject every real link row.
 
 use rusqlite::{params, OptionalExtension};
 
@@ -86,12 +87,15 @@ impl<'a> Links<'a> {
         Ok(row)
     }
 
-    /// Persist a new manual link. Exactly one of `fingerprint_id` or
-    /// `alert_id` must be `Some` (the schema CHECK rejects both
-    /// `NULL` and both `Some`; the caller picks the right side).
-    /// Returns the persisted row. Takes `&mut Db` because the
-    /// underlying SQLite transaction requires a mutable connection
-    /// (consistent with other repo write paths).
+    /// Persist a new manual link. `driftwatch link` sets both
+    /// `fingerprint_id` and `alert_id` (the schema OR `CHECK`
+    /// requires at least one endpoint; the pair form is the normal
+    /// case). Duplicate `(fingerprint_id, alert_id)` pairs are
+    /// rejected idempotently with [`Error::DuplicateLink`];
+    /// missing FK targets surface [`Error::LinkTarget`] instead of a
+    /// raw SQLite foreign-key error. Returns the persisted row. Takes
+    /// `&mut Db` because the underlying SQLite transaction requires
+    /// a mutable connection (consistent with other repo write paths).
     pub fn create(
         db: &mut Db,
         fingerprint_id: Option<i64>,
@@ -99,6 +103,49 @@ impl<'a> Links<'a> {
         note: Option<&str>,
         now: &str,
     ) -> Result<ManualLink, Error> {
+        // Duplicate guard: idempotent error naming the existing row.
+        if let (Some(fp), Some(al)) = (fingerprint_id, alert_id) {
+            let existing: Option<i64> = db
+                .conn()
+                .query_row(
+                    "SELECT id FROM manual_links WHERE fingerprint_id = ?1 AND alert_id = ?2",
+                    params![fp, al],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                return Err(Error::DuplicateLink { id });
+            }
+            // FK existence diagnostics (clearer than raw FK errors).
+            let fp_exists: bool = db.conn().query_row(
+                "SELECT EXISTS(SELECT 1 FROM fingerprints WHERE id = ?1)",
+                params![fp],
+                |r| {
+                    let v: i64 = r.get(0)?;
+                    Ok(v != 0)
+                },
+            )?;
+            if !fp_exists {
+                return Err(Error::LinkTarget {
+                    side: "bug",
+                    raw: format!("bug id {fp}"),
+                });
+            }
+            let al_exists: bool = db.conn().query_row(
+                "SELECT EXISTS(SELECT 1 FROM drift_alerts WHERE id = ?1)",
+                params![al],
+                |r| {
+                    let v: i64 = r.get(0)?;
+                    Ok(v != 0)
+                },
+            )?;
+            if !al_exists {
+                return Err(Error::LinkTarget {
+                    side: "spec",
+                    raw: format!("spec id {al}"),
+                });
+            }
+        }
         let tx = db.conn_mut().transaction()?;
         tx.execute(
             "INSERT INTO manual_links (fingerprint_id, alert_id, note, created_at)
@@ -239,6 +286,31 @@ mod tests {
         assert_eq!(link.alert_id, Some(alert_id));
         assert!(link.note.is_none());
         assert!(link.id > 0);
+    }
+
+    #[test]
+    fn create_rejects_duplicate_pair_idempotently() {
+        let mut db = db();
+        let (fp_id, alert_id) = insert_fingerprint_and_alert(&mut db);
+        let first = Links::create(
+            &mut db,
+            Some(fp_id),
+            Some(alert_id),
+            None,
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        let err = Links::create(
+            &mut db,
+            Some(fp_id),
+            Some(alert_id),
+            None,
+            "2026-01-02T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::DuplicateLink { id } if id == first.id));
+        assert!(err.to_string().contains("already linked"));
+        assert_eq!(Links::new(&db).count().unwrap(), 1);
     }
 
     #[test]

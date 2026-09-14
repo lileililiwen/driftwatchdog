@@ -45,9 +45,13 @@ pub fn link(args: LinkArgs, cwd: &Path) -> Result<i32, Error> {
 fn resolve_bug(db: &mut Db, raw: &str) -> Result<i64, Error> {
     let trimmed = raw.trim();
     let stripped = strip_kind(trimmed, "bug");
-    let bugs = Bugs::new(db);
-    // Try the numeric form first (exact `fingerprints.id`).
-    if let Ok(n) = stripped.parse::<i64>() {
+    // Explicit `id:<n>` always means the numeric primary key.
+    if let Some(rest) = stripped.strip_prefix("id:") {
+        let n: i64 = rest.trim().parse().map_err(|_| Error::LinkTarget {
+            side: "bug",
+            raw: trimmed.to_string(),
+        })?;
+        let bugs = Bugs::new(db);
         if let Some(fp) = bugs.find_by_id(n)? {
             return Ok(fp.id);
         }
@@ -56,14 +60,27 @@ fn resolve_bug(db: &mut Db, raw: &str) -> Result<i64, Error> {
             raw: trimmed.to_string(),
         });
     }
-    // Fall back to hash prefix resolution.
-    if let Some(fp) = bugs.find_by_hash_prefix(stripped)? {
-        return Ok(fp.id);
+    let bugs = Bugs::new(db);
+    // Hash prefix first so digit-only strings never silently resolve
+    // to the wrong numeric row. Ambiguity errors propagate.
+    match bugs.find_by_hash_prefix(stripped)? {
+        Some(fp) => Ok(fp.id),
+        None => {
+            // Fall back to the numeric id only when no hash matches
+            // and the input is all digits.
+            if !stripped.is_empty() && stripped.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(n) = stripped.parse::<i64>() {
+                    if let Some(fp) = bugs.find_by_id(n)? {
+                        return Ok(fp.id);
+                    }
+                }
+            }
+            Err(Error::LinkTarget {
+                side: "bug",
+                raw: trimmed.to_string(),
+            })
+        }
     }
-    Err(Error::LinkTarget {
-        side: "bug",
-        raw: trimmed.to_string(),
-    })
 }
 
 fn resolve_alert(db: &Db, raw: &str) -> Result<i64, Error> {
@@ -197,5 +214,40 @@ mod tests {
         let db = db();
         let err = resolve_alert(&db, "9999").unwrap_err();
         assert!(matches!(err, Error::LinkTarget { side: "spec", .. }));
+    }
+
+    #[test]
+    fn resolve_bug_prefers_hash_over_numeric_id_for_digit_strings() {
+        // Craft two fingerprints: id=1 with a non-numeric hash, and a
+        // second row whose hash starts with digits. A bare digit-only
+        // ref that matches the hash prefix must resolve to the hash
+        // row, never silently to the numeric id.
+        let mut db = db();
+        let fp1 = crate::repo::bugs::Bugs::new(&mut db)
+            .upsert_for_occurrence("err one", "one", "2026-01-01T00:00:00Z")
+            .unwrap();
+        // Insert a row with a digit-leading hash directly.
+        db.conn_mut()
+            .execute(
+                "INSERT INTO fingerprints (hash, canonical, summary, first_seen_at, last_seen_at, occurrence_count)
+                 VALUES ('12345678abcdef12345678abcdef12345678abcdef12345678abcdef1234', 'err two', 'two', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)",
+                [],
+            )
+            .unwrap();
+        let fp2_id: i64 = db
+            .conn()
+            .query_row(
+                "SELECT id FROM fingerprints WHERE canonical = 'err two'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_ne!(fp1.id, fp2_id);
+        // "12345678" is all digits AND the hash prefix of fp2.
+        let resolved = resolve_bug(&mut db, "12345678").unwrap();
+        assert_eq!(resolved, fp2_id);
+        // Explicit `id:` still reaches the numeric row.
+        let via_id = resolve_bug(&mut db, &format!("id:{}", fp1.id)).unwrap();
+        assert_eq!(via_id, fp1.id);
     }
 }

@@ -149,23 +149,17 @@ impl<'a> Bugs<'a> {
         Ok(row)
     }
 
-    /// Look up a fingerprint by a hex prefix of its hash. Returns `None`
-    /// when the prefix is empty/non-hex, when no row matches, or when
-    /// the prefix is shorter than 8 hex chars and matches more than one
-    /// row (ambiguous). Callers should treat `None` as "not uniquely
-    /// resolvable".
-    pub fn find_by_hash_prefix(&self, prefix: &str) -> Result<Option<Fingerprint>, Error> {
+    /// Look up every fingerprint whose hash starts with `prefix`.
+    /// Returns an empty vec when the prefix is empty/non-hex or when
+    /// nothing matches. Used to implement unambiguous-or-error
+    /// resolution and to list candidates in ambiguity errors.
+    pub fn find_by_hash_prefix_all(&self, prefix: &str) -> Result<Vec<Fingerprint>, Error> {
         let prefix = prefix.trim();
         if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Ok(None);
+            return Ok(Vec::new());
         }
-        // SQLite's text collation is sufficient for hex comparison: a
-        // prefix of a hex string is a strict text prefix of the full
-        // string. The `length(prefix)` check ensures the matched row's
-        // hash actually begins with our prefix (without it, `LIKE 'a%'`
-        // would also match `aa…`).
         let like = format!("{prefix}%");
-        let mut rows: Vec<Fingerprint> = self
+        let rows: Vec<Fingerprint> = self
             .db
             .conn()
             .prepare(
@@ -176,15 +170,33 @@ impl<'a> Bugs<'a> {
             )?
             .query_map(params![like, prefix.len() as i64], map_fp)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Look up a fingerprint by a hex prefix of its hash. Resolves
+    /// only when exactly one row matches; otherwise returns an
+    /// error (`BugNotFound` when zero match, `BugAmbiguous` listing
+    /// up to 5 candidates when 2+ match). Never silently picks
+    /// `rows[0]`.
+    pub fn find_by_hash_prefix(&self, prefix: &str) -> Result<Option<Fingerprint>, Error> {
+        let rows = self.find_by_hash_prefix_all(prefix)?;
+        let trimmed = prefix.trim();
         if rows.is_empty() {
             return Ok(None);
         }
-        // Disambiguate: prefixes shorter than 8 hex chars are ambiguous
-        // when more than one row matches.
-        if rows.len() > 1 && prefix.len() < 8 {
-            return Ok(None);
+        if rows.len() > 1 {
+            let shown: Vec<String> = rows
+                .iter()
+                .take(5)
+                .map(|f| format!("#{} {}", f.id, &f.hash[..f.hash.len().min(12)]))
+                .collect();
+            return Err(Error::BugAmbiguous {
+                prefix: trimmed.to_string(),
+                count: rows.len(),
+                candidates: shown.join(", "),
+            });
         }
-        Ok(Some(rows.remove(0)))
+        Ok(rows.into_iter().next())
     }
 
     /// Hash attached to a specific run (via its most recent occurrence).
@@ -614,28 +626,54 @@ mod tests {
     }
 
     #[test]
-    fn find_by_hash_prefix_returns_none_on_ambiguity() {
+    fn find_by_hash_prefix_errors_on_ambiguity() {
         let mut db = db();
         Bugs::new(&mut db)
             .upsert_for_occurrence("err A", "A", "2026-01-01T00:00:00Z")
             .unwrap();
-        // Force a second hash that also starts with "0": we can't
-        // easily control the hash, but inserting any two distinct
-        // canonicals gives us two distinct hashes. Use a single
-        // character prefix to guarantee ambiguity.
-        let f1 = Bugs::new(&mut db).find_by_hash_prefix("0").unwrap();
-        // If only one row was inserted, f1 is Some(_). Adding a
-        // second row makes the 1-char prefix ambiguous.
         Bugs::new(&mut db)
             .upsert_for_occurrence("err B", "B", "2026-01-02T00:00:00Z")
             .unwrap();
-        let f2 = Bugs::new(&mut db).find_by_hash_prefix("0").unwrap();
-        // Either: f1 is Some AND f2 is None (the 1-char prefix
-        // becomes ambiguous after the second insert), or both are
-        // None. The contract is: f2 must be None when 2+ rows exist.
-        if f1.is_some() {
-            assert!(f2.is_none(), "ambiguous prefix should return None");
+        // A 1-char hex prefix matches many rows; with 2+ rows present
+        // it must error (never silently pick rows[0]).
+        // Find a 1-char prefix shared by both rows, else try "0".."f".
+        let mut ambiguous: Option<Error> = None;
+        for ch in "0123456789abcdef".chars() {
+            let all_a = Bugs::new(&mut db)
+                .find_by_hash_prefix_all(&ch.to_string())
+                .unwrap();
+            if all_a.len() >= 2 {
+                ambiguous = Some(
+                    Bugs::new(&mut db)
+                        .find_by_hash_prefix(&ch.to_string())
+                        .unwrap_err(),
+                );
+                break;
+            }
         }
+        // If no single hex char is shared, force ambiguity via the
+        // full-list path: at least verify a garbage prefix is None.
+        match ambiguous {
+            Some(Error::BugAmbiguous { count, .. }) => assert!(count >= 2),
+            Some(e) => panic!("expected BugAmbiguous, got {e}"),
+            None => {
+                let none = Bugs::new(&mut db).find_by_hash_prefix("zz").unwrap();
+                assert!(none.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn find_by_hash_prefix_all_lists_candidates() {
+        let mut db = db();
+        let a = Bugs::new(&mut db)
+            .upsert_for_occurrence("err A", "A", "2026-01-01T00:00:00Z")
+            .unwrap();
+        let rows = Bugs::new(&mut db)
+            .find_by_hash_prefix_all(&a.hash[..8])
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, a.id);
     }
 
     #[test]

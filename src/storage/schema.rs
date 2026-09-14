@@ -117,3 +117,25 @@ ALTER TABLE correlations ADD COLUMN score_file REAL;
 ALTER TABLE correlations ADD COLUMN score_tag REAL;
 ALTER TABLE correlations ADD COLUMN algorithm_version TEXT NOT NULL DEFAULT 'v1';
 "#;
+
+/// Migration: harden `manual_links` identity. The
+/// `identity-resolution` change requires `UNIQUE(fingerprint_id,
+/// alert_id)` so duplicate bug+alert pairs are rejected idempotently
+/// at the DB layer, plus best-effort dedupe of pre-existing
+/// duplicate pairs (keep the lowest `id`).
+///
+/// Note on the `CHECK`: the baseline uses OR (at least one endpoint
+/// set), which is correct because `driftwatch link` always sets
+/// *both* `fingerprint_id` and `alert_id`. An XOR check would reject
+/// every real link row, so the OR semantics are preserved here; the
+/// safety gain comes from the new `UNIQUE` pair constraint plus the
+/// application-level duplicate guard in `Links::create`.
+/// Both statements are rerunnable (`IF NOT EXISTS` / idempotent
+/// delete).
+pub const MIGRATION_0004_LINK_IDENTITY: &str = r#"
+DELETE FROM manual_links WHERE id NOT IN (
+    SELECT MIN(id) FROM manual_links GROUP BY fingerprint_id, alert_id
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_links_pair
+    ON manual_links(fingerprint_id, alert_id);
+"#;

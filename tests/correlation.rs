@@ -166,11 +166,84 @@ fn link_unknown_alert_errors() {
 }
 
 #[test]
+fn link_duplicate_pair_reports_already_linked() {
+    let tmp = init_dir();
+    let db_path = tmp.path().join(".driftwatch/state.db");
+    let (fp_id, alert_id) = insert_fingerprint_and_alert(&db_path);
+    driftwatch()
+        .args(["link", &format!("bug:{fp_id}"), &format!("spec:{alert_id}")])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let out = driftwatch()
+        .args(["link", &format!("bug:{fp_id}"), &format!("spec:{alert_id}")])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("already linked"),
+        "expected duplicate-link error, got stderr: {stderr}"
+    );
+    let conn = open_db(&tmp);
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM manual_links", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn link_with_id_prefix_resolves_numeric_id() {
+    let tmp = init_dir();
+    let db_path = tmp.path().join(".driftwatch/state.db");
+    let (fp_id, alert_id) = insert_fingerprint_and_alert(&db_path);
+    driftwatch()
+        .args(["link", &format!("id:{fp_id}"), &format!("spec:{alert_id}")])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let conn = open_db(&tmp);
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM manual_links", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+}
+
+#[test]
 fn unlink_removes_only_targeted_row() {
     let tmp = init_dir();
     let db_path = tmp.path().join(".driftwatch/state.db");
     let (fp_id, alert_id) = insert_fingerprint_and_alert(&db_path);
     let mut db = Db::open(&db_path).unwrap();
+    // Second alert so the two links are distinct pairs (duplicate
+    // pairs are rejected by the identity-resolution guard).
+    Alerts::record_run(
+        &mut db,
+        &driftwatchdog::repo::alerts::NewSnapshot {
+            taken_at: "2026-01-02T00:00:00Z",
+            checker_name: "spec",
+            status: "success",
+            diagnostic: None,
+            raw_json: None,
+            git_commit: None,
+            git_branch: None,
+        },
+        &[driftwatchdog::repo::alerts::NewAlert {
+            severity: "warning",
+            message: "second alert",
+            source: Some("s2"),
+            symbol: Some("S2"),
+        }],
+    )
+    .unwrap();
+    let alert_id2: i64 = db
+        .conn()
+        .query_row(
+            "SELECT id FROM drift_alerts ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     let link_a = Links::create(
         &mut db,
         Some(fp_id),
@@ -182,7 +255,7 @@ fn unlink_removes_only_targeted_row() {
     let link_b = Links::create(
         &mut db,
         Some(fp_id),
-        Some(alert_id),
+        Some(alert_id2),
         Some("b"),
         "2026-01-01T00:00:00Z",
     )
