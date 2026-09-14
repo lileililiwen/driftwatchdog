@@ -59,6 +59,8 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Print a man page for the CLI to stdout.
     Man(ManArgs),
+    /// Serve the Model Context Protocol (read-only tools) on stdio.
+    Mcp(McpArgs),
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -256,3 +258,11 @@ pub enum CompletionShell {
 /// `driftwatch man` — no flags.
 #[derive(Debug, Args, Default, Clone)]
 pub struct ManArgs {}
+
+/// `driftwatch mcp` — no flags. Serves JSON-RPC 2.0 on stdio; the
+/// process exits 0 when stdin closes.
+#[derive(Debug, Args, Default, Clone)]
+#[command(
+    after_help = "Examples:\n  driftwatch mcp     # talk JSON-RPC on stdin/stdout\n  # register with an MCP-aware client by pointing its stdio command at `driftwatch mcp`."
+)]
+pub struct McpArgs {}

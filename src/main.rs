@@ -58,6 +58,9 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Man(_) => {
             driftwatchdog::commands::man_cmd().with_context(|| "driftwatchdog man failed")?
         }
+        Command::Mcp(_) => {
+            driftwatchdog::mcp::server::run(&cwd).with_context(|| "driftwatchdog mcp failed")?
+        }
     };
     Ok(ExitCode::from(code as u8))
 }

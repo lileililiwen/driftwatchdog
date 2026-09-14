@@ -41,6 +41,13 @@ impl ProjectRoot {
         }
     }
 
+    /// Borrow the discovered project root path. Used by callers that
+    /// need a `&Path` (e.g. the MCP doctor tool) without re-walking
+    /// the directory tree.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Walk upward from `start`, returning the nearest ancestor (or `start`
     /// itself) that contains `.driftwatch/` or `driftwatch.toml`. Falls back to
     /// `start` if nothing is found before the filesystem root. Returns an

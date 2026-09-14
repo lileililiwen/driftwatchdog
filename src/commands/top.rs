@@ -13,20 +13,32 @@ use crate::util::truncate_char_boundary;
 pub fn top(args: TopArgs, cwd: &Path) -> Result<i32, Error> {
     let proj = ProjectRoot::discover(cwd)?;
     let mut db = Db::open(&proj.db_path)?;
+    let out = render(&args, &mut db)?;
+    print!("{out}");
+    Ok(0)
+}
+
+/// Render the `top` table as a string. Returns the same bytes the
+/// `driftwatch top` command prints to stdout, so the MCP `top_bugs`
+/// tool can reuse the same builder. `db` is borrowed mutably to
+/// match the existing repository signatures; the caller's
+/// read-only connection is sufficient because this function never
+/// writes.
+pub fn render(args: &TopArgs, db: &mut Db) -> Result<String, Error> {
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days)).to_rfc3339();
     let tag_like = args.tag.as_deref().map(crate::repo::tag_like_pattern);
 
-    let rows = Bugs::new(&mut db).top(args.limit, &cutoff, tag_like.as_deref())?;
+    let rows = Bugs::new(db).top(args.limit, &cutoff, tag_like.as_deref())?;
 
     if rows.is_empty() {
-        println!("No recurring failures in the selected window.");
-        return Ok(0);
+        return Ok("No recurring failures in the selected window.\n".to_string());
     }
 
-    println!(
-        "{:<7}  {:<20}  {:<20}  {:<10}  SUMMARY",
+    let mut s = String::new();
+    s.push_str(&format!(
+        "{:<7}  {:<20}  {:<20}  {:<10}  SUMMARY\n",
         "COUNT", "FIRST SEEN", "LAST SEEN", "HASH"
-    );
+    ));
     for r in rows {
         let summary = r
             .summary
@@ -37,10 +49,10 @@ pub fn top(args: TopArgs, cwd: &Path) -> Result<i32, Error> {
         } else {
             &r.hash
         };
-        println!(
-            "{:<7}  {:<20}  {:<20}  {:<10}  {}",
+        s.push_str(&format!(
+            "{:<7}  {:<20}  {:<20}  {:<10}  {}\n",
             r.count, r.first_seen_at, r.last_seen_at, hash, summary
-        );
+        ));
     }
-    Ok(0)
+    Ok(s)
 }

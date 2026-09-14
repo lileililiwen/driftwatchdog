@@ -145,17 +145,47 @@ The AI report contains recurring failures, current spec violations, possible heu
     driftwatchdog show <bug-id>
     driftwatchdog report [--ai] [--limit N] [--days N] [--tag TAG]
     driftwatchdog check [--only NAMES] [--dry-run]
-    driftwatchdog link bug:<id> spec:<alert-id> [--note "..."]
+    driftwatchdog link bug:<id> spec:<id> [--note "..."]
     driftwatchdog unlink <link-id>
     driftwatchdog export json|jsonl|markdown
     driftwatchdog gc [--days N]
     driftwatchdog doctor
+    driftwatchdog mcp
     driftwatchdog completions <shell>
     driftwatchdog man
 
 Run `driftwatch --help` (or `driftwatch <command> --help`) for per-command
 examples. Shell completions cover bash, zsh, fish, powershell, and elvish;
 `driftwatch man` prints a man page to stdout.
+
+## MCP server (read-only)
+
+`driftwatchdog mcp` serves a read-only Model Context Protocol surface on
+stdio. The transport is newline-delimited JSON-RPC 2.0; the protocol
+version is `2024-11-05`. The server opens the local database with
+`SQLITE_OPEN_READ_ONLY` so a write attempt fails at the driver level.
+There are no HTTP/SSE transports, no write or execute tools, and no new
+runtime dependencies (`serde`/`serde_json` already cover the protocol).
+
+Four tools are advertised:
+
+| Tool | Input | Output |
+| --- | --- | --- |
+| `top_bugs` | `{limit?, days?, tag?}` | JSON array of `top` rows (`hash`, `summary`, `count`, `first_seen_at`, `last_seen_at`). |
+| `show_bug` | `{id: string}` | Same text the `driftwatch show` command prints; unknown ids surface a `hint:` remediation. |
+| `ai_report` | `{limit?, days?, tag?}` | Bytes identical to `driftwatch report --ai`. |
+| `doctor_status` | `{}` | Same text the `driftwatch doctor` command prints. |
+
+Every tool input is a closed JSON object (`additionalProperties: false`),
+so a misnamed key is rejected with `-32602` at the boundary. Failure
+shapes follow JSON-RPC 2.0 (`-32700` parse error, `-32601` method/tool
+not found, `-32602` invalid params, tool-level failures surface as a
+result with `isError: true` and the `hint:` line).
+
+Client-agnostic registration: point the MCP-aware client's stdio
+command at `driftwatch mcp` (or `driftwatchdog mcp` when installed via
+Cargo / the shell installer). The server is offline and never spawns
+child processes, so it is safe to enable in unattended contexts.
 
 ## External checkers
 

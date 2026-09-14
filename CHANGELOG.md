@@ -6,6 +6,11 @@ All notable changes to Driftwatchdog are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `driftwatch mcp`: stdio Model Context Protocol server with four
+  read-only tools (`top_bugs`, `show_bug`, `ai_report`,
+  `doctor_status`). JSON-RPC 2.0 / `protocolVersion 2024-11-05`,
+  closed input schemas (`additionalProperties: false`), and a
+  read-only SQLite connection. No new runtime dependencies.
 - Quality gates: `[lints.clippy] all = "deny"`, `rust-version = "1.74"` MSRV,
   `cargo-deny` advisories/licenses policy, tarpaulin coverage, proptest
   seeds for the failure normalizer.

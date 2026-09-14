@@ -53,6 +53,64 @@ pub fn render_ai(args: &ReportArgs, proj: &ProjectRoot, db: &mut Db) -> Result<S
         }
     }
 
+    render_ai_markdown(
+        args,
+        proj,
+        db,
+        &now,
+        &cutoff,
+        top,
+        alert_rows,
+        correlation_rows,
+        link_rows,
+    )
+}
+
+/// Render the AI-context report for the MCP server. Identical to
+/// [`render_ai`] but skips the lazy correlation fallback because
+/// the MCP server opens the database read-only and a write attempt
+/// would fail at the driver level. Without the lazy fallback the
+/// report renders deterministically from the existing state and
+/// never produces the "correlation skipped" warning on stderr.
+pub fn render_ai_for_mcp(
+    args: &ReportArgs,
+    proj: &ProjectRoot,
+    db: &mut Db,
+) -> Result<String, Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days)).to_rfc3339();
+    let tag_like = args.tag.as_deref().map(crate::repo::tag_like_pattern);
+
+    let top = Bugs::new(db).top(args.limit, &cutoff, tag_like.as_deref())?;
+    let alert_rows = Alerts::new(db).list_alerts()?;
+    let correlation_rows = Correlations::new(db).list_all()?;
+    let link_rows = Links::new(db).list_all()?;
+
+    render_ai_markdown(
+        args,
+        proj,
+        db,
+        &now,
+        &cutoff,
+        top,
+        alert_rows,
+        correlation_rows,
+        link_rows,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_ai_markdown(
+    args: &ReportArgs,
+    proj: &ProjectRoot,
+    db: &Db,
+    now: &str,
+    _cutoff: &str,
+    top: Vec<crate::repo::bugs::TopRow>,
+    alert_rows: Vec<crate::repo::alerts::Alert>,
+    correlation_rows: Vec<crate::repo::correlations::Correlation>,
+    link_rows: Vec<crate::repo::links::ManualLink>,
+) -> Result<String, Error> {
     let local_schema_version: i64 = db
         .conn()
         .query_row(
