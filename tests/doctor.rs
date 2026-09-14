@@ -41,8 +41,8 @@ fn doctor_exits_zero_on_fresh_init() {
 
 #[test]
 fn doctor_warns_on_missing_git_context() {
-    // The temp dir is not a Git worktree. The git check must be a WARN
-    // (not a FAIL) so the overall exit code is still 0.
+    // The temp dir is not a Git worktree. The git check is honest INFO
+    // (not WARN/FAIL) so the overall exit code is still 0.
     let tmp = init_dir();
     let out = driftwatch()
         .arg("doctor")
@@ -51,8 +51,8 @@ fn doctor_warns_on_missing_git_context() {
         .success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(
-        stdout.contains("[WARN] Git context unavailable"),
-        "expected git warn line: {stdout}"
+        stdout.contains("[INFO] Git context unavailable"),
+        "expected git info line: {stdout}"
     );
 }
 

@@ -1,7 +1,11 @@
 # release-distribution Specification
 
 ## Purpose
-TBD - created by archiving change linux-macos-distribution. Update Purpose after archive.
+Native release distribution for the driftwatchdog CLI: versioned archives,
+a mandatory-verify shell installer, an npm native launcher, documented
+install channels, and reproducible release automation. Releases publish with
+provenance, a single version source (tag == Cargo == npm), an SBOM, and a
+changelog entry.
 ## Requirements
 ### Requirement: Supported release artifacts
 

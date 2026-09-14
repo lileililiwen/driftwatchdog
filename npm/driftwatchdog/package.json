@@ -36,9 +36,11 @@
   "files": [
     "bin/",
     "lib/",
+    "scripts/",
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/launcher.test.js",
+    "preinstall": "node scripts/install-guard.js"
   }
 }

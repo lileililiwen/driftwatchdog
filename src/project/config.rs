@@ -121,7 +121,7 @@ fn suggest_field(unknown: &str) -> Option<&'static str> {
     let mut best: Option<(&'static str, usize)> = None;
     for &known in KNOWN_FIELDS {
         let d = edit_distance(unknown, known);
-        if d <= 3 && best.is_none_or(|(_, bd)| d < bd) {
+        if d <= 3 && best.map_or(true, |(_, bd)| d < bd) {
             best = Some((known, d));
         }
     }

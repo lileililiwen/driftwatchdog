@@ -12,6 +12,9 @@ use std::fmt;
 pub enum Status {
     /// Required check passed.
     Pass,
+    /// Unconfigured-but-ok state (e.g. no checkers yet). Informational:
+    /// never fails the run.
+    Info,
     /// Optional check did not pass but does not block the user.
     Warn,
     /// Required check failed; the user must address it.
@@ -22,6 +25,7 @@ impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Status::Pass => write!(f, "PASS"),
+            Status::Info => write!(f, "INFO"),
             Status::Warn => write!(f, "WARN"),
             Status::Fail => write!(f, "FAIL"),
         }
@@ -51,6 +55,16 @@ impl Check {
             name: name.into(),
             status: Status::Pass,
             detail: None,
+            remediation: None,
+        }
+    }
+
+    pub fn info(id: &'static str, name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            status: Status::Info,
+            detail: Some(detail.into()),
             remediation: None,
         }
     }

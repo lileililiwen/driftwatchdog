@@ -54,6 +54,13 @@ impl Report {
             .count()
     }
 
+    pub fn n_info(&self) -> usize {
+        self.checks
+            .iter()
+            .filter(|c| c.status == Status::Info)
+            .count()
+    }
+
     pub fn n_fail(&self) -> usize {
         self.checks
             .iter()
@@ -79,9 +86,10 @@ impl Report {
         s.push('\n');
         if self.exit_code == 0 {
             s.push_str(&format!(
-                "All {} checks passed ({} warnings).\n",
+                "All {} checks passed ({} warnings, {} info).\n",
                 self.n_pass(),
-                self.n_warn()
+                self.n_warn(),
+                self.n_info()
             ));
         } else {
             s.push_str(&format!(
@@ -206,10 +214,9 @@ fn check_git(proj: &ProjectRoot) -> Check {
         }
         Check::pass("git.available", "Git is available").with_remediation(detail)
     } else {
-        // Missing Git context is a Warn, not a Fail: the project can
-        // still be used without Git; reports just won't include
-        // commit metadata.
-        Check::warn(
+        // Missing Git context is honest INFO, not a warning: the
+        // project works without Git; reports just omit commit metadata.
+        Check::info(
             "git.available",
             "Git context unavailable",
             ctx.diagnostic
@@ -305,8 +312,13 @@ fn check_checkers(proj: &ProjectRoot) -> Vec<Check> {
     };
     if cfg.checkers.is_empty() {
         return vec![
-            Check::pass("checker.configured", "No external checkers configured").with_remediation(
-                "Add `[[checkers]]` entries to driftwatch.toml when you want drift alerts.",
+            Check::info(
+                "checker.configured",
+                "No external checkers configured",
+                "driftwatch runs without checkers; add [[checkers]] for drift alerts.",
+            )
+            .with_remediation(
+                "hint: add [[checkers]] to driftwatch.toml (see driftwatch.toml.example) or run with --dry-run",
             ),
         ];
     }

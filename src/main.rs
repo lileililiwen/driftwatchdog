@@ -4,6 +4,25 @@ use driftwatchdog::cli::{Cli, Command};
 use std::process::ExitCode;
 
 fn main() -> anyhow::Result<ExitCode> {
+    match run() {
+        Ok(code) => Ok(code),
+        Err(e) => {
+            // Single-wrap remediation: surface the library hint (if
+            // any) alongside the anyhow chain instead of burying it.
+            if let Some(lib) = e
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<driftwatchdog::error::Error>())
+            {
+                if let Some(hint) = lib.hint() {
+                    eprintln!("hint: {hint}");
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+fn run() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir().map_err(|e| anyhow::anyhow!("cwd: {e}"))?;
     let code = match cli.command {
@@ -34,6 +53,11 @@ fn main() -> anyhow::Result<ExitCode> {
             .with_context(|| "driftwatchdog link failed")?,
         Command::Unlink(args) => driftwatchdog::commands::unlink_cmd(args, &cwd)
             .with_context(|| "driftwatchdog unlink failed")?,
+        Command::Completions(args) => driftwatchdog::commands::completions_cmd(args)
+            .with_context(|| "driftwatchdog completions failed")?,
+        Command::Man(_) => {
+            driftwatchdog::commands::man_cmd().with_context(|| "driftwatchdog man failed")?
+        }
     };
     Ok(ExitCode::from(code as u8))
 }

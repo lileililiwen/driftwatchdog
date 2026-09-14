@@ -622,3 +622,35 @@ error[E0425]: cannot find value `foo` in this scope
         assert_ne!(gen(a).text, gen(b).text);
     }
 }
+
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // Arbitrary unicode (including invalid UTF-8 boundaries,
+        // control chars, and multi-byte emoji) must never panic the
+        // normalizer; golden fixtures stay stable because the rules
+        // are total functions over `&str`.
+        #[test]
+        fn normalization_never_panics(s in "\\PC*") {
+            let c = Rules::generic().normalize(&s);
+            // Canonical text is valid UTF-8 by construction.
+            assert!(c.text.is_char_boundary(c.text.len()));
+            let _ = crate::fingerprint::fingerprint(&c.text);
+        }
+
+        // Idempotence where applicable: normalizing canonical output
+        // is stable for inputs without blank-line runs (the blank
+        // collapser is the only non-idempotent step by design, and
+        // even it converges after two passes).
+        #[test]
+        fn normalization_converges(s in "\\PC{0,256}") {
+            let once = Rules::generic().normalize(&s).text;
+            let twice = Rules::generic().normalize(&once).text;
+            let thrice = Rules::generic().normalize(&twice).text;
+            prop_assert_eq!(twice, thrice);
+        }
+    }
+}

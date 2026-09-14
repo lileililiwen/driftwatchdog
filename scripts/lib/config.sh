@@ -1,4 +1,6 @@
 # shellcheck shell=sh
+# Sourcing rule: files under scripts/lib/ are sourced by executable
+# scripts (*.sh) and must NOT be executable (mode 644, enforced in CI).
 # Shared packaging configuration: version, target matrix, release URL.
 # Sourced by package.sh, checksum.sh, install.sh, and the GitHub workflow
 # (the workflow duplicates the matrix in YAML; this file is the source of

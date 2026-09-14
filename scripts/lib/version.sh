@@ -1,4 +1,6 @@
 # shellcheck shell=sh
+# Sourcing rule: files under scripts/lib/ are sourced by executable
+# scripts (*.sh) and must NOT be executable (mode 644, enforced in CI).
 # Read the package version from Cargo.toml. The crate's [package].version
 # field is the single source of truth for release versions, so this script
 # extracts it without depending on jq or any other JSON tool.

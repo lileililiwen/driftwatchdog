@@ -44,6 +44,8 @@ State is stored locally in .driftwatch/state.db. By default Driftwatchdog does n
 
 Driftwatchdog ships as a single native executable. The release distribution supports three installation channels; pick whichever fits your environment. All three install the same Rust binary; only the acquisition step differs. Network access is required only at install time, not at runtime.
 
+**Binary naming rule:** installs from Cargo, the shell installer, and direct downloads expose the binary as `driftwatchdog`; the npm launcher exposes the same binary as `driftwatch`. Examples below use `driftwatch`; replace with `driftwatchdog` when that is the binary on your `PATH`.
+
 Supported platforms:
 
 | Operating system | Architecture | Suffix        |
@@ -69,11 +71,15 @@ Pipes a small POSIX script from this repository, detects the host, downloads the
     curl -fsSL https://github.com/lileililiwen/driftwatchdog/releases/latest/download/install.sh \
       | sh -s -- --dest /opt/driftwatchdog --allow-root
 
-The installer refuses to run as root unless you pass `--allow-root`, refuses to install over an existing binary if checksum verification fails, and exits non-zero with the detected OS/architecture on unsupported hosts.
+    # Preview without downloading
+    curl -fsSL https://github.com/lileililiwen/driftwatchdog/releases/latest/download/install.sh \
+      | sh -s -- --dry-run
+
+The installer refuses to run as root unless you pass `--allow-root`, refuses to install over an existing binary if checksum verification fails, and exits non-zero with the detected OS/architecture on unsupported hosts. Verification is mandatory and cannot be skipped. On unsupported hosts (macOS arm64, Windows, musl Linux) it prints the supported target list and suggests the source-build fallback: `cargo install --locked driftwatchdog`.
 
 ### npm (Linux, macOS)
 
-The `driftwatchdog` npm package is a dependency-free launcher: it detects the host, downloads and verifies the matching native archive into a versioned cache, and forwards all arguments and the exit status to the native binary.
+The `driftwatchdog` npm package is a dependency-free launcher: it detects the host, downloads and verifies the matching native archive into a versioned cache, and forwards all arguments and the exit status to the native binary. After install the command is `driftwatch` (not `driftwatchdog`).
 
     npm i -g driftwatchdog
     driftwatch init      # the launcher exposes the binary as `driftwatch`
@@ -82,7 +88,7 @@ The `driftwatchdog` npm package is a dependency-free launcher: it detects the ho
     driftwatch list
     driftwatch report --ai
 
-The launcher reports unsupported hosts with the supported target list and points at the shell installer and direct downloads as alternatives. It does not execute an unverified binary and does not leave a failed download in the cache.
+The launcher reports unsupported hosts (including macOS arm64) with the supported target list and points at the shell installer, direct downloads, and `cargo install driftwatchdog` as alternatives. It does not execute an unverified binary and does not leave a failed download in the cache.
 
 ### Direct download
 
@@ -144,10 +150,24 @@ The AI report contains recurring failures, current spec violations, possible heu
     driftwatchdog export json|jsonl|markdown
     driftwatchdog gc [--days N]
     driftwatchdog doctor
+    driftwatchdog completions <shell>
+    driftwatchdog man
+
+Run `driftwatch --help` (or `driftwatch <command> --help`) for per-command
+examples. Shell completions cover bash, zsh, fish, powershell, and elvish;
+`driftwatch man` prints a man page to stdout.
 
 ## External checkers
 
-Driftwatchdog does not define a spec format. Configure existing local tools in driftwatch.toml
+Driftwatchdog does not define a spec format. Copy `driftwatch.toml.example`
+to `driftwatch.toml` and run `driftwatch check` — the bundled stub checker
+succeeds without edits:
+
+    cp driftwatch.toml.example driftwatch.toml
+    driftwatch check --dry-run
+    driftwatch check
+
+Configure existing local tools in driftwatch.toml
 (see `driftwatch.toml.example` for a copy-paste starter):
 
     [[checkers]]

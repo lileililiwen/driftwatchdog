@@ -67,4 +67,54 @@ impl Error {
             source,
         }
     }
+
+    /// Single-wrap remediation hint rendered by the binary as
+    /// `hint: <text>`. Every user-facing error carries one so terse
+    /// messages always point at a next step.
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Error::Io { path, .. } => Some(format!(
+                "check permissions on `{}`",
+                path.display()
+            )),
+            Error::IoBare(_) => None,
+            Error::ConfigParse { path, .. } | Error::ConfigInvalid { path, .. } => {
+                Some(format!(
+                    "edit `{}` to fix the error, or compare with `driftwatch.toml.example`",
+                    path.display()
+                ))
+            }
+            Error::ConfigSerialize(_) => {
+                Some("check for non-UTF8 or unserializable config values".into())
+            }
+            Error::Json(_) => Some("verify the checker emits a single JSON document".into()),
+            Error::Sqlite(_) => Some(
+                "run `driftwatch doctor`; if the DB is corrupt, delete `.driftwatch/state.db` and run `driftwatch init` again".into(),
+            ),
+            Error::ProjectRootNotFound { start } => Some(format!(
+                "run `driftwatch init` under `{}` to create a project",
+                start.display()
+            )),
+            Error::Migration { version, .. } => Some(format!(
+                "migration {version} failed; back up `.driftwatch/state.db` and re-run"
+            )),
+            Error::BugNotFound { .. } => Some(
+                "try 'driftwatch list' or 'driftwatch top' to find the bug (prefix needs 8+ hex chars)".into(),
+            ),
+            Error::BugAmbiguous { .. } => Some(
+                "use a longer hash prefix from 'driftwatch top'".into(),
+            ),
+            Error::DuplicateLink { .. } => {
+                Some("the pair is already linked; use 'driftwatch unlink <id>' to remove it first".into())
+            }
+            Error::LinkTarget { side, .. } => Some(match *side {
+                "bug" => "use 'bug:<hash8>', a bare hash prefix, or 'id:<n>'",
+                _ => "use 'spec:<id>' with a numeric drift_alerts.id",
+            }
+            .into()),
+            Error::ManualLinkNotFound { .. } => {
+                Some("list links via `driftwatch report --ai` to find the id".into())
+            }
+        }
+    }
 }

@@ -2,12 +2,28 @@
 //!
 //! `clap` derive produces `--help` and validation; the binary calls into
 //! the library for behavior.
+//!
+//! Binary naming rule: installs from Cargo, the shell installer, and
+//! direct downloads expose the binary as `driftwatchdog`; the npm
+//! launcher exposes the same binary as `driftwatch`. Examples below
+//! use `driftwatch`; replace with `driftwatchdog` when that is the
+//! binary on your `PATH`.
 
 use clap::{Args, Parser, Subcommand};
 
 /// Driftwatch: local-first runtime failure memory.
+///
+/// Records failed commands, recognizes recurring bugs, consumes
+/// external spec-checker results, and produces context that humans
+/// and coding agents can act on. State lives under `.driftwatch/`;
+/// nothing is uploaded and no LLM is called.
 #[derive(Debug, Parser)]
-#[command(name = "driftwatch", version, about, long_about = None)]
+#[command(
+    name = "driftwatch",
+    version,
+    about,
+    long_about = "Local-first runtime failure memory for AI-assisted coding workflows.\n\nExamples:\n  driftwatch init\n  driftwatch run cargo test\n  driftwatch top\n  driftwatch show abcdef12\n  driftwatch report --ai > drift.md\n  driftwatch check --dry-run"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -39,6 +55,10 @@ pub enum Command {
     Link(LinkArgs),
     /// Remove a manual link by id.
     Unlink(UnlinkArgs),
+    /// Print shell completions for the given shell to stdout.
+    Completions(CompletionsArgs),
+    /// Print a man page for the CLI to stdout.
+    Man(ManArgs),
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -50,6 +70,9 @@ pub struct InitArgs {
 
 /// `driftwatch run [--tag <tag>]... <program> [args...]`
 #[derive(Debug, Args, Default, Clone)]
+#[command(
+    after_help = "Examples:\n  driftwatch run cargo test\n  driftwatch run --tag db pytest -x\n  driftwatch run --timeout-ms 60000 npm test"
+)]
 pub struct RunArgs {
     /// Optional tag, repeatable. Stored alongside the run row.
     #[arg(long, value_name = "TAG")]
@@ -114,6 +137,9 @@ pub struct ShowArgs {
 
 /// `driftwatch report [--limit N] [--days N] [--tag TAG]`
 #[derive(Debug, Args, Default, Clone)]
+#[command(
+    after_help = "Examples:\n  driftwatch report\n  driftwatch report --ai > drift.md\n  driftwatch report --days 7 --tag db"
+)]
 pub struct ReportArgs {
     /// Maximum fingerprints to include.
     #[arg(long, default_value_t = 20)]
@@ -165,6 +191,9 @@ pub struct DoctorArgs {}
 
 /// `driftwatch check [--only NAMES] [--dry-run]`
 #[derive(Debug, Args, Default, Clone)]
+#[command(
+    after_help = "Examples:\n  driftwatch check\n  driftwatch check --dry-run\n  driftwatch check --only architecture"
+)]
 pub struct CheckArgs {
     /// Restrict to the named checkers. Repeat to include more than one,
     /// or supply a single comma-separated list. When omitted, every
@@ -186,6 +215,9 @@ pub struct CheckArgs {
 /// to the numeric id when no hash matches. The spec side accepts
 /// the numeric `drift_alerts.id`.
 #[derive(Debug, Args, Clone)]
+#[command(
+    after_help = "Examples:\n  driftwatch link bug:abcdef12 spec:42 --note \"see issue #108\"\n  driftwatch link id:7 spec:3"
+)]
 pub struct LinkArgs {
     /// Bug reference. Forms: `bug:<id>`, `id:<n>`, or bare hash prefix.
     pub bug: String,
@@ -202,3 +234,25 @@ pub struct UnlinkArgs {
     /// Numeric `manual_links.id` to remove.
     pub link_id: i64,
 }
+
+/// `driftwatch completions <shell>` where `<shell>` is one of
+/// `bash`, `zsh`, `fish`, `powershell`, or `elvish`.
+#[derive(Debug, Args, Clone)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for.
+    #[arg(value_enum, value_name = "SHELL")]
+    pub shell: CompletionShell,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+    Powershell,
+    Elvish,
+}
+
+/// `driftwatch man` — no flags.
+#[derive(Debug, Args, Default, Clone)]
+pub struct ManArgs {}

@@ -1,9 +1,10 @@
 name: ci
 
 # Continuous-integration gates for every push and pull request.
-# Rust side: formatting check, clippy (warnings are errors), and the
-# full workspace test suite. npm side: the launcher unit tests that
-# exercise lib/platform.js, lib/release.js and lib/verify.js.
+# Rust side: formatting check, clippy (warnings are errors, all
+# features), the full workspace test suite, MSRV check, cargo-deny,
+# and coverage. Packaging side: shellcheck, npm audit, launcher
+# tests, and the end-to-end smoke test.
 
 on:
   push:
@@ -37,14 +38,112 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy (warnings as errors)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (warnings as errors, all features)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
         run: cargo test --workspace
 
+  msrv:
+    name: msrv (rust 1.74)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned MSRV toolchain
+        uses: dtolnay/rust-toolchain@1.74
+        with:
+          components: clippy
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check MSRV build
+        run: cargo check --workspace --all-targets
+
+  deny:
+    name: cargo-deny (advisories, licenses)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Check advisories, licenses, bans, sources
+        run: cargo deny check
+
+  coverage:
+    name: coverage (tarpaulin)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Coverage report
+        run: cargo tarpaulin --workspace --out Stdout
+
+  macos:
+    name: macos (test on macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Test (macOS)
+        run: cargo test --workspace
+
+  shell:
+    name: shellcheck + script modes
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck packaging scripts
+        run: shellcheck scripts/*.sh scripts/lib/*.sh tests/packaging/*.sh tests/packaging.sh
+
+      - name: Enforce script modes (executable top-level, sourced lib)
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh tests/packaging/*.sh tests/packaging.sh; do
+            [ -x "$f" ] || { echo "not executable: $f" >&2; exit 1; }
+          done
+          for f in scripts/lib/*.sh; do
+            [ ! -x "$f" ] || { echo "lib file must be sourced, not executed: $f" >&2; exit 1; }
+          done
+
   npm:
-    name: npm launcher tests
+    name: npm launcher tests + audit
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -57,3 +156,24 @@ jobs:
       - name: Run launcher tests
         working-directory: npm/driftwatchdog
         run: npm test
+
+      - name: npm audit
+        working-directory: npm/driftwatchdog
+        run: npm audit --omit=dev
+
+  smoke:
+    name: release smoke test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run smoke test
+        run: sh scripts/smoke.sh

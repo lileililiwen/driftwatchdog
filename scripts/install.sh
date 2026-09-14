@@ -4,7 +4,8 @@
 # Usage:
 #   curl -fsSL https://github.com/lileililiwen/driftwatchdog/releases/latest/download/install.sh | sh
 #   curl -fsSL .../install.sh | sh -s -- --version v0.1.0
-#   curl -fsSL .../install.sh | sh -s -- --dest /opt/driftwatchdog
+#   curl -fsSL .../install.sh | sh -s -- --dest /opt/driftwatchdog --allow-root
+#   curl -fsSL .../install.sh | sh -s -- --dry-run
 #
 # Detects the host operating system and architecture, downloads the
 # matching release archive and SHA-256 checksum manifest over HTTPS,
@@ -13,6 +14,9 @@
 # the destination is "${XDG_BIN_HOME:-$HOME/.local/bin}" and no root
 # privileges are required.
 #
+# `--dry-run` prints what would happen (target, version, destination)
+# without downloading or installing anything.
+#
 # Exits non-zero (and never replaces an existing binary) when:
 #   * the host is not in the supported target set,
 #   * the manifest or archive cannot be downloaded,
@@ -20,9 +24,14 @@
 #   * required tools (`tar`, `sha256sum`, `curl` or `wget`) are missing,
 #   * the destination is not writable.
 #
+# On unsupported hosts the installer prints the supported target list
+# and suggests `cargo install driftwatchdog` as a source-build
+# fallback (musl/Windows hosts are messaging-only; see README).
+#
 # The installer deliberately never `eval`s downloaded content. The only
 # things fetched from the network are the release archive and the
 # checksum manifest; both are verified before any local mutation.
+# Verification is mandatory and cannot be skipped.
 
 set -eu
 
@@ -35,7 +44,6 @@ requested_version="latest"
 dest_dir=""
 allow_root=0
 dry_run=0
-skip_verify=0
 
 # Print usage to stderr and exit 64 (EX_USAGE).
 usage() {
@@ -184,6 +192,7 @@ else
     fi
     if ! target=$(driftwatch_target_for "$os" "$arch"); then
         err "supported targets: $(driftwatch_supported_targets | tr '\n' ' ')"
+        err "fallback: cargo install --locked driftwatchdog (builds from source on unsupported hosts)"
         die "host os=$os arch=$arch is not in the supported set"
     fi
 fi
@@ -232,6 +241,21 @@ archive_name=$(driftwatch_archive_name "$version" "$target")
 manifest_url="$base/$manifest_name"
 archive_url="$base/$archive_name"
 
+# Decide destination early so --dry-run can report it.
+if [ -z "$dest_dir" ]; then
+    dest_dir=$DRIFTWATCH_DEFAULT_DEST
+fi
+
+# Dry run: report what would happen without any network or mutation.
+if [ "$dry_run" -eq 1 ]; then
+    printf 'install: target=%s version=%s\n' "$target" "$version_tag" >&2
+    printf 'install: manifest=%s\n' "$manifest_url" >&2
+    printf 'install: archive=%s\n' "$archive_url" >&2
+    printf 'install: (dry-run) would install to %s/driftwatchdog\n' "$dest_dir" >&2
+    printf '%s/driftwatchdog\n' "$dest_dir"
+    exit 0
+fi
+
 # Choose a downloader. Prefer curl; fall back to wget.
 fetch() {
     url=$1
@@ -249,10 +273,8 @@ fetch() {
 work_dir=$(mktemp -d 2>/dev/null) || die "failed to create temporary directory"
 trap 'rm -rf "$work_dir"' EXIT INT TERM
 
-if [ "$skip_verify" -eq 0 ]; then
-    if ! command -v sha256sum >/dev/null 2>&1; then
-        die "sha256sum is required for verification"
-    fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+    die "sha256sum is required for verification"
 fi
 
 if ! command -v tar >/dev/null 2>&1; then
@@ -277,16 +299,9 @@ printf 'install: fetching archive %s\n' "$archive_url" >&2
 fetch "$archive_url" "$work_dir/$archive_name" \
     || die "failed to download archive $archive_url"
 
-if [ "$skip_verify" -eq 0 ]; then
-    actual_hash=$(sha256sum "$work_dir/$archive_name" | awk '{print $1}')
-    if [ "$actual_hash" != "$expected_hash" ]; then
-        die "checksum mismatch: expected $expected_hash got $actual_hash"
-    fi
-fi
-
-# Decide destination.
-if [ -z "$dest_dir" ]; then
-    dest_dir=$DRIFTWATCH_DEFAULT_DEST
+actual_hash=$(sha256sum "$work_dir/$archive_name" | awk '{print $1}')
+if [ "$actual_hash" != "$expected_hash" ]; then
+    die "checksum mismatch: expected $expected_hash got $actual_hash"
 fi
 
 # Root safety. Refuse to install as root unless explicitly allowed so
@@ -296,11 +311,7 @@ if [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ] && [ "$allow_root" -eq 0 ]; then
 fi
 
 if [ ! -d "$dest_dir" ]; then
-    if [ "$dry_run" -eq 1 ]; then
-        printf 'install: (dry-run) would create %s\n' "$dest_dir" >&2
-    else
-        mkdir -p "$dest_dir" || die "failed to create destination $dest_dir"
-    fi
+    mkdir -p "$dest_dir" || die "failed to create destination $dest_dir"
 fi
 
 if [ ! -w "$dest_dir" ]; then
@@ -320,12 +331,6 @@ binary_path="$dest_dir/driftwatchdog"
 tmp_binary="$work_dir/${expected_top}/driftwatchdog"
 if [ ! -x "$tmp_binary" ]; then
     die "extracted binary is missing or not executable"
-fi
-
-if [ "$dry_run" -eq 1 ]; then
-    printf 'install: (dry-run) would install to %s\n' "$binary_path" >&2
-    printf '%s\n' "$binary_path"
-    exit 0
 fi
 
 # Atomic install. Move the new binary into a sibling temp path first,

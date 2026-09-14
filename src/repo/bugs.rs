@@ -225,7 +225,8 @@ impl<'a> Bugs<'a> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = std::iter::repeat_n("?", ids.len())
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(

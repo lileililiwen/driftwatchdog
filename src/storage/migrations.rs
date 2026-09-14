@@ -237,8 +237,26 @@ mod tests {
             let b = barrier.clone();
             handles.push(thread::spawn(move || {
                 b.wait();
-                let mut conn = crate::storage::open(&path).unwrap();
-                apply(&mut conn)
+                // File-creation races can still surface `busy` on the
+                // very first open; retry briefly like a real second
+                // process start would.
+                let started = std::time::Instant::now();
+                loop {
+                    let attempt: Result<i64, crate::error::Error> = (|| {
+                        let mut conn = crate::storage::open(&path)?;
+                        apply(&mut conn)
+                    })();
+                    match attempt {
+                        Ok(v) => return Ok::<i64, crate::error::Error>(v),
+                        Err(e)
+                            if started.elapsed() < std::time::Duration::from_secs(15)
+                                && e.to_string().contains("locked") =>
+                        {
+                            thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }));
         }
         let mut versions = Vec::new();

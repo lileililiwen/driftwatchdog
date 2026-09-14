@@ -51,28 +51,32 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: 'Precondition: REPO_PAT is configured'
+        id: pat
         env:
           PAT: ${{ secrets.REPO_PAT }}
         run: |
           set -euo pipefail
           if [ -z "$PAT" ]; then
-              printf '::error::REPO_PAT secret is not set on this repository.\n' >&2
+              printf '::notice::REPO_PAT secret is not set; skipping auto-tag.\n' >&2
               printf 'Create one at: https://github.com/%s/settings/secrets/actions\n' \
                   "${{ github.repository }}" >&2
-              printf 'Name: REPO_PAT. Required scope: contents: write (or `repo` for classic PAT).\n' >&2
-              exit 1
+              echo 'skip=true' >> "$GITHUB_OUTPUT"
+              exit 0
           fi
           # Mask the token so it does not leak into the run log even
           # by accident; actions/checkout and the tag-push step use
           # it via ${{ secrets.REPO_PAT }} so this is belt-and-braces.
           echo "::add-mask::$PAT"
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v5
+        if: steps.pat.outputs.skip != 'true'
         with:
           fetch-depth: 0
           token: ${{ secrets.REPO_PAT }}
 
       - name: Skip if commit subject contains [no-release]
+        if: steps.pat.outputs.skip != 'true'
         id: skip
         run: |
           set -euo pipefail
@@ -88,7 +92,7 @@ jobs:
           esac
 
       - name: Compute next version
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.pat.outputs.skip != 'true' && steps.skip.outputs.skip != 'true'
         id: version
         env:
           BUMP: ${{ github.event.inputs.bump != '' && github.event.inputs.bump != 'auto' && github.event.inputs.bump || '' }}
@@ -106,13 +110,18 @@ jobs:
           echo "tag=v$next" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.pat.outputs.skip != 'true' && steps.skip.outputs.skip != 'true'
         env:
           TAG: v${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           if git rev-parse "$TAG" >/dev/null 2>&1; then
               printf 'tag %s already exists locally; nothing to do\n' "$TAG"
+              exit 0
+          fi
+          # No tag-spam: skip when the tag already exists on the remote.
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+              printf 'tag %s already exists on remote; nothing to do\n' "$TAG"
               exit 0
           fi
           git config user.name 'github-actions[bot]'

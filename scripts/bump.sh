@@ -14,7 +14,7 @@
 #   Set BUMP=major | minor | patch to force a specific bump level.
 #
 # Echoes the bare version (no leading "v") on stdout, e.g. "0.1.3".
-# Exits non-zero if no prior tag exists or the latest tag is malformed.
+# Cold start: with no prior tag, emits the initial version 0.1.0.
 
 set -eu
 
@@ -32,8 +32,8 @@ fi
 # when it was made.
 latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
 if [ -z "$latest_tag" ]; then
-    printf 'no prior vX.Y.Z tag found; create the first one by hand\n' >&2
-    exit 1
+    printf '0.1.0\n'
+    exit 0
 fi
 case "$latest_tag" in
     v*.*.*) ;;

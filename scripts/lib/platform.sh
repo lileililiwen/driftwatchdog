@@ -1,4 +1,6 @@
 # shellcheck shell=sh
+# Sourcing rule: files under scripts/lib/ are sourced by executable
+# scripts (*.sh) and must NOT be executable (mode 644, enforced in CI).
 # Target selection: map (os, arch) tuples produced by `uname` to the
 # driftwatchdog artifact suffix used in release archive names. Used by the
 # shell installer to pick the right download for the current host and by

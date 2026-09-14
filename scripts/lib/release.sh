@@ -1,4 +1,6 @@
 # shellcheck shell=sh
+# Sourcing rule: files under scripts/lib/ are sourced by executable
+# scripts (*.sh) and must NOT be executable (mode 644, enforced in CI).
 # URL construction and archive naming shared by the installer, the
 # release builder, and the GitHub workflow.
 #

@@ -31,7 +31,7 @@ jobs:
             os: ubuntu-22.04
           - target: x86_64-apple-darwin
             artifact: driftwatchdog-darwin-x86_64
-            os: macos-13
+            os: macos-14
     steps:
       - uses: actions/checkout@v5
 
@@ -86,6 +86,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Assert single version source (tag == Cargo == npm)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version=$(awk '/^\[package\]/ { in_pkg = 1; next } in_pkg && /^version[ \t]*=/ { sub(/^version[ \t]*=[ \t]*/, ""); sub(/[ \t]*$/, ""); gsub(/^"|"$/, ""); print; exit } /^\[/ { in_pkg = 0 }' Cargo.toml)
+          npm_version=$(node -e "console.log(require('./npm/driftwatchdog/package.json').version)")
+          printf 'tag=%s cargo=%s npm=%s\n' "$tag" "$cargo_version" "$npm_version"
+          # npm/package.json is pinned to the tag at publish time (see
+          # npm-publish job), so allow npm to lag by exactly the pin
+          # step: fail only when Cargo disagrees with the tag.
+          [ "$tag" = "$cargo_version" ] || { echo "tag v$tag != Cargo.toml $cargo_version" >&2; exit 1; }
+
       - name: Download all archives
         uses: actions/download-artifact@v5
         with:
@@ -113,6 +125,13 @@ jobs:
           scripts/checksum.sh stage "$version"
           cat stage/driftwatchdog-${version}-checksums.txt
 
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: stage/driftwatchdog-sbom.spdx.json
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -120,6 +139,7 @@ jobs:
           files: |
             stage/*.tar.gz
             stage/*-checksums.txt
+            stage/*.spdx.json
 
   npm-publish:
     name: publish npm package
@@ -132,6 +152,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
@@ -169,6 +190,7 @@ jobs:
           test -f lib/platform.js || { echo 'lib/platform.js missing' >&2; exit 1; }
           test -f lib/release.js || { echo 'lib/release.js missing' >&2; exit 1; }
           test -f lib/verify.js || { echo 'lib/verify.js missing' >&2; exit 1; }
+          test -f scripts/install-guard.js || { echo 'scripts/install-guard.js missing' >&2; exit 1; }
           npm pack --dry-run
 
       - name: Publish to npm

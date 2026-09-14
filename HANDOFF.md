@@ -5,10 +5,11 @@
 After implementing a change and ticking every box in its `tasks.md`, follow the closing sequence in `AGENTS.md` ("Change completion workflow"):
 
 1. Verification gates: `cargo fmt --check && cargo test && cargo clippy --all-targets --all-features -- -D warnings && openspec validate --changes --strict --no-interactive`.
-2. `openspec archive <change> -y` (drop `--skip-specs` only if the change adds or modifies a `spec.md` capability).
-3. `git add -A && git commit -m "Implement <change>"`.
-4. Update this file (status, next action, module map) and commit: `git add HANDOFF.md && git commit -m "Update HANDOFF after <change>"`.
-5. Re-run `openspec validate --changes --strict --no-interactive`.
+2. Confirm `openspec/changes/<change>/tasks.md` has every box ticked.
+3. `openspec archive <change> -y` (drop `--skip-specs` only if the change adds or modifies a `spec.md` capability).
+4. `git add -A && git commit -m "Implement <change>"`.
+5. Update this file (status, next action, module map) and commit: `git add HANDOFF.md && git commit -m "Update HANDOFF after <change>"`.
+6. Re-run `openspec validate --changes --strict --no-interactive`.
 
 ## Current state
 

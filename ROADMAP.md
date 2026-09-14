@@ -33,6 +33,7 @@ The following change packages have been implemented and archived:
 - `checker-and-drift-alerts` — External checker protocol, adapters, snapshots, alerts, `driftwatch check`.
 - `correlation-and-ai-context` — Heuristic correlation, manual `link`/`unlink`, and `driftwatch report --ai`.
 - `linux-macos-distribution` — Shell installer, npm launcher, GitHub Actions release workflow, and SHA-256-verified archives for Linux x86_64, Linux arm64, and macOS x86_64.
+- `ci-test-gates` — CI gates: fmt check, clippy with `-D warnings`, and the full test suite on every push/PR.
 
 ## Change dependency graph
 
