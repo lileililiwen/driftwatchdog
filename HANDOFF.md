@@ -20,6 +20,26 @@ through the generic Gate contract, project configuration, evidence, toolchain
 execution, adapters, context providers, AI evaluation, and local CLI/history
 integration. The first Gate contract is now implemented (see below).
 
+The `evidence-and-artifacts` change is **implemented and archived**
+(2026-09-14): new `src/gate/evidence.rs` (typed artifact classes,
+`sha256:` digests, state-root-confined writes via temp+rename,
+configured-secret + pattern redaction with bounded UTF-8-safe previews,
+adapter-path escape rejection, `ArtifactRecord::unavailable` markers, and
+the `evidence_backed_pass` guard so missing/unavailable evidence never
+claims evidence-backed `PASS`), new `src/repo/evidence.rs`
+(`gate_artifacts` identity rows, idempotent insert-or-get on
+`UNIQUE(key)`, retention prune that deletes files but keeps rows),
+migration 0005 (`gate_artifacts` + index; local schema version now 5),
+export schema v3 (`gate_artifacts` metadata in json/jsonl/markdown, v2
+documents stay readable via `#[serde(default)]`), and `driftwatch gc`
+pruning artifact files with metadata retained. Report and MCP read paths
+are verified unchanged. 30+ new tests cover secrets, escapes, caps,
+cleanup, and unavailable artifacts.
+`driftwatch.toml` checker execution is untouched. Five Gate planning
+packages remain; the next in dependency order is
+`toolchain-management-and-execution` and proceeds automatically under
+the standing auto-mode authorization in `AGENTS.md`.
+
 The `gate-project-configuration` change is **implemented and archived**
 (2026-09-14): new `src/gate/manifest.rs` (strict `gate.toml` parsing with
 `did-you-mean` unknown-field diagnostics, `backend`/`frontend`/`full`/
@@ -89,6 +109,7 @@ Read these in order:
 | github-actions-templates | archived 2026-09-14 | Reusable `templates/github-actions/driftwatch-check.yml` (`workflow_call` + `workflow_dispatch`) that pins a `driftwatchdog` install, always renders the AI report, uploads only `drift.md`, summarises `top` into the step summary, with `contents: read` and the `fail_on_drift`/`upload_report` inputs; shape test in `tests/packaging/test_gha_templates.sh` | mcp-read-tools (stable CLI only) |
 | generic-gate-contract | archived 2026-09-14 | Generic gate domain types, versioned JSON DTOs, deterministic blocking aggregation, bounded evidence refs with secret redaction, checker-outcome adapter; `src/gate/` + 24 tests | bfs-dfs-bfs-change-workflow |
 | gate-project-configuration | archived 2026-09-14 | Project Gate manifest (`gate.toml`): profiles, explicit checks, project commands, triggers, rule-pack identity, dry-run plan; `src/gate/manifest.rs` + 15 tests; `driftwatch.toml` execution untouched | generic-gate-contract |
+| evidence-and-artifacts | archived 2026-09-14 | Bounded Gate evidence (`src/gate/evidence.rs` + `src/repo/evidence.rs`, migration 0005, export v3, gc prune); 30+ tests; `driftwatch.toml` execution untouched | gate-project-configuration |
 
 ## Implementation constraints
 
@@ -106,9 +127,9 @@ Read these in order:
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 435 tests pass: lib + integration (incl. packaging; +24 gate-contract, +15 gate-manifest)
+    cargo test             # 456 tests pass: lib + integration (incl. packaging; +24 gate-contract, +15 gate-manifest, +30 evidence/artifact)
     cargo clippy --all-targets --all-features -- -D warnings
-    openspec validate --changes --strict --no-interactive   # 6/6 pass (remaining planning queue)
+    openspec validate --changes --strict --no-interactive   # 5/5 pass (remaining planning queue)
     sh tests/packaging.sh   # 6/6 pass: target_mapping, artifact_naming, checksum_manifest, installer, repo_hygiene, agent_examples
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
@@ -137,9 +158,10 @@ Last run on this change:
 - `src/project/git.rs` — `GitContext`, `capture(cwd)`, non-fatal failures.
 - `src/project/init.rs` — `init`/`init_at` orchestration, idempotent.
 - `src/storage/mod.rs` — `open(path)` with PRAGMAs (WAL, NORMAL, foreign_keys=ON).
-- `src/storage/migrations.rs` — versioned migration runner (applies 1 + 2 + 3).
+- `src/storage/migrations.rs` — versioned migration runner (applies 1 + 2 + 3 + 4 + 5).
 - `src/storage/schema.rs` — `MIGRATION_0001_BASELINE`, `MIGRATION_0002_SNAPSHOT_GIT`, `MIGRATION_0003_CORRELATION_DETAIL`.
 - `src/repo/mod.rs` — `Db` wrapper, `open`, `open_in_memory`, `conn`, `conn_mut`.
+- `src/repo/evidence.rs` — `Artifacts::{count,insert_or_get,get_by_key,list_all,list_all_with_ids,mark_unavailable,prune_before}` over `gate_artifacts`; prune deletes files under the state dir and flips rows to unavailable, never deleting identity.
 - `src/repo/runs.rs` — `RunRecord`, `RunStatus` (`Running`/`Success`/`Failed`/`StartFailed`/`Signalled`/`Timeout`), `RunCompletion`, `ListFilter`; `Runs::{reserve,find,insert_full,list,all}`.
 - `src/repo/bugs.rs` — `Fingerprint`, `TopRow`, `Occurrence`, `RecentCommit`, `Report`; `Bugs::{...}` plus `current_fingerprints` and `tags_for`.
 - `src/repo/alerts.rs` — `Snapshot`, `Alert`, `NewSnapshot`, `NewAlert`; `Alerts::{snapshot_count,alert_count,list_snapshots,list_alerts,latest_snapshot_for,insert_snapshot,insert_alerts,record_run}` plus `current_alerts`.
@@ -147,7 +169,7 @@ Last run on this change:
 - `src/repo/links.rs` — `ManualLink`; `Links::{list_all,count,find_by_id,create,delete,list_for_fingerprint,list_for_alert}`.
 - `src/similarity/{mod,tokenize,score,candidates}.rs` — heuristic engine: tokenization, Jaccard, weighted `score_pair`, N×M candidate generation with 5,000-pair cap.
 - `src/correlate.rs` — `run_after_check` orchestration: loads fingerprints + alerts, runs the candidate generator, persists passing pairs.
-- `src/export/{dto,build,json,jsonl,markdown,mod}.rs` — versioned export DTOs (`SCHEMA_VERSION = 2`) and three serializers.
+- `src/export/{dto,build,json,jsonl,markdown,mod}.rs` — versioned export DTOs (`SCHEMA_VERSION = 3`, incl. `GateArtifactExport` + `gate_artifacts` array with `#[serde(default)]` for v2 reads) and three serializers (jsonl `gate_artifact` records, markdown `## Gate evidence` section).
 - `src/doctor/{check,mod}.rs` — `Check`, `Status`, and the `Report` aggregator. Includes a `checker.last_run` warn when the most recent check snapshot for a configured checker was a failure.
 - `src/checker/mod.rs` — public module: `protocol`, `runner`, `report` re-exports.
 - `src/checker/protocol.rs` — `DriftAlert`, `AlertsDocument`, `ProtocolError`, `parse_alerts_document`.
@@ -155,6 +177,7 @@ Last run on this change:
 - `src/checker/report.rs` — `Status`, `Severity`, `CheckerOutcome`, `label_for_status`.
 - `src/gate/{mod,types,dto,aggregate,redact,adapt}.rs` — generic gate contract (`GateStatus`/`GateSeverity`/`Finding`/`EvidenceRef`/`GateResult`, `GATE_CONTRACT_VERSION = 1` JSON boundary with size caps, deterministic `aggregate` with `BlockingPolicy`, secret-redacting bounded diagnostics, `adapt_checker_outcome` mapping Empty→PASS / Success→FAIL / infra-failure→REVIEW_REQUIRED); no OpenSpec dependency, no storage migration, no CLI surface yet.
 - `src/gate/manifest.rs` — project Gate manifest (`GateManifest`/`ManifestCheck`/`Trigger`/`ResolvedGatePlan`, `parse`/`resolve`/`render_plan`/`load`/`manifest_path`); `gate.toml` at project root preferred over `.driftwatch/gate.toml`, missing manifest is `Ok(None)`; `driftwatch.toml` execution untouched; no tool install, no network, no OpenSpec types.
+- `src/gate/evidence.rs` — bounded evidence domain (`ArtifactKind`/`ArtifactRecord`/`NewArtifact`/`EvidenceError`, `MAX_ARTIFACT_BYTES = 1 MiB`, `MAX_PREVIEW_BYTES = 1024`, `build_record`/`store_bytes` via temp+rename, `confine_adapter_path`/`confined_path` escape rejection, `redact_secrets_with_extra` previews, `evidence_backed_pass` guard, `UNAVAILABLE_PREVIEW` marker); no OpenSpec types, no tool install, no network.
 - `src/runtime/runner.rs` — `CommandSpec` (incl. opt-in `timeout_ms`), `CapturedStream`, `RunOutcome` (incl. `timed_out` + `diagnostic`), `run`; byte-accumulating UTF-8-once drain, signal-aware status, process-group kill on timeout.
 - `src/util.rs` — `truncate_char_boundary` shared helper (byte limit, char-boundary cut, ellipsis).
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
@@ -202,16 +225,18 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 (`mcp-read-tools`, `agent-examples`, `github-actions-templates`) are
 archived as of 2026-09-14, the packaging suite runs 8/8 green (incl.
 `change_workflow`), and
-the Rust test suite passes (435 tests, incl. 24 gate-contract + 15
-gate-manifest). The first
-three v1.1 Engineering Gate packages, **`bfs-dfs-bfs-change-workflow`,
-`generic-gate-contract`, and `gate-project-configuration`, are implemented
+the Rust test suite passes (460+ tests, incl. 24 gate-contract + 15
+gate-manifest + 30 evidence/artifact). The first
+four v1.1 Engineering Gate packages, **`bfs-dfs-bfs-change-workflow`,
+`generic-gate-contract`, `gate-project-configuration`, and
+`evidence-and-artifacts`, are implemented
 and archived** as of 2026-09-14.
-Six planning-only packages remain, covering evidence,
+Five planning-only packages remain, covering
 toolchain execution, adapters, generic context providers, optional AI
-evaluation, and local CLI/history integration. The queue must be executed
-one change at a time after authorization; next in dependency order is
-`evidence-and-artifacts`.
+evaluation, and local CLI/history integration. The queue proceeds one
+change at a time under the standing auto-mode authorization in
+`AGENTS.md`; next in dependency order is
+`toolchain-management-and-execution`.
 
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.
