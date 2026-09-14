@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod error;
 pub mod export;
 pub mod fingerprint;
+pub mod gate;
 pub mod mcp;
 pub mod project;
 pub mod repo;
