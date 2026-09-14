@@ -1,0 +1,133 @@
+name: driftwatch-check
+
+# Reusable Driftwatch check workflow. Installs a pinned
+# `driftwatchdog` binary, runs the configured external checkers,
+# always renders the AI-context report, and uploads it as a
+# single artifact. `state.db` and command logs are deliberately
+# NOT published.
+#
+# Two trigger surfaces:
+#   * workflow_call — reuse from another workflow with `uses:`
+#   * workflow_dispatch — run manually from the Actions tab
+#
+# Inputs:
+#   version         Driftwatch version to install. Default: "latest"
+#                   (any vX.Y.Z or X.Y.Z is also accepted by the
+#                   installer).
+#   fail_on_drift   When true, a non-zero `driftwatch check` exit
+#                   code fails the job. Default: false (drift
+#                   findings are informational; the report still
+#                   uploads and the top bugs are summarised).
+#   upload_report   Whether to upload `drift.md` as an artifact.
+#                   Default: true. When false the report is still
+#                   rendered and summarised in the job log.
+#
+# Required permission: `contents: read`.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Driftwatch version to install (e.g. v0.6.0).'
+        required: false
+        type: string
+        default: 'latest'
+      fail_on_drift:
+        description: 'Fail the job when `driftwatch check` exits non-zero.'
+        required: false
+        type: boolean
+        default: false
+      upload_report:
+        description: 'Upload `drift.md` as a workflow artifact.'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      # None required; declared so callers can document any future
+      # secret propagation without changing the call site.
+      inherit: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Driftwatch version to install (e.g. v0.6.0).'
+        required: false
+        type: string
+        default: 'latest'
+      fail_on_drift:
+        description: 'Fail the job when `driftwatch check` exits non-zero.'
+        required: false
+        type: boolean
+        default: false
+      upload_report:
+        description: 'Upload `drift.md` as a workflow artifact.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: driftwatch check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pinned driftwatchdog
+        env:
+          DRIFTWATCH_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Release base is the same one the npm launcher and the
+          # shell installer use; keep them in sync.
+          base="https://github.com/lileililiwen/driftwatchdog/releases/latest/download"
+          curl -fsSL -o install.sh "${base}/install.sh"
+          sh install.sh --version "${DRIFTWATCH_VERSION}"
+          command -v driftwatchdog >/dev/null || {
+            echo "driftwatchdog not on PATH after install" >&2
+            exit 1
+          }
+
+      - name: Run driftwatch check
+        id: check
+        # `continue-on-error` so the report always renders and
+        # uploads even when checkers find drift. The exit-code
+        # contract lives in `fail_on_drift` below.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          driftwatch check
+
+      - name: Render AI report
+        if: always()
+        # `if: always()` ensures the report uploads even when
+        # the check step above failed.
+        run: |
+          set -euo pipefail
+          driftwatch report --ai > drift.md
+          echo "report: $(wc -c < drift.md) bytes"
+
+      - name: Upload AI report
+        if: always() && inputs.upload_report
+        uses: actions/upload-artifact@v5
+        with:
+          name: drift-report
+          path: drift.md
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarise top bugs
+        if: always()
+        run: |
+          {
+            echo "## Driftwatch top bugs"
+            echo ""
+            echo '```'
+            driftwatch top --limit 5 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce fail_on_drift contract
+        if: inputs.fail_on_drift && steps.check.outcome == 'failure'
+        run: |
+          echo "fail_on_drift=true and driftwatch check failed" >&2
+          exit 1

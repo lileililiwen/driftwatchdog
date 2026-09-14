@@ -209,6 +209,45 @@ caveats, and `tests/packaging/test_agent_examples.sh` for the
 consistency test that guards every JSON fragment and every
 referenced subcommand.
 
+## Continuous integration
+
+A reusable GitHub Actions workflow lives at
+`templates/github-actions/driftwatch-check.yml`. It installs a
+pinned `driftwatchdog` binary, runs the configured external
+checkers, always renders `driftwatch report --ai > drift.md`, and
+uploads `drift.md` as a single `drift-report` artifact. `.driftwatch/state.db`
+and command logs are deliberately never published.
+
+The template exposes two triggers (`workflow_call` and
+`workflow_dispatch`) and three inputs:
+
+| Input            | Type    | Default   | Purpose |
+| ---------------- | ------- | --------- | ------- |
+| `version`        | string  | `latest`  | Driftwatch version to install. |
+| `fail_on_drift`  | boolean | `false`   | Fail the job when `driftwatch check` exits non-zero. The AI report still uploads. |
+| `upload_report`  | boolean | `true`    | Upload `drift.md` as the `drift-report` artifact. |
+
+Reuse it from another workflow with `uses:`:
+
+```yaml
+jobs:
+  driftwatch:
+    uses: lileililiwen/driftwatchdog/.github/workflows/driftwatch-check.yml@v0.6.0
+    with:
+      version: v0.6.0
+      fail_on_drift: false
+    permissions:
+      contents: read
+```
+
+Or copy the file into `.github/workflows/` of your own repository
+when a project-specific step is needed before or after the
+Driftwatch block. See `templates/github-actions/README.md` for the
+full input table, exit-code contract, and copy-vs-`uses:` decision
+guide. `tests/packaging/test_gha_templates.sh` is the shape test
+that guards the install base URL, the upload path, the
+`fail_on_drift` input, and the `contents: read` permission.
+
 ## External checkers
 
 Driftwatchdog does not define a spec format. Copy `driftwatch.toml.example`
