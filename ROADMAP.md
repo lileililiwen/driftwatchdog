@@ -34,6 +34,11 @@ The following change packages have been implemented and archived:
 - `correlation-and-ai-context` — Heuristic correlation, manual `link`/`unlink`, and `driftwatch report --ai`.
 - `linux-macos-distribution` — Shell installer, npm launcher, GitHub Actions release workflow, and SHA-256-verified archives for Linux x86_64, Linux arm64, and macOS x86_64.
 - `ci-test-gates` — CI gates: fmt check, clippy with `-D warnings`, and the full test suite on every push/PR.
+- `crash-hardening` — char-boundary truncation, UTF-8-once capture, signal-aware status, opt-in `run --timeout-ms` with process-group kill, and capture diagnostics.
+- `quality-cicd-docs-ux` — `[lints.clippy] all = "deny"`, MSRV `1.74`, `deny.toml`, proptest seeds, CI breadth (`--all-features` clippy, MSRV, cargo-deny, tarpaulin, `macos-14`, shellcheck, npm audit, smoke), release integrity (provenance, SPDX SBOM, tag==Cargo assertion, Dependabot, auto-tag hardening, `bump.sh`), and UX (`completions`, `man`, per-command examples, `hint:` lines, `driftwatch.toml.example`, repo-hygiene packaging test).
+- `mcp-read-tools` — stdio JSON-RPC 2.0 MCP server with four read-only tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`), closed input schemas, `SQLITE_OPEN_READ_ONLY` open, and the `driftwatch mcp` subcommand.
+- `agent-examples` — tested copy-paste MCP + workflow examples for Claude Code, OpenCode, and Aider; Aider includes the `report --ai > drift.md` fallback; consistency test in `tests/packaging/test_agent_examples.sh`.
+- `github-actions-templates` — reusable `templates/github-actions/driftwatch-check.yml` (`workflow_call` + `workflow_dispatch`) that pins a `driftwatchdog` install, always renders the AI report, uploads only `drift.md`, summarises `top` into the step summary, with `contents: read` and the `fail_on_drift`/`upload_report` inputs; shape test in `tests/packaging/test_gha_templates.sh`.
 
 ## Change dependency graph
 

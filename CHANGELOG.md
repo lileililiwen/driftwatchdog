@@ -11,6 +11,22 @@ All notable changes to Driftwatchdog are documented here. Format follows
   `doctor_status`). JSON-RPC 2.0 / `protocolVersion 2024-11-05`,
   closed input schemas (`additionalProperties: false`), and a
   read-only SQLite connection. No new runtime dependencies.
+- Agent example collateral under `examples/{claude-code,opencode,aider}/`:
+  copy-paste `mcp.json` (stdio `driftwatch` server) plus an
+  investigation `workflow.md` that mirrors the `report --ai`
+  instructions. Aider's directory documents the `report --ai >
+  drift.md` fallback for every Aider version. `examples/README.md`
+  maps harnesses to their copy destination and restates the
+  stdio-only, read-only caveat.
+- GitHub Actions template at `templates/github-actions/driftwatch-check.yml`:
+  reusable workflow (`workflow_call` + `workflow_dispatch`) that
+  pins a `driftwatchdog` install, always renders
+  `report --ai > drift.md`, uploads only `drift.md` (never
+  `state.db` or command logs), summarises `top` into
+  `$GITHUB_STEP_SUMMARY`, and exposes `version` /
+  `fail_on_drift` / `upload_report` inputs under `contents: read`.
+  `templates/github-actions/README.md` documents the inputs and
+  the copy-vs-`uses:` decision.
 - Quality gates: `[lints.clippy] all = "deny"`, `rust-version = "1.74"` MSRV,
   `cargo-deny` advisories/licenses policy, tarpaulin coverage, proptest
   seeds for the failure normalizer.
@@ -22,6 +38,18 @@ All notable changes to Driftwatchdog are documented here. Format follows
   examples in `--help`, single-wrap errors with `hint: …`, honest
   `doctor` INFO severities, installer `--dry-run` docs + `cargo install`
   fallback, `driftwatch.toml.example` copy-paste checker.
+
+### Packaging tests
+- `tests/packaging/test_agent_examples.sh` — every `mcp.json`
+  parses, declares a stdio server with `driftwatch` + `mcp`, and
+  every `driftwatch <sub>` token in the workflows exists in
+  `driftwatchdog --help`; no `run`/`check` is allowed as an
+  agent step.
+- `tests/packaging/test_gha_templates.sh` — triggers, install
+  base URL, `driftwatch check` + `report --ai` + step summary +
+  upload-artifact anchors, upload `path: drift.md` only, and
+  `fail_on_drift` documented; embedded `run:` blocks pass
+  `shellcheck -S error` when the tool is available.
 
 ### Fixed
 - Installer verification is mandatory (no skip flag); unsupported hosts

@@ -289,7 +289,17 @@ Checker failures are isolated: one broken or malformed checker result must not p
 
 ## Project status
 
-The repository currently contains the implementation-ready OpenSpec roadmap and change packages. Read ROADMAP.md for the delivery sequence and HANDOFF.md for the current implementation handoff.
+v0.1 through v0.6 are shipped: every change listed in `ROADMAP.md` is
+implemented and archived, the full CLI surface (`init`, `run`, `list`,
+`top`, `show`, `report --ai`, `gc`, `export`, `doctor`, `check`,
+`link`, `unlink`, `completions`, `man`, `mcp`) is functional, the
+packaging suite is green (7/7 bash tests including
+`agent_examples` and `gha_templates`), and CI enforces fmt, clippy
+(`-D warnings`, `--all-features`), MSRV 1.74, cargo-deny, tarpaulin
+coverage, macOS (`macos-14`) parity, shellcheck, npm audit, and the
+end-to-end smoke test. The next planning milestone is v1.0
+(Stable); see `ROADMAP.md` for the delivery sequence and
+`HANDOFF.md` for the current implementation handoff.
 
 ## Development
 

@@ -22,7 +22,7 @@ Read these in order:
 1. README.md — product positioning, user-facing command surface, and installation channels.
 2. ROADMAP.md — release sequence, closed change inventory, and dependency graph.
 3. `openspec/specs/` — the eight capability specifications the implementation satisfies.
-4. The remaining v0.6 proposal changes (spec-only) under `openspec/changes/`: implement `agent-examples` next, then `github-actions-templates`, one at a time.
+4. `openspec/changes/` is empty (all v0.6 changes are archived); the next step is to scope the first v1.0 hardening change (likely a schema/config freeze plus an extended real-project validation sweep) and add a `proposal.md` / `tasks.md` for it.
 
 ## Change inventory
 
