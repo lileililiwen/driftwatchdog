@@ -562,3 +562,185 @@ timeout_ms = 200
         .unwrap();
     assert_eq!(status, "timeout");
 }
+
+#[test]
+fn check_missing_alerts_key_is_protocol_error_not_success() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "emptyobj"
+command = "sh"
+args = ["-c", "echo '{}'"]
+"#,
+    );
+    let out = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(2);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("bad_json"), "missing bad_json: {stdout}");
+    assert!(stdout.contains("missing"), "missing diagnostic: {stdout}");
+    let conn = open_db(&tmp);
+    let (status, diag): (String, Option<String>) = conn
+        .query_row(
+            "SELECT status, diagnostic FROM check_snapshots LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "bad_json");
+    assert!(
+        diag.unwrap_or_default().contains("missing"),
+        "diagnostic should mention missing alerts"
+    );
+}
+
+#[test]
+fn check_unknown_top_level_field_is_forward_compatible() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "future"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[],\"newField\":1}'"]
+"#,
+    );
+    driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let conn = open_db(&tmp);
+    let status: String = conn
+        .query_row("SELECT status FROM check_snapshots LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "empty");
+}
+
+#[test]
+fn check_malformed_checker_does_not_block_healthy_checker() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "malformed"
+command = "sh"
+args = ["-c", "echo '{}'"]
+
+[[checkers]]
+name = "healthy"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"source\":\"s\",\"symbol\":\"S\"}]}'"]
+"#,
+    );
+    let out = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(1);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("malformed"),
+        "missing malformed row: {stdout}"
+    );
+    assert!(stdout.contains("healthy"), "missing healthy row: {stdout}");
+    let conn = open_db(&tmp);
+    assert_eq!(snapshot_count(&conn), 2);
+    assert_eq!(alert_count(&conn), 1);
+}
+
+#[test]
+fn check_duplicate_checker_name_fails_fast() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "dup"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[]}'"]
+
+[[checkers]]
+name = "dup"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[]}'"]
+"#,
+    );
+    let out = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("duplicate checker name"),
+        "got stderr: {stderr}"
+    );
+    let conn = open_db(&tmp);
+    assert_eq!(snapshot_count(&conn), 0);
+}
+
+#[test]
+fn check_working_dir_escape_fails_fast() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "esc"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[]}'"]
+working_dir = "../../etc"
+"#,
+    );
+    let out = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("working_dir escapes"),
+        "got stderr: {stderr}"
+    );
+}
+
+#[test]
+fn check_dry_run_reports_parsed_counts_and_persists_nothing() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "spec"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"source\":\"s\",\"symbol\":\"S\"}]}'"]
+"#,
+    );
+    let out = driftwatch()
+        .args(["check", "--dry-run"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("dry-run"),
+        "missing dry-run banner: {stdout}"
+    );
+    assert!(
+        stdout.contains("parsed 1 alert"),
+        "missing parsed count: {stdout}"
+    );
+    let conn = open_db(&tmp);
+    assert_eq!(snapshot_count(&conn), 0);
+}

@@ -22,6 +22,9 @@ pub enum Error {
         source: toml::de::Error,
     },
 
+    #[error("invalid config in {path}: {message}")]
+    ConfigInvalid { path: PathBuf, message: String },
+
     #[error("config serialize error: {0}")]
     ConfigSerialize(#[from] toml::ser::Error),
 

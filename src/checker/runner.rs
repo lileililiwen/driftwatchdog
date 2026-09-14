@@ -43,17 +43,16 @@ pub struct CheckerSpec {
 impl CheckerSpec {
     /// Build a [`CheckerSpec`] from a config entry + project root. Falls
     /// back to the documented defaults when the optional fields are absent.
+    /// Relative `working_dir` values resolve against `project_root`
+    /// (never the process cwd); escapes outside the root are rejected.
     pub fn from_entry(
         entry: &crate::project::config::CheckerEntry,
         project_root: &std::path::Path,
-    ) -> Self {
-        let working_dir = entry
-            .working_dir
-            .clone()
-            .unwrap_or_else(|| project_root.to_path_buf());
+    ) -> Result<Self, crate::error::Error> {
+        let working_dir = crate::project::config::Config::resolve_working_dir(entry, project_root)?;
         let timeout_ms = entry.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
         let max_output_bytes = entry.max_output_bytes.unwrap_or(DEFAULT_MAX_OUTPUT_BYTES);
-        Self {
+        Ok(Self {
             name: entry.name.clone(),
             program: entry.command.clone(),
             args: entry.args.clone(),
@@ -61,7 +60,7 @@ impl CheckerSpec {
             env: entry.env.clone(),
             timeout: Duration::from_millis(timeout_ms),
             max_output_bytes,
-        }
+        })
     }
 }
 
@@ -438,7 +437,7 @@ mod tests {
             max_output_bytes: None,
         };
         let proj = Path::new("/tmp");
-        let spec = CheckerSpec::from_entry(&entry, proj);
+        let spec = CheckerSpec::from_entry(&entry, proj).unwrap();
         assert_eq!(spec.working_dir, PathBuf::from("/tmp"));
         assert_eq!(spec.timeout, Duration::from_millis(DEFAULT_TIMEOUT_MS));
         assert_eq!(spec.max_output_bytes, DEFAULT_MAX_OUTPUT_BYTES);
@@ -446,20 +445,37 @@ mod tests {
 
     #[test]
     fn from_entry_respects_overrides() {
+        let tmp = tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
         let entry = crate::project::config::CheckerEntry {
             name: "x".into(),
             command: "prog".into(),
             args: vec!["--json".into()],
-            working_dir: Some(PathBuf::from("./sub")),
+            working_dir: Some(PathBuf::from("sub")),
             env: BTreeMap::from([("FOO".into(), "bar".into())]),
             timeout_ms: Some(5000),
             max_output_bytes: Some(2048),
         };
-        let proj = Path::new("/tmp");
-        let spec = CheckerSpec::from_entry(&entry, proj);
-        assert_eq!(spec.working_dir, PathBuf::from("./sub"));
+        let spec = CheckerSpec::from_entry(&entry, tmp.path()).unwrap();
+        assert_eq!(spec.working_dir, std::fs::canonicalize(&sub).unwrap());
         assert_eq!(spec.timeout, Duration::from_millis(5000));
         assert_eq!(spec.max_output_bytes, 2048);
         assert_eq!(spec.env.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn from_entry_rejects_escape() {
+        let tmp = tempdir().unwrap();
+        let entry = crate::project::config::CheckerEntry {
+            name: "x".into(),
+            command: "prog".into(),
+            args: vec![],
+            working_dir: Some(PathBuf::from("../../etc")),
+            env: BTreeMap::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+        };
+        assert!(CheckerSpec::from_entry(&entry, tmp.path()).is_err());
     }
 }

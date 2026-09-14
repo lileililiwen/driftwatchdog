@@ -147,11 +147,19 @@ The AI report contains recurring failures, current spec violations, possible heu
 
 ## External checkers
 
-Driftwatchdog does not define a spec format. Configure existing local tools in driftwatch.toml:
+Driftwatchdog does not define a spec format. Configure existing local tools in driftwatch.toml
+(see `driftwatch.toml.example` for a copy-paste starter):
 
     [[checkers]]
     name = "architecture"
-    command = "my-spec-checker --json"
+    command = "my-spec-checker"
+    args = ["--json"]
+    # working_dir = "tools/spec"  # relative to the project root, jailed inside it
+    # timeout_ms = 30000
+
+Checker config is strict: duplicate names, empty commands, `timeout_ms = 0`,
+unknown fields (with `did you mean` hints), and `working_dir` escapes fail
+fast with an actionable error.
 
 The checker emits a stable JSON document:
 

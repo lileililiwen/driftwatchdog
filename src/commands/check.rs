@@ -38,6 +38,7 @@ pub fn check(args: CheckArgs, cwd: &Path) -> Result<i32, Error> {
     let proj = ProjectRoot::discover(cwd)?;
     let mut db = crate::repo::Db::open(&proj.db_path)?;
     let cfg = Config::load(&proj.config_path)?;
+    cfg.validate_working_dirs(&proj.config_path, &proj.root)?;
 
     if cfg.checkers.is_empty() {
         println!("driftwatch check: no checkers configured in driftwatch.toml.");
@@ -77,7 +78,7 @@ pub fn check(args: CheckArgs, cwd: &Path) -> Result<i32, Error> {
 
     let mut outcomes: Vec<CheckerOutcome> = Vec::with_capacity(selected.len());
     for entry in &selected {
-        let spec = CheckerSpec::from_entry(entry, &proj.root);
+        let spec = CheckerSpec::from_entry(entry, &proj.root)?;
         let outcome = run_one_checker(
             &mut db,
             &spec,
@@ -262,17 +263,29 @@ fn run_one_checker(
     // Branch 5: the child exited zero. Try to parse the protocol.
     match parse_alerts_document(run.stdout.as_bytes()) {
         Ok(doc) => {
-            let status = if doc.alerts.is_empty() {
+            let alerts = doc.alerts_list().to_vec();
+            let status = if alerts.is_empty() {
                 Status::Empty
             } else {
                 Status::Success
             };
-            let alert_count = doc.alerts.len();
+            let alert_count = alerts.len();
             // Surface capture-pipeline notes without changing the status.
-            let capture_note = run.capture_error.clone().filter(|s| !s.is_empty());
+            // Every outcome carries a diagnostic: fall back to a
+            // human-readable note so dry-run rows are self-explanatory.
+            let capture_note = run
+                .capture_error
+                .clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    Some(if alert_count == 0 {
+                        "parsed 0 alerts".to_string()
+                    } else {
+                        format!("parsed {alert_count} alert(s)")
+                    })
+                });
             if !dry_run {
-                let new_alerts: Vec<NewAlert<'_>> = doc
-                    .alerts
+                let new_alerts: Vec<NewAlert<'_>> = alerts
                     .iter()
                     .map(|a| NewAlert {
                         severity: a.severity.as_deref().unwrap_or(""),
@@ -300,7 +313,7 @@ fn run_one_checker(
                 status,
                 alert_count,
                 diagnostic: capture_note,
-                alerts: doc.alerts,
+                alerts,
                 duration_ms: run.duration_ms,
             })
         }

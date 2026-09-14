@@ -18,6 +18,8 @@ pub mod protocol;
 pub mod report;
 pub mod runner;
 
-pub use protocol::{parse_alerts_document, AlertsDocument, DriftAlert, ProtocolError};
+pub use protocol::{
+    parse_alerts_document, AlertsDocument, DriftAlert, ProtocolError, MAX_ALERTS, MAX_MESSAGE_BYTES,
+};
 pub use report::{label_for_status, CheckerOutcome, Severity, Status};
 pub use runner::{run_checker, CheckerRun, CheckerSpec};

@@ -1,0 +1,26 @@
+# Driftwatch example configuration. Copy to `driftwatch.toml` and edit.
+# See README.md "External checkers" for the checker JSON protocol.
+
+[project]
+# name = "my-project"
+
+[storage]
+# max_stdout_bytes = 65536
+# max_stderr_bytes = 65536
+
+[fingerprint]
+# ignore = ["duration", "uuid"]
+
+# Each checker is a local command that prints `{"alerts": [...]}` to stdout.
+# `command` is the program (no shell splitting); `args` are its flags.
+# Relative `working_dir` resolves against the project root and must stay inside it.
+[[checkers]]
+name = "architecture"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[]}'"]
+# working_dir = "tools/spec"
+# timeout_ms = 30000
+# max_output_bytes = 1048576
+
+# [checkers.env]
+# SPEC_VERSION = "1"

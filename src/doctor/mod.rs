@@ -156,7 +156,14 @@ fn check_config(proj: &ProjectRoot) -> Check {
         .with_remediation("Run `driftwatch init` to create a starter config, or write your own.");
     }
     match Config::load(&proj.config_path) {
-        Ok(_) => Check::pass("config.parse", "driftwatch.toml is valid"),
+        Ok(cfg) => match cfg.validate_working_dirs(&proj.config_path, &proj.root) {
+            Ok(()) => Check::pass("config.parse", "driftwatch.toml is valid"),
+            Err(e) => Check::fail("config.parse", "driftwatch.toml is invalid", format!("{e}"))
+                .with_remediation(format!(
+                    "Edit `{}` to fix the parse error.",
+                    proj.config_path.display()
+                )),
+        },
         Err(e) => Check::fail("config.parse", "driftwatch.toml is invalid", format!("{e}"))
             .with_remediation(format!(
                 "Edit `{}` to fix the parse error.",
@@ -260,8 +267,9 @@ fn check_checkers(proj: &ProjectRoot) -> Vec<Check> {
 
 fn check_one_checker(checker: &crate::project::config::CheckerEntry) -> Check {
     let id = "checker.executable";
-    // The first whitespace-delimited token is the program.
-    let program = checker.command.split_whitespace().next().unwrap_or("");
+    // `command` is the program; `args` carry the flags. Never
+    // whitespace-split: a program path may contain spaces.
+    let program = checker.command.trim();
     if program.is_empty() {
         return Check::fail(
             id,

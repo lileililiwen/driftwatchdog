@@ -3,11 +3,14 @@
 //! A checker is expected to print a single JSON document to stdout
 //! describing spec drift. The document is forward-compatible:
 //!
-//! * the only required top-level key is `alerts`;
+//! * the only required top-level key is `alerts` (missing `alerts`
+//!   is a protocol error, not success);
 //! * each alert requires `severity`, `message`, `source`, and `symbol`
 //!   at the normalized boundary;
-//! * unknown fields are tolerated and preserved in [`DriftAlert::extra`]
-//!   so the on-disk shape can grow without breaking older binaries.
+//! * unknown top-level fields are ignored so newer checkers can add
+//!   fields without breaking older binaries;
+//! * unknown per-alert fields are tolerated and preserved in
+//!   [`DriftAlert::extra`].
 //!
 //! The parser never panics on bad input. Malformed JSON or missing
 //! required fields produce a [`ProtocolError`] so the caller can
@@ -17,11 +20,26 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+/// Maximum alerts accepted in a single document.
+pub const MAX_ALERTS: usize = 10_000;
+/// Maximum bytes accepted for a single alert `message`.
+pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
 /// Top-level alerts document. Mirrors what a checker writes to stdout.
+/// `alerts` is `Option` so a missing key maps to
+/// [`ProtocolError::MissingAlerts`] instead of silent success.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct AlertsDocument {
-    #[serde(default)]
-    pub alerts: Vec<DriftAlert>,
+    pub alerts: Option<Vec<DriftAlert>>,
+}
+
+impl AlertsDocument {
+    /// Alert list; empty when the document carried `[]`.
+    /// Callers should only use this after successful parsing, where
+    /// `alerts` is guaranteed `Some`.
+    pub fn alerts_list(&self) -> &[DriftAlert] {
+        self.alerts.as_deref().unwrap_or(&[])
+    }
 }
 
 /// A single normalized drift alert at the internal boundary.
@@ -54,13 +72,30 @@ pub enum ProtocolError {
     Json(String),
     #[error("checker output is not a JSON object")]
     NotObject,
+    #[error(
+        "checker output is missing required field `\"alerts\"` (got an object without `alerts`)"
+    )]
+    MissingAlerts,
     #[error("alert #{index} is missing required field `{field}`")]
     MissingField { index: usize, field: &'static str },
+    #[error("checker reported {count} alerts, exceeding the limit of {max}")]
+    TooManyAlerts { count: usize, max: usize },
+    #[error("alert #{index} message is {bytes} bytes, exceeding the limit of {max} bytes")]
+    AlertTooLarge {
+        index: usize,
+        bytes: usize,
+        max: usize,
+    },
 }
 
 /// Parse a checker's stdout. The bytes are expected to be UTF-8 JSON; a
 /// lossy decode is applied as a fallback so the diagnostic returned to
 /// the user is at least readable.
+///
+/// Forward-compatibility: unknown top-level fields are ignored. A
+/// missing `alerts` key is [`ProtocolError::MissingAlerts`] (an empty
+/// object `{}` is never success). Alert count and per-message size are
+/// capped at [`MAX_ALERTS`] / [`MAX_MESSAGE_BYTES`].
 pub fn parse_alerts_document(bytes: &[u8]) -> Result<AlertsDocument, ProtocolError> {
     // First try strict UTF-8; if that fails, lossy-decode and retry so a
     // checker that wrote a stray Latin-1 byte still produces a meaningful
@@ -72,22 +107,25 @@ pub fn parse_alerts_document(bytes: &[u8]) -> Result<AlertsDocument, ProtocolErr
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| ProtocolError::Json(e.to_string()))?;
     let obj = value.as_object().ok_or(ProtocolError::NotObject)?;
-    // Reject extra top-level keys that are not `alerts`: this keeps the
-    // wire format honest. We tolerate any value for the `alerts` key.
-    for key in obj.keys() {
-        if key != "alerts" {
-            return Err(ProtocolError::Json(format!(
-                "unknown top-level field `{key}`"
-            )));
-        }
+    // Unknown top-level fields are ignored for forward compatibility;
+    // only `alerts` is read. A missing key is an explicit error.
+    if !obj.contains_key("alerts") {
+        return Err(ProtocolError::MissingAlerts);
     }
     let doc: AlertsDocument = serde_json::from_value(value)
         .map_err(|e| ProtocolError::Json(format!("alerts shape: {e}")))?;
+    let alerts = doc.alerts.as_deref().unwrap_or(&[]);
+    if alerts.len() > MAX_ALERTS {
+        return Err(ProtocolError::TooManyAlerts {
+            count: alerts.len(),
+            max: MAX_ALERTS,
+        });
+    }
     // Validate each alert's required fields. `serde` already extracted
     // `severity` / `message` / `source` / `symbol`, but we still need
     // to reject missing or empty values — a checker that wrote `""`
     // or omitted the field is not providing a usable alert.
-    for (i, alert) in doc.alerts.iter().enumerate() {
+    for (i, alert) in alerts.iter().enumerate() {
         let check = |field: &'static str, value: &Option<String>| -> Result<(), ProtocolError> {
             match value {
                 None => Err(ProtocolError::MissingField { index: i, field }),
@@ -99,6 +137,15 @@ pub fn parse_alerts_document(bytes: &[u8]) -> Result<AlertsDocument, ProtocolErr
         check("message", &alert.message)?;
         check("source", &alert.source)?;
         check("symbol", &alert.symbol)?;
+        if let Some(m) = alert.message.as_deref() {
+            if m.len() > MAX_MESSAGE_BYTES {
+                return Err(ProtocolError::AlertTooLarge {
+                    index: i,
+                    bytes: m.len(),
+                    max: MAX_MESSAGE_BYTES,
+                });
+            }
+        }
     }
     Ok(doc)
 }
@@ -122,15 +169,15 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(doc.alerts.len(), 1);
-        assert_eq!(doc.alerts[0].severity.as_deref(), Some("warning"));
-        assert_eq!(doc.alerts[0].symbol.as_deref(), Some("DbPool"));
+        assert_eq!(doc.alerts_list().len(), 1);
+        assert_eq!(doc.alerts_list()[0].severity.as_deref(), Some("warning"));
+        assert_eq!(doc.alerts_list()[0].symbol.as_deref(), Some("DbPool"));
     }
 
     #[test]
     fn parses_empty_alerts_array() {
         let doc = parse_alerts_document(br#"{"alerts": []}"#).unwrap();
-        assert!(doc.alerts.is_empty());
+        assert!(doc.alerts_list().is_empty());
     }
 
     #[test]
@@ -151,9 +198,9 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(doc.alerts.len(), 1);
-        assert!(doc.alerts[0].extra.contains_key("line"));
-        assert!(doc.alerts[0].extra.contains_key("code"));
+        assert_eq!(doc.alerts_list().len(), 1);
+        assert!(doc.alerts_list()[0].extra.contains_key("line"));
+        assert!(doc.alerts_list()[0].extra.contains_key("code"));
     }
 
     #[test]
@@ -240,15 +287,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_top_level_field() {
-        let err = parse_alerts_document(br#"{"alerts":[],"extra":"nope"}"#).unwrap_err();
-        assert!(matches!(err, ProtocolError::Json(_)));
+    fn ignores_unknown_top_level_field() {
+        let doc = parse_alerts_document(br#"{"alerts":[],"extra":"nope","newField":1}"#).unwrap();
+        assert!(doc.alerts_list().is_empty());
     }
 
     #[test]
     fn allows_alerts_only_object() {
         let doc = parse_alerts_document(br#"{"alerts":[]}"#).unwrap();
-        assert!(doc.alerts.is_empty());
+        assert!(doc.alerts_list().is_empty());
+    }
+
+    #[test]
+    fn rejects_missing_alerts_key() {
+        let err = parse_alerts_document(br#"{}"#).unwrap_err();
+        assert!(matches!(err, ProtocolError::MissingAlerts));
+        assert!(err.to_string().contains("missing"));
     }
 
     #[test]
