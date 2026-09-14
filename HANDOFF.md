@@ -20,6 +20,21 @@ through the generic Gate contract, project configuration, evidence, toolchain
 execution, adapters, context providers, AI evaluation, and local CLI/history
 integration. The first Gate contract is now implemented (see below).
 
+The `gate-project-configuration` change is **implemented and archived**
+(2026-09-14): new `src/gate/manifest.rs` (strict `gate.toml` parsing with
+`did-you-mean` unknown-field diagnostics, `backend`/`frontend`/`full`/
+`minimal` profile resolution, explicit-check enable/disable overrides,
+project commands kept separate from tool commands, generic context
+declarations, substring changed-surface triggers, `sha256:` manifest
+digest + rule-pack identity, deterministic `GatePlan` resolution, pure
+`render_plan` dry-run output) plus 15 tests covering valid, unknown-field,
+unknown-profile, version-mismatch, empty-command, backend-excludes-
+responsive, UI-trigger, determinism, and missing-manifest cases.
+`driftwatch.toml` checker execution is untouched. Six Gate planning
+packages remain; the next in dependency order is
+`evidence-and-artifacts` and requires explicit authorization before
+implementation.
+
 The `generic-gate-contract` change is **implemented and archived**
 (2026-09-14): new `src/gate/` module (domain types, versioned JSON DTOs
 with `GATE_CONTRACT_VERSION = 1`, deterministic blocking-policy
@@ -52,7 +67,7 @@ Read these in order:
 
 1. README.md — product positioning, user-facing command surface, and installation channels.
 2. ROADMAP.md — release sequence, closed change inventory, and dependency graph.
-3. `openspec/specs/` — the eight capability specifications the implementation satisfies.
+3. `openspec/specs/` — the capability specifications the implementation satisfies.
 4. `openspec/changes/` contains the v1.1 planning queue. Read the dependency
    order in `ROADMAP.md`; implementation requires explicit authorization and one
    change at a time.
@@ -73,6 +88,7 @@ Read these in order:
 | agent-examples | archived 2026-09-14 | Tested copy-paste MCP + workflow examples for Claude Code, OpenCode, and Aider; Aider includes the `report --ai > drift.md` fallback; consistency test in `tests/packaging/test_agent_examples.sh` | mcp-read-tools |
 | github-actions-templates | archived 2026-09-14 | Reusable `templates/github-actions/driftwatch-check.yml` (`workflow_call` + `workflow_dispatch`) that pins a `driftwatchdog` install, always renders the AI report, uploads only `drift.md`, summarises `top` into the step summary, with `contents: read` and the `fail_on_drift`/`upload_report` inputs; shape test in `tests/packaging/test_gha_templates.sh` | mcp-read-tools (stable CLI only) |
 | generic-gate-contract | archived 2026-09-14 | Generic gate domain types, versioned JSON DTOs, deterministic blocking aggregation, bounded evidence refs with secret redaction, checker-outcome adapter; `src/gate/` + 24 tests | bfs-dfs-bfs-change-workflow |
+| gate-project-configuration | archived 2026-09-14 | Project Gate manifest (`gate.toml`): profiles, explicit checks, project commands, triggers, rule-pack identity, dry-run plan; `src/gate/manifest.rs` + 15 tests; `driftwatch.toml` execution untouched | generic-gate-contract |
 
 ## Implementation constraints
 
@@ -90,9 +106,9 @@ Read these in order:
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 420 tests pass: lib + integration (incl. packaging; +24 gate-contract)
+    cargo test             # 435 tests pass: lib + integration (incl. packaging; +24 gate-contract, +15 gate-manifest)
     cargo clippy --all-targets --all-features -- -D warnings
-    openspec validate --changes --strict --no-interactive   # 7/7 pass (remaining planning queue)
+    openspec validate --changes --strict --no-interactive   # 6/6 pass (remaining planning queue)
     sh tests/packaging.sh   # 6/6 pass: target_mapping, artifact_naming, checksum_manifest, installer, repo_hygiene, agent_examples
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
@@ -138,6 +154,7 @@ Last run on this change:
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
 - `src/checker/report.rs` — `Status`, `Severity`, `CheckerOutcome`, `label_for_status`.
 - `src/gate/{mod,types,dto,aggregate,redact,adapt}.rs` — generic gate contract (`GateStatus`/`GateSeverity`/`Finding`/`EvidenceRef`/`GateResult`, `GATE_CONTRACT_VERSION = 1` JSON boundary with size caps, deterministic `aggregate` with `BlockingPolicy`, secret-redacting bounded diagnostics, `adapt_checker_outcome` mapping Empty→PASS / Success→FAIL / infra-failure→REVIEW_REQUIRED); no OpenSpec dependency, no storage migration, no CLI surface yet.
+- `src/gate/manifest.rs` — project Gate manifest (`GateManifest`/`ManifestCheck`/`Trigger`/`ResolvedGatePlan`, `parse`/`resolve`/`render_plan`/`load`/`manifest_path`); `gate.toml` at project root preferred over `.driftwatch/gate.toml`, missing manifest is `Ok(None)`; `driftwatch.toml` execution untouched; no tool install, no network, no OpenSpec types.
 - `src/runtime/runner.rs` — `CommandSpec` (incl. opt-in `timeout_ms`), `CapturedStream`, `RunOutcome` (incl. `timed_out` + `diagnostic`), `run`; byte-accumulating UTF-8-once drain, signal-aware status, process-group kill on timeout.
 - `src/util.rs` — `truncate_char_boundary` shared helper (byte limit, char-boundary cut, ellipsis).
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
@@ -185,15 +202,16 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 (`mcp-read-tools`, `agent-examples`, `github-actions-templates`) are
 archived as of 2026-09-14, the packaging suite runs 8/8 green (incl.
 `change_workflow`), and
-the Rust test suite passes (420 tests, incl. 24 gate-contract). The first
-two v1.1 Engineering Gate packages, **`bfs-dfs-bfs-change-workflow` and
-`generic-gate-contract`, are implemented and archived** as of 2026-09-14.
-Seven planning-only packages remain, covering project configuration,
-evidence,
+the Rust test suite passes (435 tests, incl. 24 gate-contract + 15
+gate-manifest). The first
+three v1.1 Engineering Gate packages, **`bfs-dfs-bfs-change-workflow`,
+`generic-gate-contract`, and `gate-project-configuration`, are implemented
+and archived** as of 2026-09-14.
+Six planning-only packages remain, covering evidence,
 toolchain execution, adapters, generic context providers, optional AI
 evaluation, and local CLI/history integration. The queue must be executed
 one change at a time after authorization; next in dependency order is
-`gate-project-configuration`.
+`evidence-and-artifacts`.
 
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.
