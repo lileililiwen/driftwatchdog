@@ -6,12 +6,30 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 1. Verification gates: `cargo fmt --check && cargo test && cargo clippy --all-targets --all-features -- -D warnings && openspec validate --changes --strict --no-interactive`.
 2. Confirm `openspec/changes/<change>/tasks.md` has every box ticked.
-3. `openspec archive <change> -y` (drop `--skip-specs` only if the change adds or modifies a `spec.md` capability).
+3. `openspec archive <change> -y`; capability specs are promoted when the
+   change contains `spec.md`.
 4. `git add -A && git commit -m "Implement <change>"`.
 5. Update this file (status, next action, module map) and commit: `git add HANDOFF.md && git commit -m "Update HANDOFF after <change>"`.
 6. Re-run `openspec validate --changes --strict --no-interactive`.
 
 ## Current state
+
+Nine v1.1 Engineering Gate changes are currently planning-only under
+`openspec/changes/`. They are dependency ordered from the BFS-DFS-BFS workflow
+through the generic Gate contract, project configuration, evidence, toolchain
+execution, adapters, context providers, AI evaluation, and local CLI/history
+integration. No Gate implementation is claimed yet.
+
+The `bfs-dfs-bfs-change-workflow` change is **implemented and archived**
+(2026-09-14): three-phase workflow wording in `AGENTS.md` (BFS impact map,
+DFS implementation, final BFS regression; proposal/design/spec/task
+responsibilities; local-before-CI verification; no-archive-before-final-BFS
+gate) plus the `change_workflow` packaging test
+(`tests/packaging/test_change_workflow.sh`) that enforces phase order,
+per-phase checkboxes, final-BFS verification, spec Scenarios, and a negative
+missing-DFS fixture across every active change. Eight Gate planning packages
+remain; the next in dependency order is `generic-gate-contract` and requires
+explicit authorization before implementation.
 
 All v0.x change packages through v0.5 are **implemented and archived**: `project-foundation`, `runtime-memory`, `fingerprinting-and-retention`, `export-and-doctor`, `checker-and-drift-alerts`, `correlation-and-ai-context`, and `linux-macos-distribution`. The `crash-hardening` change is also **implemented and archived** (2026-09-14): char-boundary truncation helper, UTF-8-once capture, signal-aware statuses (`RunStatus::Signalled`/`Timeout`, checker `Status::Unknown`), opt-in `run --timeout-ms` with process-group kill, and capture diagnostics. The `quality-cicd-docs-ux` change is also **implemented and archived** (2026-09-14): `[lints.clippy] all = "deny"` + `rust-version = "1.74"` MSRV (with `is_none_or`/`repeat_n` lowered to 1.74-compatible APIs), `deny.toml` advisory/license policy, proptest seeds for the normalizer, CI breadth (`--all-features` clippy, MSRV check, cargo-deny, tarpaulin coverage, `macos-14` matrix, shellcheck + script-mode enforcement, `npm audit`, smoke), release integrity (npm provenance via `id-token: write`, `macos-14` runner, tag==Cargo version assertion, SPDX SBOM, CHANGELOG.md, cold-start `bump.sh` at 0.1.0, PAT-missing skip + no-tag-spam auto-tag, Dependabot), and docs/UX (binary-naming rule, `driftwatch completions`/`man`, per-command examples, error `hint:` lines, honest doctor INFO, mandatory-verify installer with early `--dry-run` + `cargo install` fallback, npm darwin-arm64 preinstall guard, `driftwatch.toml.example`, repo-hygiene packaging test). The `mcp-read-tools` change is also **implemented and archived** (2026-09-14): stdio JSON-RPC 2.0 MCP server with four read-only tools (`top_bugs`/`show_bug`/`ai_report`/`doctor_status`), closed input schemas, `SQLITE_OPEN_READ_ONLY` DB open, and `driftwatch mcp` subcommand. The `agent-examples` change is also **implemented and archived** (2026-09-14): tested copy-paste MCP + workflow examples for Claude Code, OpenCode, and Aider, the `report --ai > drift.md` fallback for Aider, `examples/README.md` with the harness→destination map, and a packaging consistency test that asserts every `mcp.json` parses, every `driftwatch <sub>` token in the workflows exists in `--help`, and no `run`/`check` is ever presented as an agent step. The `github-actions-templates` change is also **implemented and archived** (2026-09-14): reusable GitHub Actions workflow at `templates/github-actions/driftwatch-check.yml` (workflow_call + workflow_dispatch) that pins a `driftwatchdog` install, always renders `report --ai > drift.md`, uploads only `drift.md` (never `state.db` or command logs), summaries `driftwatch top` into `$GITHUB_STEP_SUMMARY`, and ships with `contents: read` plus `fail_on_drift`/`upload_report` inputs. The `driftwatchdog` Rust binary builds and tests cleanly (396 tests pass). The full CLI surface is functional: `init`, `run`, `list`, `top`, `show`, `report` (with `--ai`), `gc`, `export json|jsonl|markdown`, `doctor`, `check`, `link`, `unlink`, `completions`, `man`, `mcp`. The MCP server speaks JSON-RPC 2.0 on stdio with four read-only tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`) and opens the database read-only. The SQLite schema (version 3) covers runs, fingerprints, occurrences, check_snapshots (with `git_commit`/`git_branch`), drift_alerts, correlations (with per-component scores and `algorithm_version`), and manual_links. Nine capability specs are live under `openspec/specs/` (including `quality-cicd-docs-ux`, `agent-examples`, and `github-actions-templates`; `ci-test-gates` and `release-distribution` Purposes filled). Native release archives plus an SHA-256 manifest are produced for Linux x86_64, Linux arm64, and macOS x86_64 by `.github/workflows/release.yml`; the shell installer (`scripts/install.sh`), the npm launcher (`npm/driftwatchdog/`), direct downloads, and `cargo install` are documented in README.md. v0.6 (Integrate) is complete. v1.0 (Stable) is the next planning milestone; the first v1.0 hardening change is not yet proposed in `openspec/changes/`.
 
@@ -22,7 +40,9 @@ Read these in order:
 1. README.md — product positioning, user-facing command surface, and installation channels.
 2. ROADMAP.md — release sequence, closed change inventory, and dependency graph.
 3. `openspec/specs/` — the eight capability specifications the implementation satisfies.
-4. `openspec/changes/` is empty (all v0.6 changes are archived); the next step is to scope the first v1.0 hardening change (likely a schema/config freeze plus an extended real-project validation sweep) and add a `proposal.md` / `tasks.md` for it.
+4. `openspec/changes/` contains the v1.1 planning queue. Read the dependency
+   order in `ROADMAP.md`; implementation requires explicit authorization and one
+   change at a time.
 
 ## Change inventory
 
@@ -128,7 +148,7 @@ Last run on this change:
 - `npm/driftwatchdog/lib/verify.js` — dependency-free HTTP, SHA-256, manifest parser, and tar.gz extractor (with path-traversal safety).
 - `npm/driftwatchdog/test/launcher.test.js` — `node:test` suite covering supported/unsupported hosts, verification, round-trip exec, cache reuse, and traversal rejection.
 - `tests/packaging.sh` + `tests/packaging/{test_*.sh,fixture.sh}` — bash packaging tests (target mapping, artifact naming, checksum manifest, installer, repo hygiene, agent examples) and shared fixture.
-- `tests/packaging/run_all.sh` + `tests/packaging.rs` — combined bash+node runner and a Rust integration test that invokes it from `cargo test`.
+- `tests/packaging/test_change_workflow.sh` — `bfs-dfs-bfs-change-workflow` authoring check: phase order, per-phase checkboxes, final-BFS verification, spec Scenarios, negative missing-DFS fixture; auto-picked by `tests/packaging.sh`.- `tests/packaging/run_all.sh` + `tests/packaging.rs` — combined bash+node runner and a Rust integration test that invokes it from `cargo test`.
 - `tests/packaging/test_agent_examples.sh` — `agent-examples` consistency test: every `examples/*/mcp.json` parses, declares a stdio server with `driftwatch` + `mcp`, and every `driftwatch <sub>` token in `workflow.md` exists in `driftwatchdog --help`; no `run`/`check` is allowed as an agent step. Auto-picked by `tests/packaging.sh`.
 - `tests/packaging/test_gha_templates.sh` — `github-actions-templates` shape test: triggers (`workflow_call` + `workflow_dispatch`), installer base URL matches the release repository in `scripts/lib/release.sh`, `driftwatch check` + `report --ai` + step summary + upload-artifact anchors present, upload `path:` is `drift.md` (never `state.db` or anything under `.driftwatch/`), `fail_on_drift` documented in both files, `contents: read` set; embedded `run:` blocks pass `shellcheck -S error` when the tool is available (soft-skip otherwise). Auto-picked by `tests/packaging.sh`.
 - `examples/{claude-code,opencode,aider}/` — per-harness MCP client-config fragment (`mcp.json`) and investigation workflow (`workflow.md`); Aider also documents the `report --ai > drift.md` fallback.
@@ -148,15 +168,17 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 
 **v0.6 (Integrate) is complete.** All three v0.6 change packages
 (`mcp-read-tools`, `agent-examples`, `github-actions-templates`) are
-archived as of 2026-09-14, the packaging suite runs 7/7 green, and
-the Rust test suite still passes (396 tests). The next planning
-milestone is **v1.0 (Stable)**, which under ROADMAP.md groups the
-"future hardening changes" that stabilize schema, config, checker
-protocol, CLI, cross-platform behavior, documentation, and
-real-project validation. No v1.0 change package has been proposed
-yet; the next step is to scope the first v1.0 change (likely a
-schema/config freeze + extended real-project validation sweep) and
-add a `proposal.md` / `tasks.md` under `openspec/changes/`.
+archived as of 2026-09-14, the packaging suite runs 8/8 green (incl.
+`change_workflow`), and
+the Rust test suite still passes (396 tests). The first v1.1 Engineering Gate
+package, **`bfs-dfs-bfs-change-workflow`, is implemented and archived** as of
+2026-09-14. Eight planning-only packages remain, covering the generic Gate
+contract, project configuration, evidence,
+toolchain execution, adapters, generic context providers, optional AI
+evaluation, and local CLI/history integration. The queue does not claim
+implementation beyond the workflow package and must be executed one change at
+a time after authorization; next in dependency order is
+`generic-gate-contract`.
 
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.
