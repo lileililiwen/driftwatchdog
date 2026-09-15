@@ -21,7 +21,7 @@ Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in
 | v0.5 Distribute | `linux-macos-distribution` | Ship native Linux + Intel macOS binaries through a shell installer, an npm launcher, direct downloads, and reproducible CI. |
 | v0.6 Integrate | `mcp-read-tools`, `agent-examples`, `github-actions-templates` | Serve read-only MCP tools over stdio, ship tested Claude Code/OpenCode/Aider examples, and publish a reusable GitHub Actions check template. |
 | v1.0 Stable | Future hardening changes | Stabilize schema, config, checker protocol, CLI, cross-platform behavior, documentation, and real-project validation. |
-| v1.1 Engineering Gates | Nine planned packages (eight archived, one remaining: `gate-cli-and-memory-integration`) | Add generic Gate contracts, project policy, evidence, tool lifecycle, adapters, optional context providers, AI evaluation, and local Gate/history integration. |
+| v1.1 Engineering Gates | Nine planned packages (all nine archived) | Add generic Gate contracts, project policy, evidence, tool lifecycle, adapters, optional context providers, AI evaluation, and local Gate/history integration. |
 
 ## Closed change inventory
 
@@ -61,14 +61,13 @@ The first three packages form the smallest useful runtime-memory release. Checke
 
 ## v1.1 Engineering Gate planning queue
 
-Eight of the nine packages are implemented and archived
+All nine packages are implemented and archived
 (`bfs-dfs-bfs-change-workflow`, `generic-gate-contract`,
 `gate-project-configuration`, `evidence-and-artifacts`,
 `toolchain-management-and-execution`, `gate-adapter-evaluation`,
-`generic-context-providers`, `gate-ai-evaluation`). The remaining package is planning-only
-and dependency ordered. Each package
-requires proposal BFS, design boundary review, DFS implementation tasks, and
-final BFS regression tasks before implementation can begin:
+`generic-context-providers`, `gate-ai-evaluation`,
+`gate-cli-and-memory-integration`). No planning packages remain.
+The archived dependency order was:
 
 ```text
 bfs-dfs-bfs-change-workflow
