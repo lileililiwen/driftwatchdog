@@ -117,6 +117,7 @@ pub fn run(cwd: &Path) -> Result<Report, crate::error::Error> {
     checks.extend(check_recent_check_runs(&proj));
     checks.extend(check_gate_toolchain(&proj));
     checks.extend(check_gate_context(&proj));
+    checks.extend(check_gate_ai(&proj));
 
     let exit_code = if checks.iter().any(|c| c.status == Status::Fail) {
         2
@@ -420,6 +421,14 @@ fn check_one_checker(checker: &crate::project::config::CheckerEntry) -> Check {
 /// (`NOT_APPLICABLE`, never false success).
 fn check_gate_context(proj: &ProjectRoot) -> Vec<Check> {
     crate::gate::context::context_checks(&proj.root)
+}
+
+/// AI evaluation readiness (optional `gate.toml` `[ai]` layer).
+/// Absence stays silent (unconfigured-but-ok); disabled is honest
+/// `Info`; enabled-without-provider is `Warn` with remediation; a
+/// missing executable is `Warn` (optional provider, never `Fail`).
+fn check_gate_ai(proj: &ProjectRoot) -> Vec<Check> {
+    crate::gate::ai::ai_checks(&proj.root)
 }
 
 fn check_gate_toolchain(proj: &ProjectRoot) -> Vec<Check> {

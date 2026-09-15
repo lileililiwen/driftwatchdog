@@ -13,7 +13,9 @@
 //! bootstrap only); [`adapters`] owns tool-adapter contracts, output
 //! normalization, and deterministic evaluation; [`context`] owns
 //! generic read-only context providers (Git, project files, optional
-//! OpenSpec) behind bounded generic documents.
+//! OpenSpec) behind bounded generic documents; [`ai`] owns the
+//! provider-neutral semantic evaluation contract (opt-in, redacted,
+//! bounded, fail-closed) without embedding an LLM.
 //!
 //! No OpenSpec types appear here. No tool is installed implicitly, no
 //! network call is made, and no LLM is invoked.
@@ -21,6 +23,7 @@
 pub mod adapt;
 pub mod adapters;
 pub mod aggregate;
+pub mod ai;
 pub mod context;
 pub mod dto;
 pub mod evidence;
@@ -31,6 +34,12 @@ pub mod types;
 
 pub use adapt::adapt_checker_outcome;
 pub use aggregate::{aggregate, AggregateOutcome, BlockingPolicy, GatePlan, PlannedCheck};
+pub use ai::{
+    ai_checks, build_request as build_ai_request, load_ai_config, record_evaluation,
+    run_ai_evaluation, validate_output as validate_ai_output, AiError, AiEvalRequest,
+    AiEvaluationRecord, AiProviderConfig, AiProviderOutput, AiRule, AiViolation,
+    MissingProviderPolicy, MAX_AI_PROMPT_BYTES, MAX_AI_RESPONSE_BYTES,
+};
 pub use context::{
     collect_context, context_checks, selection_from_manifest, ContextBundle, ContextDocument,
     ContextError, ContextOptions, ProviderRegistry, KIND_GIT_DIFF, KIND_GIT_STATUS,
