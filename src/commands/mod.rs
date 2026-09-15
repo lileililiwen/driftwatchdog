@@ -4,6 +4,7 @@
 pub mod check;
 pub mod doctor;
 pub mod export;
+pub mod gate;
 pub mod gc;
 pub mod link;
 pub mod list;
@@ -18,6 +19,7 @@ pub mod unlink;
 pub use check::check as check_cmd;
 pub use doctor::doctor as doctor_cmd;
 pub use export::export as export_cmd;
+pub use gate::gate as gate_cmd;
 pub use gc::gc as gc_cmd;
 pub use link::link as link_cmd;
 pub use list::list as list_cmd;

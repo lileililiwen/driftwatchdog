@@ -119,6 +119,16 @@ pub fn to_string(doc: &ExportDocument) -> Result<String, Error> {
             },
         )?;
     }
+    for g in &doc.gate_runs {
+        push(
+            &mut out,
+            &Tagged {
+                kind: "gate_run",
+                record_id: format!("gate_run:{}", g.id),
+                payload: g,
+            },
+        )?;
+    }
     Ok(out)
 }
 
@@ -152,6 +162,7 @@ mod tests {
             correlations: vec![],
             manual_links: vec![],
             gate_artifacts: vec![],
+            gate_runs: vec![],
         }
     }
 
@@ -210,6 +221,7 @@ mod tests {
             correlations: vec![],
             manual_links: vec![],
             gate_artifacts: vec![],
+            gate_runs: vec![],
         };
         let s = to_string(&doc).unwrap();
         let lines: Vec<&str> = s.lines().collect();

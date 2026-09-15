@@ -167,3 +167,25 @@ CREATE TABLE IF NOT EXISTS gate_artifacts (
 CREATE INDEX IF NOT EXISTS idx_gate_artifacts_created
     ON gate_artifacts(created_at);
 "#;
+
+/// Migration: gate run history. The
+/// `gate-cli-and-memory-integration` change persists one row per
+/// `driftwatch gate` execution with change/revision identity,
+/// manifest/rule-pack provenance, aggregate status, blocking outcome,
+/// and the per-gate results as canonical JSON. Purely additive;
+/// rerunnable via `IF NOT EXISTS`.
+pub const MIGRATION_0006_GATE_RUNS: &str = r#"
+CREATE TABLE IF NOT EXISTS gate_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    taken_at TEXT NOT NULL,
+    change_id TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    rule_pack_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    blocked INTEGER NOT NULL DEFAULT 0,
+    results_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_gate_runs_taken
+    ON gate_runs(taken_at);
+"#;

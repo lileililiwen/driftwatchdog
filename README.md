@@ -145,6 +145,7 @@ The AI report contains recurring failures, current spec violations, possible heu
     driftwatchdog show <bug-id>
     driftwatchdog report [--ai] [--limit N] [--days N] [--tag TAG]
     driftwatchdog check [--only NAMES] [--dry-run]
+    driftwatchdog gate [--dry-run] [--format human|json]
     driftwatchdog link bug:<id> spec:<id> [--note "..."]
     driftwatchdog unlink <link-id>
     driftwatchdog export json|jsonl|markdown
@@ -286,6 +287,29 @@ The checker emits a stable JSON document:
     }
 
 Checker failures are isolated: one broken or malformed checker result must not prevent remaining checkers from running.
+
+## Engineering Gate (local-first)
+
+Projects with a `gate.toml` manifest can run the broader Gate locally
+before every relevant change is archived or completed:
+
+    driftwatch gate --dry-run   # show the resolved plan; no execution, no persistence
+    driftwatch gate             # execute applicable checks, persist the result, exit nonzero when blocked
+    driftwatch gate --format json  # machine-readable status document
+
+`driftwatch gate` resolves the plan (profile, explicit checks, blocking
+policy, project commands, rule-pack identity), executes each planned
+check through the bounded project-runtime adapter (a check without a
+declared `command` records `NOT_APPLICABLE` so missing coverage is
+explicit), optionally runs one `ai-review` evaluation when `[ai]
+enabled = true`, aggregates with the manifest blocking policy, and
+persists one `gate_runs` row with change/revision identity and
+manifest digest. `driftwatch check` remains the compatibility entry
+point for legacy checker-only projects.
+
+Local verification comes first: a change that has not passed its local
+Gate must not be represented as complete merely because CI is
+configured. CI templates repeat the same command as a second layer.
 
 ## Project status
 

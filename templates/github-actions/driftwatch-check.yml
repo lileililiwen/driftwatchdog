@@ -6,6 +6,10 @@ name: driftwatch-check
 # single artifact. `state.db` and command logs are deliberately
 # NOT published.
 #
+# Local-first: run `driftwatch gate` (or `driftwatch check` for
+# checker-only projects) locally before archive. This workflow
+# repeats that verification remotely; it never replaces it.
+#
 # Two trigger surfaces:
 #   * workflow_call — reuse from another workflow with `uses:`
 #   * workflow_dispatch — run manually from the Actions tab

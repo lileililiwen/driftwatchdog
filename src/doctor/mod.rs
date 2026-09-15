@@ -118,6 +118,7 @@ pub fn run(cwd: &Path) -> Result<Report, crate::error::Error> {
     checks.extend(check_gate_toolchain(&proj));
     checks.extend(check_gate_context(&proj));
     checks.extend(check_gate_ai(&proj));
+    checks.extend(check_gate_history(&proj));
 
     let exit_code = if checks.iter().any(|c| c.status == Status::Fail) {
         2
@@ -429,6 +430,14 @@ fn check_gate_context(proj: &ProjectRoot) -> Vec<Check> {
 /// missing executable is `Warn` (optional provider, never `Fail`).
 fn check_gate_ai(proj: &ProjectRoot) -> Vec<Check> {
     crate::gate::ai::ai_checks(&proj.root)
+}
+
+/// Local gate history. Silent when no `gate.toml` exists; otherwise
+/// the latest persisted `driftwatch gate` run is surfaced so a blocked
+/// gate is visible in `doctor` (and therefore in the read-only
+/// `doctor_status` MCP tool) before archive.
+fn check_gate_history(proj: &ProjectRoot) -> Vec<Check> {
+    crate::commands::gate::gate_history_checks(proj)
 }
 
 fn check_gate_toolchain(proj: &ProjectRoot) -> Vec<Check> {

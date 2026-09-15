@@ -181,6 +181,29 @@ pub fn to_string(doc: &ExportDocument) -> Result<String, Error> {
         Ok(())
     })?;
 
+    push_records(&mut s, "Gate runs", doc.gate_runs.len(), |s| {
+        s.push_str(
+            "| ID | Taken at | Status | Blocked | Manifest | Rule-pack | Change | Revision |\n",
+        );
+        s.push_str(
+            "|----|----------|--------|---------|----------|-----------|--------|----------|\n",
+        );
+        for g in &doc.gate_runs {
+            s.push_str(&format!(
+                "| {} | {} | {} | {} | `{}` | `{}` | `{}` | `{}` |\n",
+                g.id,
+                g.taken_at,
+                md_inline(&g.status),
+                if g.blocked { "yes" } else { "no" },
+                md_inline(&short(&g.manifest_digest)),
+                md_inline(&g.rule_pack_version),
+                md_inline(&short(&g.change_id)),
+                md_inline(&short(&g.revision)),
+            ));
+        }
+        Ok(())
+    })?;
+
     Ok(s)
 }
 
@@ -254,6 +277,7 @@ mod tests {
             correlations: vec![],
             manual_links: vec![],
             gate_artifacts: vec![],
+            gate_runs: vec![],
         }
     }
 

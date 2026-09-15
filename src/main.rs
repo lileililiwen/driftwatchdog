@@ -49,6 +49,8 @@ fn run() -> anyhow::Result<ExitCode> {
             .with_context(|| "driftwatchdog doctor failed")?,
         Command::Check(args) => driftwatchdog::commands::check_cmd(args, &cwd)
             .with_context(|| "driftwatchdog check failed")?,
+        Command::Gate(args) => driftwatchdog::commands::gate_cmd(args, &cwd)
+            .with_context(|| "driftwatchdog gate failed")?,
         Command::Link(args) => driftwatchdog::commands::link_cmd(args, &cwd)
             .with_context(|| "driftwatchdog link failed")?,
         Command::Unlink(args) => driftwatchdog::commands::unlink_cmd(args, &cwd)

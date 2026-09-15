@@ -9,6 +9,7 @@ pub mod alerts;
 pub mod bugs;
 pub mod correlations;
 pub mod evidence;
+pub mod gates;
 pub mod links;
 pub mod runs;
 
@@ -131,6 +132,7 @@ mod tests {
             "correlations",
             "manual_links",
             "gate_artifacts",
+            "gate_runs",
             "schema_version",
         ] {
             assert!(tables.iter().any(|t| t == required), "missing {required}");

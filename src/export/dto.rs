@@ -22,7 +22,13 @@ use serde::{Deserialize, Serialize};
 ///     reading older documents, and old readers ignore unknown
 ///     fields, so v2 documents stay readable both ways. The
 ///     `evidence-and-artifacts` change is the source of this bump.
-pub const SCHEMA_VERSION: u32 = 3;
+/// v4: `ExportDocument` gained a `gate_runs` array of
+///     `GateRunExport` rows. The field defaults to empty when
+///     reading older documents, and old readers ignore unknown
+///     fields, so v3 documents stay readable both ways. The
+///     `gate-cli-and-memory-integration` change is the source of
+///     this bump.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Top-level JSON document. The `runs`, `fingerprints`, etc. fields are
 /// flat arrays so consumers can index them directly. `project` carries
@@ -45,6 +51,11 @@ pub struct ExportDocument {
     /// empty when reading older documents.
     #[serde(default)]
     pub gate_artifacts: Vec<GateArtifactExport>,
+    /// Local gate run history. Empty for databases that predate the
+    /// `gate-cli-and-memory-integration` migration; defaults to
+    /// empty when reading older documents.
+    #[serde(default)]
+    pub gate_runs: Vec<GateRunExport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,6 +190,23 @@ pub struct GateArtifactExport {
     pub preview: Option<String>,
 }
 
+/// One local gate run: change/revision identity, manifest and
+/// rule-pack provenance, aggregate status, blocking outcome, and the
+/// per-gate results as canonical JSON. Append-only history; repeated
+/// gating of one change yields distinguishable rows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GateRunExport {
+    pub id: i64,
+    pub taken_at: String,
+    pub change_id: String,
+    pub revision: String,
+    pub manifest_digest: String,
+    pub rule_pack_version: String,
+    pub status: String,
+    pub blocked: bool,
+    pub results_json: String,
+}
+
 /// Discriminator used by the JSONL serializer. One record per line, each
 /// self-contained, with `type` selecting the DTO and `id` providing a
 /// stable identifier per record kind.
@@ -193,6 +221,7 @@ pub enum RecordKind {
     Correlation,
     ManualLink,
     GateArtifact,
+    GateRun,
 }
 
 impl RecordKind {
@@ -209,6 +238,7 @@ impl RecordKind {
             RecordKind::Correlation => "correlation",
             RecordKind::ManualLink => "manual_link",
             RecordKind::GateArtifact => "gate_artifact",
+            RecordKind::GateRun => "gate_run",
         }
     }
 }

@@ -229,6 +229,29 @@ fn render_ai_markdown(
     s.push_str("- Review the **current spec violations** section. Read the `Source` column entries before changing application behavior; do not modify specs merely to silence warnings.\n");
     s.push_str("- For each **possible relationship** (heuristic or manual), inspect the linked bug and alert, form a hypothesis, and either add a regression test or document why the similarity is coincidental.\n");
     s.push_str("- Do not fix only the most recent occurrence; recurrence memory exists so the same bug is not rediscovered each session.\n");
+    s.push('\n');
+
+    push_section(&mut s, "Gate status");
+    match crate::repo::gates::Gates::new(db).latest() {
+        Ok(Some(run)) => {
+            s.push_str(&format!(
+                "Latest local gate run: {} at {} (manifest `{}`, rule-pack `{}`).\n",
+                run.status,
+                run.taken_at,
+                md_inline(short_str(&run.manifest_digest)),
+                md_inline(run.rule_pack_version.clone()),
+            ));
+            if run.blocked {
+                s.push_str("- The latest gate is **blocked**: current gate failures are distinct from the historical recurring failures above. Resolve them with `driftwatch gate` before representing this change as complete.\n");
+            } else {
+                s.push_str("- The latest gate passed locally. Historical recurring failures above remain worth regression coverage even when the current gate is green.\n");
+            }
+        }
+        _ => {
+            s.push_str("No local gate runs recorded. Run `driftwatch gate` before archive; CI repeats it.\n");
+        }
+    }
+    s.push('\n');
 
     Ok(s)
 }
@@ -259,6 +282,14 @@ fn md_inline(s: String) -> String {
         .chars()
         .take(160)
         .collect()
+}
+
+fn short_str(h: &str) -> String {
+    if h.len() >= 16 {
+        h[..16].to_string()
+    } else {
+        h.to_string()
+    }
 }
 
 fn path_display(p: &Path) -> String {

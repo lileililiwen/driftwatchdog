@@ -33,7 +33,7 @@ fn export_json_on_empty_db_produces_valid_document() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let v: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}; stdout={stdout}"));
-    assert_eq!(v["schema_version"], 3);
+    assert_eq!(v["schema_version"], 4);
     assert!(v["runs"].as_array().unwrap().is_empty());
     assert!(v["fingerprints"].as_array().unwrap().is_empty());
     assert!(v["occurrences"].as_array().unwrap().is_empty());
@@ -41,7 +41,8 @@ fn export_json_on_empty_db_produces_valid_document() {
     assert!(v["correlations"].as_array().unwrap().is_empty());
     assert!(v["manual_links"].as_array().unwrap().is_empty());
     assert!(v["gate_artifacts"].as_array().unwrap().is_empty());
-    assert_eq!(v["project"]["local_schema_version"], 5);
+    assert!(v["gate_runs"].as_array().unwrap().is_empty());
+    assert_eq!(v["project"]["local_schema_version"], 6);
 }
 
 #[test]

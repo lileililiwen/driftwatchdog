@@ -51,6 +51,10 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Run configured external checkers and record drift alerts.
     Check(CheckArgs),
+    /// Resolve the project Gate plan, execute applicable checks
+    /// locally, persist the result, and exit nonzero on blocking
+    /// failures. Run locally before archive; CI repeats this command.
+    Gate(GateArgs),
     /// Create an explicit link between a recurring bug and a drift alert.
     Link(LinkArgs),
     /// Remove a manual link by id.
@@ -206,6 +210,28 @@ pub struct CheckArgs {
     /// command without polluting the database.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+/// `driftwatch gate [--dry-run] [--format human|json]`
+#[derive(Debug, Args, Default, Clone)]
+#[command(
+    after_help = "Examples:\n  driftwatch gate\n  driftwatch gate --dry-run\n  driftwatch gate --format json"
+)]
+pub struct GateArgs {
+    /// Show the resolved plan without child execution or persistence.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Output format. `human` prints a table; `json` prints a
+    /// machine-readable status document to stdout.
+    #[arg(long, value_enum, default_value_t = GateFormatArg::Human)]
+    pub format: GateFormatArg,
+}
+
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub enum GateFormatArg {
+    #[default]
+    Human,
+    Json,
 }
 
 /// `driftwatch link bug:<id> spec:<id> [--note "..."]`

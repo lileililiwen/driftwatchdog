@@ -21,7 +21,8 @@ use crate::repo::{
 
 use super::dto::{
     AlertExport, CorrelationExport, ExportDocument, FingerprintExport, GateArtifactExport,
-    ManualLinkExport, OccurrenceExport, ProjectExport, RunExport, SnapshotExport, SCHEMA_VERSION,
+    GateRunExport, ManualLinkExport, OccurrenceExport, ProjectExport, RunExport, SnapshotExport,
+    SCHEMA_VERSION,
 };
 
 /// Maximum run rows included in an export. The cap keeps exports
@@ -58,6 +59,21 @@ pub fn build_with_cap(
     let correlations = Correlations::new(db).list_all()?;
     let manual_links = Links::new(db).list_all()?;
     let gate_artifacts = Artifacts::new(db).list_all_with_ids()?;
+    let gate_runs = crate::repo::gates::Gates::new(db)
+        .list(EXPORT_RUN_CAP)?
+        .into_iter()
+        .map(|r| GateRunExport {
+            id: r.id,
+            taken_at: r.taken_at,
+            change_id: r.change_id,
+            revision: r.revision,
+            manifest_digest: r.manifest_digest,
+            rule_pack_version: r.rule_pack_version,
+            status: r.status,
+            blocked: r.blocked,
+            results_json: r.results_json,
+        })
+        .collect();
     let local_schema_version = schema_version(db.conn())?;
 
     let doc = ExportDocument {
@@ -80,6 +96,7 @@ pub fn build_with_cap(
             .into_iter()
             .map(|(id, a)| artifact_to_dto(id, a))
             .collect(),
+        gate_runs,
     };
     Ok((doc, truncated))
 }
