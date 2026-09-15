@@ -18,11 +18,72 @@ Nine v1.1 Engineering Gate changes were planned under
 `openspec/changes/`, dependency ordered from the BFS-DFS-BFS workflow
 through the generic Gate contract, project configuration, evidence, toolchain
 execution, adapters, context providers, AI evaluation, and local CLI/history
-integration. The first Gate contract is now implemented (see below).
+integration. Seven are now implemented and archived (see below); two planning
+packages remain.
+
+The `generic-context-providers` change is **implemented and archived**
+(2026-09-15): new `src/gate/context.rs` (generic read-only
+`ProviderRegistry` returning bounded, hashed `ContextDocument` values,
+`git` provider for diff/status, `project-files` provider for
+project-local documents, optional `openspec` provider emitting generic
+documents only, path confinement to the project root, size/truncation
+bounds, secret redaction, unavailable-not-empty semantics) plus `doctor`
+integration (`gate.context.*` checks: absence stays silent, unknown
+providers are `Warn`, a selected-but-absent `openspec/` dir is honest
+`Info`). 20 new tests cover Git-only, OpenSpec, missing, escape,
+truncation, and mutation cases. No OpenSpec types enter generic
+gate/core modules. Two Gate planning packages remain; the next in
+dependency order is `gate-ai-evaluation` and proceeds automatically
+under the standing auto-mode authorization in `AGENTS.md`.
+
+The `gate-adapter-evaluation` change is **implemented and archived**
+(2026-09-15): new `src/gate/adapters.rs`
+(`AdapterRegistry` with validated capability declarations,
+`AdapterInput` executed through the existing checker runner for
+bounded capture/timeout/process-group kill, tolerant
+checker-JSON/SARIF/Gitleaks/OSV/Semgrep normalizers with secret
+redaction and finding caps, exit-code/findings/evidence normalized
+separately so scanner nonzero-with-findings still yields `FAIL`,
+infra failures mapped to `REVIEW_REQUIRED` with `<tool>:output` /
+`<tool>:timeout` missing evidence, `project-runtime` text adapter by
+exit code, `run_all` isolation so one failure never aborts the rest,
+pure deterministic `evaluate` over threshold rules plus
+rule-required available-evidence guard). 28 new tests cover fixtures,
+malformed/timeout/nonzero/signal/spawn isolation, caps, argv
+passthrough, evaluator evidence rules, and no-SDK-coupling.
+`driftwatch check` persistence and existing checker protocol are
+untouched. Two Gate planning packages remain; the next in
+dependency order is `gate-ai-evaluation` and proceeds
+automatically under the standing auto-mode authorization in
+`AGENTS.md`.
+
+The `toolchain-management-and-execution` change is **implemented and
+archived** (2026-09-15): new `src/gate/toolchain.rs`
+(strict `gate-tools.toml` parsing with `did-you-mean` diagnostics, pinned
+`id`/`version`/`digest`/`modes` entries, platform resolution against the
+release matrix `linux-x86_64`/`linux-arm64`/`darwin-x86_64` with
+fail-before-execution rejection, per-tool/per-version/per-platform user
+cache with `sha256:` verification before atomic temp+rename,
+per-executable `create_new` bootstrap locks with contention-as-error,
+offline-first `resolve_execution` across `managed`/`container`/`native`/
+`project_runtime` backends with digest-pinned container images,
+project-root-confined mounts, explicit env allowlist, opt-in native
+fallback, verbatim project argv with no SDK install, timeout carried
+into the runner, explicit `bootstrap_plan`/`render_bootstrap_plan` with
+no network I/O in core) plus `doctor` integration
+(`gate.toolchain.*` checks: missing manifest stays silent, malformed is
+`Warn`, missing tools are `Warn` with the exact bootstrap remediation,
+unsupported platforms are `Fail`). 28 new tests cover parsing,
+digests, atomic store, mismatch cleanup, lock contention/mutual
+exclusion, offline reuse, container pinning/mount escapes/
+unavailability, native opt-in, project-runtime passthrough/missing,
+timeouts, bootstrap plans, and doctor output. Ordinary checks never
+download tools. Two Gate planning packages remain; the next in
+dependency order is `gate-ai-evaluation` and proceeds automatically
+under the standing auto-mode authorization in `AGENTS.md`.
 
 The `evidence-and-artifacts` change is **implemented and archived**
 (2026-09-14): new `src/gate/evidence.rs` (typed artifact classes,
-`sha256:` digests, state-root-confined writes via temp+rename,
 configured-secret + pattern redaction with bounded UTF-8-safe previews,
 adapter-path escape rejection, `ArtifactRecord::unavailable` markers, and
 the `evidence_backed_pass` guard so missing/unavailable evidence never
@@ -110,6 +171,9 @@ Read these in order:
 | generic-gate-contract | archived 2026-09-14 | Generic gate domain types, versioned JSON DTOs, deterministic blocking aggregation, bounded evidence refs with secret redaction, checker-outcome adapter; `src/gate/` + 24 tests | bfs-dfs-bfs-change-workflow |
 | gate-project-configuration | archived 2026-09-14 | Project Gate manifest (`gate.toml`): profiles, explicit checks, project commands, triggers, rule-pack identity, dry-run plan; `src/gate/manifest.rs` + 15 tests; `driftwatch.toml` execution untouched | generic-gate-contract |
 | evidence-and-artifacts | archived 2026-09-14 | Bounded Gate evidence (`src/gate/evidence.rs` + `src/repo/evidence.rs`, migration 0005, export v3, gc prune); 30+ tests; `driftwatch.toml` execution untouched | gate-project-configuration |
+| toolchain-management-and-execution | archived 2026-09-15 | Pinned tool manifests, verified user cache, atomic locks, managed/container/native/project-runtime backends (offline default, explicit bootstrap), `gate.toolchain.*` doctor checks; `src/gate/toolchain.rs` + 28 tests; `driftwatch.toml`/`gate.toml` execution untouched | evidence-and-artifacts |
+| gate-adapter-evaluation | archived 2026-09-15 | Adapter registry, checker-JSON/SARIF/Gitleaks/OSV/Semgrep normalizers, project-runtime text adapter, isolated execution, deterministic evaluator; `src/gate/adapters.rs` + 28 tests; checker protocol/persistence untouched | toolchain-management-and-execution |
+| generic-context-providers | archived 2026-09-15 | Generic read-only provider registry, bounded hashed documents, Git + project-file + optional OpenSpec providers, `gate.context.*` doctor checks; `src/gate/context.rs` + 20 tests; no OpenSpec types in gate core | gate-adapter-evaluation |
 
 ## Implementation constraints
 
@@ -127,9 +191,9 @@ Read these in order:
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 456 tests pass: lib + integration (incl. packaging; +24 gate-contract, +15 gate-manifest, +30 evidence/artifact)
+    cargo test             # 532 tests pass: lib + integration (incl. packaging; +24 gate-contract, +15 gate-manifest, +30 evidence/artifact, +28 toolchain, +28 adapters, +20 context)
     cargo clippy --all-targets --all-features -- -D warnings
-    openspec validate --changes --strict --no-interactive   # 5/5 pass (remaining planning queue)
+    openspec validate --changes --strict --no-interactive   # 2/2 pass (remaining planning queue)
     sh tests/packaging.sh   # 6/6 pass: target_mapping, artifact_naming, checksum_manifest, installer, repo_hygiene, agent_examples
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
@@ -170,7 +234,7 @@ Last run on this change:
 - `src/similarity/{mod,tokenize,score,candidates}.rs` — heuristic engine: tokenization, Jaccard, weighted `score_pair`, N×M candidate generation with 5,000-pair cap.
 - `src/correlate.rs` — `run_after_check` orchestration: loads fingerprints + alerts, runs the candidate generator, persists passing pairs.
 - `src/export/{dto,build,json,jsonl,markdown,mod}.rs` — versioned export DTOs (`SCHEMA_VERSION = 3`, incl. `GateArtifactExport` + `gate_artifacts` array with `#[serde(default)]` for v2 reads) and three serializers (jsonl `gate_artifact` records, markdown `## Gate evidence` section).
-- `src/doctor/{check,mod}.rs` — `Check`, `Status`, and the `Report` aggregator. Includes a `checker.last_run` warn when the most recent check snapshot for a configured checker was a failure.
+- `src/doctor/{check,mod}.rs` — `Check`, `Status`, and the `Report` aggregator. Includes a `checker.last_run` warn when the most recent check snapshot for a configured checker was a failure, plus `gate.toolchain.*` and `gate.context.*` readiness checks (absent manifests stay silent; unknown providers are `Warn`).
 - `src/checker/mod.rs` — public module: `protocol`, `runner`, `report` re-exports.
 - `src/checker/protocol.rs` — `DriftAlert`, `AlertsDocument`, `ProtocolError`, `parse_alerts_document`.
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
@@ -178,6 +242,9 @@ Last run on this change:
 - `src/gate/{mod,types,dto,aggregate,redact,adapt}.rs` — generic gate contract (`GateStatus`/`GateSeverity`/`Finding`/`EvidenceRef`/`GateResult`, `GATE_CONTRACT_VERSION = 1` JSON boundary with size caps, deterministic `aggregate` with `BlockingPolicy`, secret-redacting bounded diagnostics, `adapt_checker_outcome` mapping Empty→PASS / Success→FAIL / infra-failure→REVIEW_REQUIRED); no OpenSpec dependency, no storage migration, no CLI surface yet.
 - `src/gate/manifest.rs` — project Gate manifest (`GateManifest`/`ManifestCheck`/`Trigger`/`ResolvedGatePlan`, `parse`/`resolve`/`render_plan`/`load`/`manifest_path`); `gate.toml` at project root preferred over `.driftwatch/gate.toml`, missing manifest is `Ok(None)`; `driftwatch.toml` execution untouched; no tool install, no network, no OpenSpec types.
 - `src/gate/evidence.rs` — bounded evidence domain (`ArtifactKind`/`ArtifactRecord`/`NewArtifact`/`EvidenceError`, `MAX_ARTIFACT_BYTES = 1 MiB`, `MAX_PREVIEW_BYTES = 1024`, `build_record`/`store_bytes` via temp+rename, `confine_adapter_path`/`confined_path` escape rejection, `redact_secrets_with_extra` previews, `evidence_backed_pass` guard, `UNAVAILABLE_PREVIEW` marker); no OpenSpec types, no tool install, no network.
+- `src/gate/adapters.rs` — adapter contracts (`AdapterRegistry`/`AdapterCapability`/`OutputFormat`/`AdapterInput`, duplicate/empty validation before execution), five built-ins (`checker`, `gitleaks`, `osv`, `semgrep`, `project-runtime`) via CLI boundaries only, tolerant normalizers (`parse_checker_json`/`parse_sarif`/`parse_gitleaks` without secret values/`parse_osv`/`parse_semgrep`) with finding/evidence caps and redaction, exit-findings-evidence separated (nonzero-with-findings → `FAIL`), infra mapping (`SpawnFailed`/`NonZeroExit`/`Timeout`+timeout evidence/`Signalled`/`MalformedOutput` → `REVIEW_REQUIRED` + `<tool>:output`), `run_text_adapter` exit-code mapping, `run_all` failure isolation, pure deterministic `evaluate` (threshold rules + rule-required available-evidence guard); no SDKs, no scanner reimplementation, no network, no LLM.
+- `src/gate/context.rs` — generic read-only context providers (`ProviderRegistry`, bounded hashed `ContextDocument` with kind/path/digest/size/change-id, `git` diff/status + `project-files` + optional `openspec` providers emitting generic documents only, project-root confinement, truncation bounds, secret-safe previews, unavailable-not-empty semantics, `collect_context`/`selection_from_manifest`/`context_checks`); no OpenSpec types in gate core, no mutation, no network.
+- `src/gate/toolchain.rs` — pinned tool manifests (`ToolchainManifest`/`ToolEntry`/`ExecutionMode`, strict `gate-tools.toml` parse with `did-you-mean` hints, `version = 1` contract check), platform matrix (`SUPPORTED_PLATFORMS`, `current_platform`, `resolve_platform` fail-before-execution), verified user cache (`cache_base_from`/`user_cache_base`, `cache_dir`/`executable_path`, `digest_bytes`/`verify_bytes`/`cached_verified`, `store_verified_bytes` verify-then-temp+rename with staged re-verify, `MAX_TOOL_BYTES = 128 MiB`), per-executable `CacheLock` (`acquire_lock` via `create_new`, contention-as-error, drop-removes), policy-gated `resolve_execution` (`ProvisionPolicy::offline`/`bootstrap`, managed cache reuse, digest-pinned container images, project-root-confined mounts, explicit env allowlist, opt-in native fallback, verbatim project argv with no SDK install, `timeout_ms` passthrough), explicit `bootstrap_plan`/`render_bootstrap_plan`, optional manifest discovery (`gate-tools.toml` at root then `.driftwatch/`, missing is silent), truthful `toolchain_checks` (`gate.toolchain.*`: cache re-read, `PATH`/container probes, never config-alone); no network, no implicit install, no OpenSpec types.
 - `src/runtime/runner.rs` — `CommandSpec` (incl. opt-in `timeout_ms`), `CapturedStream`, `RunOutcome` (incl. `timed_out` + `diagnostic`), `run`; byte-accumulating UTF-8-once drain, signal-aware status, process-group kill on timeout.
 - `src/util.rs` — `truncate_char_boundary` shared helper (byte limit, char-boundary cut, ellipsis).
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
@@ -225,18 +292,19 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 (`mcp-read-tools`, `agent-examples`, `github-actions-templates`) are
 archived as of 2026-09-14, the packaging suite runs 8/8 green (incl.
 `change_workflow`), and
-the Rust test suite passes (460+ tests, incl. 24 gate-contract + 15
-gate-manifest + 30 evidence/artifact). The first
-four v1.1 Engineering Gate packages, **`bfs-dfs-bfs-change-workflow`,
-`generic-gate-contract`, `gate-project-configuration`, and
-`evidence-and-artifacts`, are implemented
-and archived** as of 2026-09-14.
-Five planning-only packages remain, covering
-toolchain execution, adapters, generic context providers, optional AI
-evaluation, and local CLI/history integration. The queue proceeds one
-change at a time under the standing auto-mode authorization in
-`AGENTS.md`; next in dependency order is
-`toolchain-management-and-execution`.
+the Rust test suite passes (532 tests, incl. 24 gate-contract + 15
+gate-manifest + 30 evidence/artifact + 28 toolchain + 28 adapters +
+20 context). The first
+seven v1.1 Engineering Gate packages, **`bfs-dfs-bfs-change-workflow`,
+`generic-gate-contract`, `gate-project-configuration`,
+`evidence-and-artifacts`, `toolchain-management-and-execution`,
+`gate-adapter-evaluation`, and `generic-context-providers`, are
+implemented and archived** as of 2026-09-15.
+Two planning-only packages remain, covering
+optional AI evaluation and local CLI/history integration. The queue
+proceeds one change at a time under the standing auto-mode
+authorization in `AGENTS.md`; next in dependency order is
+`gate-ai-evaluation`.
 
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.

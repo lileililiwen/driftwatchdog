@@ -21,6 +21,7 @@ Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in
 | v0.5 Distribute | `linux-macos-distribution` | Ship native Linux + Intel macOS binaries through a shell installer, an npm launcher, direct downloads, and reproducible CI. |
 | v0.6 Integrate | `mcp-read-tools`, `agent-examples`, `github-actions-templates` | Serve read-only MCP tools over stdio, ship tested Claude Code/OpenCode/Aider examples, and publish a reusable GitHub Actions check template. |
 | v1.0 Stable | Future hardening changes | Stabilize schema, config, checker protocol, CLI, cross-platform behavior, documentation, and real-project validation. |
+| v1.1 Engineering Gates | Nine planned packages (seven archived, two remaining: `gate-ai-evaluation`, `gate-cli-and-memory-integration`) | Add generic Gate contracts, project policy, evidence, tool lifecycle, adapters, optional context providers, AI evaluation, and local Gate/history integration. |
 
 ## Closed change inventory
 
@@ -58,9 +59,47 @@ checker-and-drift-alerts ───────────────→ correl
 
 The first three packages form the smallest useful runtime-memory release. Checker integration remains optional until that foundation is stable. Distribution packaging (v0.5) layers on top of the stable CLI without altering its contract.
 
+## v1.1 Engineering Gate planning queue
+
+Seven of the nine packages are implemented and archived
+(`bfs-dfs-bfs-change-workflow`, `generic-gate-contract`,
+`gate-project-configuration`, `evidence-and-artifacts`,
+`toolchain-management-and-execution`, `gate-adapter-evaluation`,
+`generic-context-providers`). The remaining packages are planning-only
+and dependency ordered. Each package
+requires proposal BFS, design boundary review, DFS implementation tasks, and
+final BFS regression tasks before implementation can begin:
+
+```text
+bfs-dfs-bfs-change-workflow
+        ↓
+generic-gate-contract
+        ↓
+gate-project-configuration ───────┐
+        ↓                          │
+evidence-and-artifacts             │
+        ↓                          │
+toolchain-management-and-execution│
+        ↓                          │
+gate-adapter-evaluation            │
+        ↓                          │
+generic-context-providers          │
+        ↓                          │
+gate-ai-evaluation                 │
+        ↓                          │
+gate-cli-and-memory-integration ←─┘
+```
+
+OpenSpec is an optional context provider in this queue. The generic Gate
+contract remains usable by projects using OpenAPI, Gherkin, Markdown, Jira, or
+no specification framework.
+
 ## Explicit non-goals for v1
 
-Cloud sync, accounts, team permissions, issue tracking, a Sentry replacement, a CI server, automatic code modification, a built-in LLM, a vector database, a full AST engine, an IDE, and a complex SPA are out of scope.
+Cloud sync, accounts, team permissions, issue tracking, a Sentry replacement, a
+CI server, automatic code modification, a built-in LLM, a vector database, a
+full AST engine, an IDE, and a complex SPA remain out of scope. AI evaluation is
+an optional provider boundary, not a built-in LLM dependency.
 
 ## Release gates
 
