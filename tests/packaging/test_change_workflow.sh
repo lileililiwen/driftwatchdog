@@ -87,7 +87,7 @@ test_change_workflow() {
         wf_found=$((wf_found + 1))
         check_workflow_dir "$wf_dir" || return 1
     done
-    [ "$wf_found" -ge 1 ] || { printf 'no active changes found under openspec/changes/\n' >&2; return 1; }
+    [ "$wf_found" -ge 1 ] || printf 'note: no active changes under openspec/changes/ (queue fully archived)\n' >&2
 
     # 3. Negative fixture: a tasks.md without the DFS phase must be
     #    rejected, proving the check is not vacuously green.
