@@ -25,11 +25,11 @@ Driftwatchdog is a local-first Rust CLI for remembering runtime failures across 
 When a change is implemented and its `tasks.md` is fully checked off, follow this exact sequence before moving to the next change. Do not skip steps. The change is not "done" until step 6 completes.
 
 1. Run verification gates: `cargo fmt --check && cargo test && cargo clippy --all-targets --all-features -- -D warnings && openspec validate --changes --strict --no-interactive`.
-2. Confirm `openspec/changes/<change>/tasks.md` has every box ticked.
-3. Archive the change with `openspec archive <change> -y`; canonical capability
+2. Update `openspec/changes/<change>/tasks.md` and mark every box finished (`[x]`). Do not proceed with open boxes.
+3. Only after tasks.md is fully finished, archive the change with `openspec archive <change> -y`; canonical capability
    specs must be promoted from the change when a `spec.md` is present.
-4. Stage and commit the implementation + archive in a single commit: `git add -A && git commit -m "Implement <change>"`.
-5. Update `HANDOFF.md` (change status, next action, module map if applicable) and commit it: `git add HANDOFF.md && git commit -m "Update HANDOFF after <change>"`.
+4. Commit 1 — implementation + archive in a single commit: `git add -A && git commit -m "Implement <change>"`.
+5. Commit 2 — update `HANDOFF.md` (change status, next action, module map if applicable) and related docs (`ROADMAP.md`, `README.md` when sequencing or surface changes) and commit them: `git add HANDOFF.md ROADMAP.md README.md && git commit -m "Update HANDOFF after <change>"` (stage only the docs that actually changed).
 6. Re-run `openspec validate --changes --strict --no-interactive` to confirm the change list still resolves.
 
 **Why:** OpenSpec's `archive` moves a change out of `openspec/changes/` into `openspec/changes/archive/` and updates main specs from the change's `spec.md`. Splitting the work into one implementation commit and one doc commit keeps the implementation reviewable as a unit and lets reviewers see handoff context separately from code.

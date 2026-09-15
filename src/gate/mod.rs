@@ -7,21 +7,37 @@
 //! bounded diagnostics; [`adapt`] maps the existing checker protocol to
 //! this contract without changing `driftwatch check` persistence;
 //! [`evidence`] owns bounded artifact persistence, path confinement, and
-//! the evidence-backed-`PASS` guard.
+//! the evidence-backed-`PASS` guard; [`toolchain`] owns pinned tool
+//! manifests, the verified user cache, and the managed / container /
+//! native / project-runtime backends (offline by default, explicit
+//! bootstrap only); [`adapters`] owns tool-adapter contracts, output
+//! normalization, and deterministic evaluation; [`context`] owns
+//! generic read-only context providers (Git, project files, optional
+//! OpenSpec) behind bounded generic documents.
 //!
-//! No OpenSpec types appear here. No tool is installed, no network call
-//! is made, and no LLM is invoked.
+//! No OpenSpec types appear here. No tool is installed implicitly, no
+//! network call is made, and no LLM is invoked.
 
 pub mod adapt;
+pub mod adapters;
 pub mod aggregate;
+pub mod context;
 pub mod dto;
 pub mod evidence;
 pub mod manifest;
 pub mod redact;
+pub mod toolchain;
 pub mod types;
 
 pub use adapt::adapt_checker_outcome;
 pub use aggregate::{aggregate, AggregateOutcome, BlockingPolicy, GatePlan, PlannedCheck};
+pub use context::{
+    collect_context, context_checks, selection_from_manifest, ContextBundle, ContextDocument,
+    ContextError, ContextOptions, ProviderRegistry, KIND_GIT_DIFF, KIND_GIT_STATUS,
+    KIND_OPENSPEC_DOC, KIND_PROJECT_FILE, MAX_CONTEXT_BYTES, MAX_CONTEXT_DOCS,
+    MAX_PREVIEW_BYTES as MAX_CONTEXT_PREVIEW_BYTES, PROVIDER_GIT, PROVIDER_OPENSPEC,
+    PROVIDER_PROJECT_FILES,
+};
 pub use dto::{
     parse_gate_result_document, to_canonical_json, DtoError, GATE_CONTRACT_VERSION,
     MAX_DIAGNOSTIC_BYTES, MAX_EVIDENCE_REFS, MAX_FINDINGS, MAX_MISSING_EVIDENCE,
@@ -38,5 +54,8 @@ pub use manifest::{
 };
 pub use redact::{
     bound_text_with_extra, bounded_diagnostic, redact_secrets, redact_secrets_with_extra,
+};
+pub use toolchain::{
+    bootstrap_plan, render_bootstrap_plan, resolve_execution, resolve_platform, toolchain_checks,
 };
 pub use types::{EvidenceRef, Finding, GateResult, GateSeverity, GateStatus};

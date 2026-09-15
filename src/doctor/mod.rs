@@ -115,6 +115,8 @@ pub fn run(cwd: &Path) -> Result<Report, crate::error::Error> {
     checks.extend(check_directories(&proj));
     checks.extend(check_checkers(&proj));
     checks.extend(check_recent_check_runs(&proj));
+    checks.extend(check_gate_toolchain(&proj));
+    checks.extend(check_gate_context(&proj));
 
     let exit_code = if checks.iter().any(|c| c.status == Status::Fail) {
         2
@@ -402,6 +404,31 @@ fn check_one_checker(checker: &crate::project::config::CheckerEntry) -> Check {
             checker.name
         )),
     }
+}
+
+/// Gate toolchain readiness (optional `gate-tools.toml` layer).
+/// Absence stays silent (unconfigured-but-ok); a declared manifest is
+/// probed truthfully — cache digests are re-read, `PATH` is searched,
+/// container capability is bounded-probed — so readiness is never
+/// claimed from configuration alone. Ordinary `driftwatch` usage is
+/// unaffected; missing tools are `Warn` with the explicit bootstrap
+/// next action, unsupported platforms are `Fail` (fail-closed).
+/// Gate context readiness (optional `gate.toml` `[[contexts]]` layer).
+/// Absence stays silent (unconfigured-but-ok) so reports and exports
+/// remain valid without providers. Unknown providers are `Warn`;
+/// a selected-but-absent `openspec/` dir is honest `Info`
+/// (`NOT_APPLICABLE`, never false success).
+fn check_gate_context(proj: &ProjectRoot) -> Vec<Check> {
+    crate::gate::context::context_checks(&proj.root)
+}
+
+fn check_gate_toolchain(proj: &ProjectRoot) -> Vec<Check> {
+    let cache_base = crate::gate::toolchain::user_cache_base();
+    crate::gate::toolchain::toolchain_checks(
+        &proj.root,
+        &cache_base,
+        &crate::gate::toolchain::RealProbes,
+    )
 }
 
 /// Surface a Warn for any configured checker whose most recent
