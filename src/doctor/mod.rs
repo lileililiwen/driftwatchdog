@@ -432,10 +432,10 @@ fn check_gate_ai(proj: &ProjectRoot) -> Vec<Check> {
     crate::gate::ai::ai_checks(&proj.root)
 }
 
-/// Local gate history. Silent when no `gate.toml` exists; otherwise
-/// the latest persisted `driftwatch gate` run is surfaced so a blocked
-/// gate is visible in `doctor` (and therefore in the read-only
-/// `doctor_status` MCP tool) before archive.
+/// Local gate history. Silent when no `gate.toml`/`.ai-gate/gate.yaml`
+/// exists; otherwise the latest persisted `driftwatch gate` run is
+/// surfaced so a blocked gate is visible in `doctor` (and therefore in
+/// the read-only `doctor_status` MCP tool) before archive.
 fn check_gate_history(proj: &ProjectRoot) -> Vec<Check> {
     crate::commands::gate::gate_history_checks(proj)
 }

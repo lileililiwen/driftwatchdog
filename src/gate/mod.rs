@@ -15,7 +15,9 @@
 //! generic read-only context providers (Git, project files, optional
 //! OpenSpec) behind bounded generic documents; [`ai`] owns the
 //! provider-neutral semantic evaluation contract (opt-in, redacted,
-//! bounded, fail-closed) without embedding an LLM.
+//! bounded, fail-closed) without embedding an LLM; [`aigate`] converts a
+//! business project's `.ai-gate/gate.yaml` policy into the same native
+//! manifest so the shared pipeline executes it unchanged.
 //!
 //! No OpenSpec types appear here. No tool is installed implicitly, no
 //! network call is made, and no LLM is invoked.
@@ -24,6 +26,7 @@ pub mod adapt;
 pub mod adapters;
 pub mod aggregate;
 pub mod ai;
+pub mod aigate;
 pub mod context;
 pub mod dto;
 pub mod evidence;
@@ -58,8 +61,9 @@ pub use evidence::{
     ARTIFACT_DIR_NAME, MAX_ARTIFACT_BYTES, MAX_KEY_BYTES, MAX_PREVIEW_BYTES, UNAVAILABLE_PREVIEW,
 };
 pub use manifest::{
-    load as load_gate_manifest, manifest_path as gate_manifest_path, parse as parse_gate_manifest,
-    render_plan as render_gate_plan, resolve as resolve_gate_manifest,
+    load as load_gate_manifest, load_for_runtime as load_gate_manifest_for_runtime,
+    manifest_path as gate_manifest_path, parse as parse_gate_manifest,
+    render_plan as render_gate_plan, resolve as resolve_gate_manifest, LoadOutcome,
 };
 pub use redact::{
     bound_text_with_extra, bounded_diagnostic, redact_secrets, redact_secrets_with_extra,

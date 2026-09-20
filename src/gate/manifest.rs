@@ -77,6 +77,23 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
 /// Supported profile names, used in diagnostics.
 pub const SUPPORTED_PROFILES: &[&str] = &["backend", "frontend", "full", "minimal"];
 
+/// Resolve the default concern set for `profile` in the context of a
+/// concrete manifest: a built-in profile uses [`profile_defaults`];
+/// otherwise a project-defined `[profiles.<name>]` entry is consulted.
+/// Returns `None` only when the profile is neither built-in nor declared,
+/// which is the same condition [`validate`] rejects.
+pub fn profile_defaults_for(manifest: &GateManifest, profile: &str) -> Option<Vec<String>> {
+    if let Some(builtin) = profile_defaults(profile) {
+        return Some(builtin.iter().map(|s| (*s).to_string()).collect());
+    }
+    manifest.profiles.get(profile).cloned()
+}
+
+/// True when `profile` is a built-in name (not a project-defined one).
+pub fn is_builtin_profile(profile: &str) -> bool {
+    profile_defaults(profile).is_some()
+}
+
 /// On-disk manifest model. Unknown fields are rejected so typos
 /// surface immediately instead of silently changing policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +124,14 @@ pub struct GateManifest {
     /// Changed-surface triggers.
     #[serde(default)]
     pub triggers: Vec<Trigger>,
+    /// Project-defined domain profiles: `profile` may name a built-in
+    /// (`backend`, `frontend`, `full`, `minimal`) or a key declared here.
+    /// The value is the concern set the profile selects (its default
+    /// checks; explicit `[[checks]]` still add to or relax it). Empty
+    /// maps are not serialized so existing `gate.toml` digests stay
+    /// stable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, Vec<String>>,
 }
 
 fn default_manifest_version() -> u32 {
@@ -202,7 +227,7 @@ pub enum ManifestError {
     #[error("unknown field \"{field}\"{suggestion}")]
     UnknownField { field: String, suggestion: String },
     #[error(
-        "unsupported profile \"{profile}\"; expected one of: backend, frontend, full, minimal"
+        "unsupported profile \"{profile}\"; expected a built-in (backend, frontend, full, minimal) or a `[profiles.{profile}]` declaration"
     )]
     UnknownProfile { profile: String },
     #[error("unsupported manifest version {got}, expected {expected}")]
@@ -237,9 +262,10 @@ const KNOWN_FIELDS: &[&str] = &[
     "provider",
     "when_changed",
     "include",
+    "profiles",
 ];
 
-fn edit_distance(a: &str, b: &str) -> usize {
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();
@@ -263,6 +289,32 @@ fn suggest_field(unknown: &str) -> Option<&'static str> {
         }
     }
     best.map(|(s, _)| s)
+}
+
+/// Nearest known field name for an unknown key, over an arbitrary
+/// candidate set (used by the YAML converter's own schema). Returns
+/// `None` when nothing is within edit distance 3.
+pub(crate) fn suggest_from(unknown: &str, known: &[&str]) -> Option<String> {
+    let mut best: Option<(&str, usize)> = None;
+    for &k in known {
+        let d = edit_distance(unknown, k);
+        if d <= 3 && best.map_or(true, |(_, bd)| d < bd) {
+            best = Some((k, d));
+        }
+    }
+    best.map(|(s, _)| s.to_string())
+}
+
+/// Build an [`ManifestError::UnknownField`] with a `did you mean` hint
+/// resolved against `known`.
+pub(crate) fn unknown_field_error(field: &str, known: &[&str]) -> ManifestError {
+    let suggestion = suggest_from(field, known)
+        .map(|s| format!("; did you mean \"{s}\"?"))
+        .unwrap_or_default();
+    ManifestError::UnknownField {
+        field: field.to_string(),
+        suggestion,
+    }
 }
 
 fn extract_unknown_field(msg: &str) -> Option<String> {
@@ -312,17 +364,36 @@ pub fn parse(text: &str) -> Result<GateManifest, ManifestError> {
     Ok(manifest)
 }
 
-fn validate(manifest: &GateManifest) -> Result<(), ManifestError> {
+pub(crate) fn validate(manifest: &GateManifest) -> Result<(), ManifestError> {
     if manifest.version != GATE_CONTRACT_VERSION {
         return Err(ManifestError::UnknownVersion {
             got: manifest.version,
             expected: GATE_CONTRACT_VERSION,
         });
     }
-    if profile_defaults(&manifest.profile).is_none() {
+    if profile_defaults_for(manifest, &manifest.profile).is_none() {
         return Err(ManifestError::UnknownProfile {
             profile: manifest.profile.clone(),
         });
+    }
+    for (name, concerns) in &manifest.profiles {
+        if name.trim().is_empty() {
+            return Err(ManifestError::Parse(
+                "profile table with an empty name (use `[profiles.<name>]`)".to_string(),
+            ));
+        }
+        if is_builtin_profile(name) {
+            return Err(ManifestError::Parse(format!(
+                "profile \"{name}\" shadows a built-in profile; choose a different name"
+            )));
+        }
+        for concern in concerns {
+            if concern.trim().is_empty() {
+                return Err(ManifestError::Parse(format!(
+                    "profile \"{name}\" declares an empty concern"
+                )));
+            }
+        }
     }
     for check in &manifest.checks {
         if check.enabled {
@@ -376,11 +447,11 @@ pub fn resolve(
     changed_surfaces: &[String],
 ) -> Result<ResolvedGatePlan, ManifestError> {
     validate(manifest)?;
-    let defaults = profile_defaults(&manifest.profile).unwrap_or(&[]);
+    let defaults = profile_defaults_for(manifest, &manifest.profile).unwrap_or_default();
 
     let mut selected: BTreeMap<String, (bool, String)> = BTreeMap::new();
     for id in defaults.iter() {
-        selected.insert((*id).to_string(), (true, "manifest".to_string()));
+        selected.insert(id.clone(), (true, "manifest".to_string()));
     }
     for check in &manifest.checks {
         if !check.enabled {
@@ -518,30 +589,80 @@ pub fn render_plan(resolved: &ResolvedGatePlan) -> String {
 }
 
 /// Resolve the manifest path for a project root: `<root>/gate.toml`
-/// first, then `<root>/.driftwatch/gate.toml`. Returns `None` when
-/// neither exists (no gate configured — not an error).
+/// first, then `<root>/.driftwatch/gate.toml`, then
+/// `<root>/.ai-gate/gate.yaml` (the business-project convention).
+/// Returns `None` when none exists (no gate configured — not an error).
 pub fn manifest_path(project_root: &Path) -> Option<PathBuf> {
-    let primary = project_root.join("gate.toml");
-    if primary.is_file() {
-        return Some(primary);
+    [
+        project_root.join("gate.toml"),
+        project_root.join(".driftwatch").join("gate.toml"),
+        project_root.join(".ai-gate").join("gate.yaml"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+}
+
+/// Outcome of a runtime-filtered manifest load. Distinguishes "no
+/// manifest" from "a manifest that targets a different Gate runtime" so
+/// the command can report the latter without executing or persisting it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadOutcome {
+    NoManifest,
+    /// The manifest names a runtime other than driftwatchdog; nothing
+    /// was executed and no gate run was persisted.
+    ForeignRuntime {
+        runtime: String,
+    },
+    Manifest(GateManifest),
+}
+
+/// Read and parse the manifest at `path`, dispatching on extension:
+/// `.yaml`/`.yml` go through the business Gate YAML converter, anything
+/// else is parsed as native `gate.toml`.
+fn read_manifest(path: &Path) -> Result<GateManifest, ManifestError> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| ManifestError::Parse(format!("cannot read {}: {e}", path.display())))?;
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("yaml") | Some("yml") => crate::gate::aigate::parse(&text),
+        _ => parse(&text),
     }
-    let state_scoped = project_root.join(".driftwatch").join("gate.toml");
-    if state_scoped.is_file() {
-        return Some(state_scoped);
-    }
-    None
 }
 
 /// Load the manifest for a project root. Returns `Ok(None)` when no
-/// manifest file exists. Malformed manifests are errors with
-/// actionable diagnostics.
+/// manifest exists **or** when the only manifest targets a foreign
+/// runtime (callers that must distinguish the two use
+/// [`load_for_runtime`]). Malformed manifests are errors with actionable
+/// diagnostics.
 pub fn load(project_root: &Path) -> Result<Option<GateManifest>, ManifestError> {
+    match load_for_runtime(project_root)? {
+        LoadOutcome::Manifest(m) => Ok(Some(m)),
+        LoadOutcome::NoManifest | LoadOutcome::ForeignRuntime { .. } => Ok(None),
+    }
+}
+
+/// Load the manifest honoring the optional `runtime` field of a
+/// `.ai-gate/gate.yaml`. Native `gate.toml` manifests have no runtime
+/// field and are always driftwatchdog's.
+pub fn load_for_runtime(project_root: &Path) -> Result<LoadOutcome, ManifestError> {
     let Some(path) = manifest_path(project_root) else {
-        return Ok(None);
+        return Ok(LoadOutcome::NoManifest);
     };
-    let text = fs::read_to_string(&path)
-        .map_err(|e| ManifestError::Parse(format!("cannot read {}: {e}", path.display())))?;
-    parse(&text).map(Some)
+    if path.extension().and_then(|e| e.to_str()) == Some("yaml")
+        || path.extension().and_then(|e| e.to_str()) == Some("yml")
+    {
+        let text = fs::read_to_string(&path)
+            .map_err(|e| ManifestError::Parse(format!("cannot read {}: {e}", path.display())))?;
+        let doc = crate::gate::aigate::parse_document(&text)?;
+        if let Some(rt) = &doc.runtime {
+            if rt != crate::gate::aigate::RUNTIME_NAME {
+                return Ok(LoadOutcome::ForeignRuntime {
+                    runtime: rt.clone(),
+                });
+            }
+        }
+        return Ok(LoadOutcome::Manifest(doc.manifest));
+    }
+    read_manifest(&path).map(LoadOutcome::Manifest)
 }
 
 #[cfg(test)]

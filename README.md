@@ -307,6 +307,39 @@ persists one `gate_runs` row with change/revision identity and
 manifest digest. `driftwatch check` remains the compatibility entry
 point for legacy checker-only projects.
 
+### Business-project policy at `.ai-gate/gate.yaml`
+
+Bootstrapped business repositories record Gate policy in
+`.ai-gate/gate.yaml` and name `driftwatchdog` as the shared runtime. The
+Gate resolves `gate.toml`, then `.driftwatch/gate.toml`, then
+`.ai-gate/gate.yaml` (native `gate.toml` wins when both exist) and runs
+the same pipeline. A manifest whose `runtime` names another tool is
+reported and skipped — nothing is executed or persisted.
+
+```yaml
+version: 1
+runtime: driftwatchdog
+profile: browser-extension        # built-in or project-defined
+rule_pack: browser-extension@0.1.0
+checks:                           # true | false | "optional"
+  build: true
+  tests: true
+  accessibility: optional
+commands:                         # bind a selected concern to a command
+  build: "npm run build"
+  tests: "npm test"
+blocking: [FAIL, REVIEW_REQUIRED]
+project_commands:
+  lint: "npm run lint"
+contexts: [git, openspec]
+```
+
+A `profile` that is not a built-in name selects exactly its declared
+`checks`; a built-in profile keeps its default set, adjustable through
+`checks` (`false` removes, `"optional"` schedules non-blocking). The
+same domain profiles are available in `gate.toml` via a
+`[profiles.<name>]` table listing the concerns the profile selects.
+
 Local verification comes first: a change that has not passed its local
 Gate must not be represented as complete merely because CI is
 configured. CI templates repeat the same command as a second layer.

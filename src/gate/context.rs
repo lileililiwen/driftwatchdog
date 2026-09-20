@@ -715,7 +715,7 @@ pub fn context_checks(project_root: &Path) -> Vec<crate::doctor::check::Check> {
                 "Gate context manifest is invalid",
                 format!("{e}"),
             )
-            .with_remediation("Edit gate.toml to fix the parse error.")];
+            .with_remediation("Edit gate.toml or .ai-gate/gate.yaml to fix the parse error.")];
         }
     };
     let selection = selection_from_manifest(&manifest);
@@ -737,7 +737,7 @@ pub fn context_checks(project_root: &Path) -> Vec<crate::doctor::check::Check> {
                     "expected one of: git, project-files, openspec",
                 )
                 .with_remediation(format!(
-                    "Remove `provider = \"{name}\"` from gate.toml or use a supported provider."
+                    "Remove the `{name}` provider from gate.toml/.ai-gate/gate.yaml or use a supported provider."
                 )),
             );
             continue;

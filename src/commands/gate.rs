@@ -49,14 +49,26 @@ pub fn gate(args: GateArgs, cwd: &Path) -> Result<i32, Error> {
     let proj = ProjectRoot::discover(cwd)?;
     let gate_toml =
         manifest::manifest_path(&proj.root).unwrap_or_else(|| proj.root.join("gate.toml"));
-    let manifest = manifest::load(&proj.root).map_err(|e| Error::ConfigInvalid {
-        path: gate_toml.clone(),
-        message: e.to_string(),
-    })?;
-    let Some(manifest) = manifest else {
-        println!("driftwatch gate: no gate.toml; nothing to gate.");
-        println!("Legacy `driftwatch check` remains available for checker-only projects.");
-        return Ok(EXIT_OK);
+    let manifest = match manifest::load_for_runtime(&proj.root) {
+        Ok(manifest::LoadOutcome::Manifest(m)) => m,
+        Ok(manifest::LoadOutcome::NoManifest) => {
+            println!("driftwatch gate: no gate.toml or .ai-gate/gate.yaml; nothing to gate.");
+            println!("Legacy `driftwatch check` remains available for checker-only projects.");
+            return Ok(EXIT_OK);
+        }
+        Ok(manifest::LoadOutcome::ForeignRuntime { runtime }) => {
+            println!(
+                "driftwatch gate: .ai-gate/gate.yaml targets runtime `{runtime}`, not driftwatchdog."
+            );
+            println!("Nothing was executed and no gate run was recorded.");
+            return Ok(EXIT_OK);
+        }
+        Err(e) => {
+            return Err(Error::ConfigInvalid {
+                path: gate_toml.clone(),
+                message: e.to_string(),
+            })
+        }
     };
     let resolved = manifest::resolve(&manifest, &[]).map_err(|e| Error::ConfigInvalid {
         path: gate_toml,
@@ -297,7 +309,7 @@ pub fn gate_history_checks(proj: &ProjectRoot) -> Vec<crate::doctor::check::Chec
         None => vec![Check::info(
             "gate.history",
             "No local gate runs recorded",
-            "gate.toml is configured but `driftwatch gate` has never run here.".to_string(),
+            "the gate manifest is configured but `driftwatch gate` has never run here.".to_string(),
         )
         .with_remediation("Run `driftwatch gate` locally before archive; CI repeats it.")],
         Some(run) if !run.blocked && run.status == "PASS" => {
@@ -435,5 +447,59 @@ mod tests {
         let checks = gate_history_checks(&proj);
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].id, "gate.history");
+    }
+
+    #[test]
+    fn gate_resolves_business_yaml_manifest_and_persists_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        std::fs::create_dir_all(tmp.path().join(".ai-gate")).unwrap();
+        std::fs::write(
+            tmp.path().join(".ai-gate/gate.yaml"),
+            "version: 1\nruntime: driftwatchdog\nprofile: browser-extension\nrule_pack: browser-extension@0.1.0\nchecks:\n  smoke: true\ncommands:\n  smoke: \"true\"\n",
+        )
+        .unwrap();
+        let code = gate(gate_args(false), tmp.path()).unwrap();
+        assert_eq!(code, EXIT_OK);
+        let db = crate::repo::Db::open_read_only(&tmp.path().join(".driftwatch/state.db")).unwrap();
+        let latest = Gates::new(&db).latest().unwrap().unwrap();
+        assert_eq!(latest.status, "PASS");
+        assert_eq!(latest.rule_pack_version, "browser-extension@0.1.0");
+    }
+
+    #[test]
+    fn gate_foreign_runtime_exits_zero_without_persistence() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        std::fs::create_dir_all(tmp.path().join(".ai-gate")).unwrap();
+        std::fs::write(
+            tmp.path().join(".ai-gate/gate.yaml"),
+            "version: 1\nruntime: some-other-tool\nprofile: minimal\n",
+        )
+        .unwrap();
+        let code = gate(gate_args(false), tmp.path()).unwrap();
+        assert_eq!(code, EXIT_OK);
+        let db = crate::repo::Db::open_read_only(&tmp.path().join(".driftwatch/state.db")).unwrap();
+        assert_eq!(Gates::new(&db).count().unwrap(), 0);
+    }
+
+    #[test]
+    fn gate_prefers_gate_toml_over_business_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        std::fs::create_dir_all(tmp.path().join(".ai-gate")).unwrap();
+        // The YAML would pass; the TOML fails. Precedence means TOML wins.
+        std::fs::write(
+            tmp.path().join(".ai-gate/gate.yaml"),
+            "version: 1\nruntime: driftwatchdog\nprofile: minimal\nchecks:\n  smoke: true\ncommands:\n  smoke: \"true\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("gate.toml"),
+            "profile = \"minimal\"\n[[checks]]\nid = \"smoke\"\ncommand = \"false\"\n",
+        )
+        .unwrap();
+        let code = gate(gate_args(false), tmp.path()).unwrap();
+        assert_eq!(code, EXIT_BLOCKED);
     }
 }
