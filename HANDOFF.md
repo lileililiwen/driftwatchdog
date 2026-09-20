@@ -21,6 +21,31 @@ execution, adapters, context providers, AI evaluation, and local CLI/history
 integration. All nine are now implemented and archived (see below); no
 planning packages remain.
 
+The `ai-gate-manifest-consumption` change is **implemented and archived**
+(2026-09-20): `driftwatch gate` now resolves a business project's
+`.ai-gate/gate.yaml` as a third Gate manifest source (precedence
+`gate.toml` → `.driftwatch/gate.toml` → `.ai-gate/gate.yaml`) and converts
+the declared policy (`version`, optional `runtime`, `profile`,
+`rule_pack`, `checks` map of `true|false|"optional"`, optional `commands`,
+`blocking` status list, `project_commands`, `contexts`) into the native
+`GateManifest`, so the existing resolve/execute/aggregate/persist pipeline
+runs it unchanged. New `src/gate/aigate.rs` (strict `yaml-rust2` mapping,
+actionable unknown-field hints, command-must-reference-a-selected-check,
+empty-command and unknown-blocking rejection before execution);
+`manifest::LoadOutcome` + `load_for_runtime` (a manifest naming another
+runtime is reported, executed nothing, persisted nothing, exit 0); project
+domain profiles via a new `[profiles.<name>]` `GateManifest` table (empty
+maps are `skip_serializing_if` so existing `gate.toml` digests stay stable;
+built-in shadowing rejected); the YAML profile string and `rule_pack` are
+carried as plan identity. 13 unit + 3 integration tests (valid YAML, TOML
+precedence, foreign runtime, unknown field, blocking list, command binding,
+domain vs built-in profile, dry-run identity). README Gate section and
+doctor/context remediation wording updated. `cargo fmt --check`, `cargo
+test` (571 pass), `cargo clippy --all-targets --all-features -- -D
+warnings`, `cargo deny check` (advisories/licenses/bans/sources ok), and
+strict OpenSpec validation are green. No network access, no rule-pack
+evaluator, and `driftwatch check` behavior are unchanged.
+
 The `gate-cli-and-memory-integration` change is **implemented and
 archived** (2026-09-15): new `driftwatch gate` command
 (`--dry-run` plan rendering with no execution/persistence, human and
@@ -291,7 +316,8 @@ Last run on this change:
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
 - `src/checker/report.rs` — `Status`, `Severity`, `CheckerOutcome`, `label_for_status`.
 - `src/gate/{mod,types,dto,aggregate,redact,adapt}.rs` — generic gate contract (`GateStatus`/`GateSeverity`/`Finding`/`EvidenceRef`/`GateResult`, `GATE_CONTRACT_VERSION = 1` JSON boundary with size caps, deterministic `aggregate` with `BlockingPolicy`, secret-redacting bounded diagnostics, `adapt_checker_outcome` mapping Empty→PASS / Success→FAIL / infra-failure→REVIEW_REQUIRED); no OpenSpec dependency, no storage migration, no CLI surface yet.
-- `src/gate/manifest.rs` — project Gate manifest (`GateManifest`/`ManifestCheck`/`Trigger`/`ResolvedGatePlan`, `parse`/`resolve`/`render_plan`/`load`/`manifest_path`); `gate.toml` at project root preferred over `.driftwatch/gate.toml`, missing manifest is `Ok(None)`; `driftwatch.toml` execution untouched; no tool install, no network, no OpenSpec types.
+- `src/gate/manifest.rs` — project Gate manifest (`GateManifest`/`ManifestCheck`/`Trigger`/`ResolvedGatePlan`/`LoadOutcome`, `parse`/`resolve`/`render_plan`/`load`/`load_for_runtime`/`manifest_path`); precedence `gate.toml` → `.driftwatch/gate.toml` → `.ai-gate/gate.yaml`, missing manifest is `Ok(None)`; project domain profiles via `profiles` table (`[profiles.<name>]`, `skip_serializing_if` empty so digests stay stable, built-in shadowing rejected) with `profile_defaults_for`/`is_builtin_profile`; `driftwatch.toml` execution untouched; no tool install, no network, no OpenSpec types.
+- `src/gate/aigate.rs` — business `.ai-gate/gate.yaml` → `GateManifest` conversion (`RUNTIME_NAME = "driftwatchdog"`, `AiGateDoc { runtime, manifest }`, strict `yaml-rust2` mapping with `did-you-mean` unknown-field hints, `checks` map of `true|false|"optional"`, `commands` must reference a selected check, empty-command/unknown-blocking rejection before execution, `blocking` list → review-required policy, `rule_pack` → identity, non-built-in profile selects exactly its declared checks); reuses the shared pipeline, no second Gate, no network.
 - `src/gate/evidence.rs` — bounded evidence domain (`ArtifactKind`/`ArtifactRecord`/`NewArtifact`/`EvidenceError`, `MAX_ARTIFACT_BYTES = 1 MiB`, `MAX_PREVIEW_BYTES = 1024`, `build_record`/`store_bytes` via temp+rename, `confine_adapter_path`/`confined_path` escape rejection, `redact_secrets_with_extra` previews, `evidence_backed_pass` guard, `UNAVAILABLE_PREVIEW` marker); no OpenSpec types, no tool install, no network.
 - `src/gate/adapters.rs` — adapter contracts (`AdapterRegistry`/`AdapterCapability`/`OutputFormat`/`AdapterInput`, duplicate/empty validation before execution), five built-ins (`checker`, `gitleaks`, `osv`, `semgrep`, `project-runtime`) via CLI boundaries only, tolerant normalizers (`parse_checker_json`/`parse_sarif`/`parse_gitleaks` without secret values/`parse_osv`/`parse_semgrep`) with finding/evidence caps and redaction, exit-findings-evidence separated (nonzero-with-findings → `FAIL`), infra mapping (`SpawnFailed`/`NonZeroExit`/`Timeout`+timeout evidence/`Signalled`/`MalformedOutput` → `REVIEW_REQUIRED` + `<tool>:output`), `run_text_adapter` exit-code mapping, `run_all` failure isolation, pure deterministic `evaluate` (threshold rules + rule-required available-evidence guard); no SDKs, no scanner reimplementation, no network, no LLM.
 - `src/gate/context.rs` — generic read-only context providers (`ProviderRegistry`, bounded hashed `ContextDocument` with kind/path/digest/size/change-id, `git` diff/status + `project-files` + optional `openspec` providers emitting generic documents only, project-root confinement, truncation bounds, secret-safe previews, unavailable-not-empty semantics, `collect_context`/`selection_from_manifest`/`context_checks`); no OpenSpec types in gate core, no mutation, no network.
@@ -355,6 +381,16 @@ Engineering Gate packages, **`bfs-dfs-bfs-change-workflow`,
 implemented and archived** as of 2026-09-15. Local schema version is
 6, export schema is v4. No planning packages remain; the v1.1
 Engineering Gate queue is complete.
+
+The `ai-gate-manifest-consumption` change is **implemented and archived**
+(2026-09-20): `driftwatch gate` consumes a business project's
+`.ai-gate/gate.yaml` (native `gate.toml` still wins precedence), honors the
+`runtime` field, maps the `blocking` status list, and accepts project
+domain profiles via `[profiles.<name>]`. Rust test suite is now 571 green;
+`cargo deny check` (advisories/licenses/bans/sources) is green. This
+unblocks the BYOK Translator `product-foundation-and-governance` Gate, whose
+`.ai-gate/gate.yaml` declares `runtime: driftwatchdog` and profile
+`browser-extension`.
 
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.
