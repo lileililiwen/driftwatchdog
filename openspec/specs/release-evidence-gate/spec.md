@@ -1,7 +1,20 @@
 # release-evidence-gate Specification
 
 ## Purpose
-TBD - created by archiving change release-evidence-and-capability-gate. Update Purpose after archive.
+Generic Gate contract extension that adds the `release-evidence` and
+`capability-conformance` concern IDs through a new `release` built-in
+profile, and normalises the result with a versioned JSON envelope under
+exit-code authority. The contract stays local-first, language-agnostic,
+and free of provider SDKs, language scanners, SBOM generators, signing
+tooling, deployment executors, or embedded LLMs; the project owns every
+command binding and every envelope producer. A `PASS` claim for
+`release-evidence` MUST include `revision`, `product_version`, at
+least one `artifacts` entry, and `provenance`; a `PASS` claim for
+`capability-conformance` MUST include a non-empty `verified` list
+whose every id is in the resolved plan. Stale revisions and out-of-
+scope verified ids downgrade to `REVIEW_REQUIRED`; missing or
+malformed envelopes are `REVIEW_REQUIRED` and there is no text-mode
+fallback, so missing coverage can never be silently treated as a pass.
 ## Requirements
 ### Requirement: Gate declared capability conformance
 

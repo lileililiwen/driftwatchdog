@@ -1,7 +1,21 @@
 # capability-conformance-gate Specification
 
 ## Purpose
-TBD - created by archiving change release-evidence-and-capability-gate. Update Purpose after archive.
+Generic Gate contract extension that adds the `capability-conformance`
+concern id, declaring the wire shape, exit-code authority, and
+required-evidence rules for project-owned capability reports. A `PASS`
+claim MUST include a non-empty `capabilities.verified` list whose
+every id appears in the resolved plan; an empty list, an out-of-scope
+id, or a missing/malformed envelope all downgrade the result to
+`REVIEW_REQUIRED`. The contract stays local-first, language-agnostic,
+and free of provider SDKs, capability scanners, or embedded LLMs; the
+project owns every command binding and every envelope producer, so
+Driftwatchdog never embeds a capability scanner. The
+`capability-conformance` adapter is part of the same envelope-driven
+release-gate family as `release-evidence` and shares the same wire
+version, exit-code authority rule, bounded fields, and secret
+redaction; both are selected together by the `release` built-in
+profile.
 ## Requirements
 ### Requirement: Capability-conformance versioned JSON envelope
 
