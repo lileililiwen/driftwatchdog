@@ -434,20 +434,80 @@ oversized producer cannot break the Gate's output invariants. The
 `rust-product` profile is a strict alias for `product`; the two names
 select the same concerns with the same default severity model.
 
+### Release-evidence and capability-conformance Gate contract
+
+A third built-in profile, `release`, schedules the two release-gate
+concerns: `release-evidence` and `capability-conformance`. Both are
+project-owned: the project binds a command that emits a versioned
+JSON envelope on stdout, and Driftwatchdog executes the command,
+normalises the result, and aggregates. Driftwatchdog never becomes a
+release publisher, signer, SBOM generator, or deployment executor; it
+treats the producer as data.
+
+```toml
+version = 1
+profile = "release"
+[[checks]]
+id = "release-evidence"
+command = "tools/release-evidence emit --envelope"
+[[checks]]
+id = "capability-conformance"
+command = "tools/capability-conformance emit --envelope"
+```
+
+Both concerns share the same wire shape on the outside — exit-code
+authority, version-gated envelope parser, bounded fields, secret
+redaction — but each applies its own evidence rules.
+
+**`release-evidence`** records the source revision, the released
+product version, the artifact list, and provenance. A `PASS` claim
+must include `revision`, `product_version`, at least one entry in
+`artifacts`, and `provenance` (object or string). When the project
+provides a current source revision (typically from `git`), the
+adapter compares it to the envelope's `revision`; a mismatch refuses
+the `PASS` and downgrades the result to `REVIEW_REQUIRED` so stale
+evidence never silently passes the gate. A missing, malformed,
+wrong-version, or out-of-sync envelope all become `REVIEW_REQUIRED`
+with the missing evidence key recorded. The `product_version` field
+names the released product version (`1.2.3`); the envelope wire
+version stays the simple `version` field that every Gate envelope
+uses.
+
+**`capability-conformance`** records the declared, configured,
+verified, and unverified capabilities of the project. A `PASS` claim
+must list at least one entry in `capabilities.verified`; every
+verified id must also appear in the resolved gate plan (the
+`scheduled_ids` for the run), so the gate refuses a claim to verify
+something it cannot reproduce. An empty `verified` list, a verified id
+outside the plan, or any of the malformed/missing envelope cases
+all become `REVIEW_REQUIRED`.
+
+The two envelopes reuse the same wire-version `1`, exit-code authority
+table, and bounded/redacted field limits as the product-quality
+contract. The two release-gate concerns inherit the existing
+`[ai] enabled = true` path: when AI evaluation is on, the
+`ai-review` row is appended to the same `gate_runs` snapshot. Like
+the product-quality profile, a project that picks `release` without
+binding `commands.<id>` lands on `REVIEW_REQUIRED` via the existing
+required + missing-command aggregate path; relax an individual
+concern to `required = false` to opt out of one half.
+
 ## Project status
 
-v0.1 through v0.6 are shipped. v1.1 (Engineering Gates) and v1.2
-(Product-quality Gate) are also shipped: every change listed in
-`ROADMAP.md` is implemented and archived, the full CLI surface (`init`,
-`run`, `list`, `top`, `show`, `report --ai`, `gc`, `export`, `doctor`,
-`check`, `gate`, `link`, `unlink`, `completions`, `man`, `mcp`) is
-functional, the packaging suite is green (8/8 bash tests including
-`agent_examples`, `gha_templates`, and `change_workflow`), and CI
-enforces fmt, clippy (`-D warnings`, `--all-features`), MSRV 1.74,
-cargo-deny, tarpaulin coverage, macOS (`macos-14`) parity, shellcheck,
-npm audit, and the end-to-end smoke test. The next planning milestone
-is v1.0 (Stable); see `ROADMAP.md` for the delivery sequence and
-`HANDOFF.md` for the current implementation handoff.
+v0.1 through v0.6 are shipped. v1.1 (Engineering Gates), v1.2
+(Product-quality Gate), and v1.3 (Release-evidence and
+capability-conformance Gate) are also shipped: every change listed
+in `ROADMAP.md` is implemented and archived, the full CLI surface
+(`init`, `run`, `list`, `top`, `show`, `report --ai`, `gc`, `export`,
+`doctor`, `check`, `gate`, `link`, `unlink`, `completions`, `man`,
+`mcp`) is functional, the packaging suite is green (8/8 bash tests
+including `agent_examples`, `gha_templates`, and `change_workflow`),
+and CI enforces fmt, clippy (`-D warnings`, `--all-features`), MSRV
+1.74, cargo-deny, tarpaulin coverage, macOS (`macos-14`) parity,
+shellcheck, npm audit, and the end-to-end smoke test. The next
+planning milestone is v1.0 (Stable); see `ROADMAP.md` for the
+delivery sequence and `HANDOFF.md` for the current implementation
+handoff.
 
 ## Development
 

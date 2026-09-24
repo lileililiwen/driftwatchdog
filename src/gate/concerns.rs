@@ -8,7 +8,9 @@
 //! project-runtime adapter, so the same command surface that backs
 //! every other Gate concern is reused here.
 //!
-//! Two concern IDs are registered today:
+//! Four concern IDs are registered today, organised in two vocabularies:
+//!
+//! ## Product-quality vocabulary
 //!
 //! * `product-code-boundary` — a project command verifies that test
 //!   code stays out of product source. A pass report means the boundary
@@ -18,6 +20,23 @@
 //!   threshold on placeholder debt (TODO/FIXME density, missing
 //!   implementations, etc.). A pass report keeps the threshold; a
 //!   fail/review report names the offending surface in the findings.
+//!
+//! ## Release-gate vocabulary
+//!
+//! * `capability-conformance` — a project command reports declared,
+//!   configured, verified, and unverified capabilities. A pass report
+//!   means every declared capability is verified by a concrete check
+//!   in the resolved plan; a fail or review report names the
+//!   unverified capability. Driftwatchdog does not embed a capability
+//!   scanner; it normalises the project's own report.
+//! * `release-evidence` — a project command reports source revision,
+//!   release version, artifacts, integrity, SBOM, provenance, and
+//!   publication state. A pass report means the evidence is current
+//!   and complete; a fail or review report names the missing or
+//!   stale evidence. Driftwatchdog does not become a release
+//!   publisher, signer, SBOM generator, or deployment executor.
+//!
+//! ## Wire format
 //!
 //! The JSON envelope emitted by the project command is the same
 //! versioned shape parsed by [`crate::gate::adapters`]. Exit codes
@@ -46,6 +65,41 @@ pub fn is_product_quality_concern(id: &str) -> bool {
     PRODUCT_QUALITY_CONCERNS.contains(&id)
 }
 
+/// Stable concern id: verify a project-owned capability-conformance
+/// report. The project command emits a versioned JSON envelope that
+/// lists declared, configured, verified, and unverified capabilities;
+/// Driftwatchdog executes the command and normalises the result. It
+/// never inspects Cargo, NuGet, npm, Docker, or Jenkins internals.
+pub const CAPABILITY_CONFORMANCE: &str = "capability-conformance";
+
+/// Stable concern id: verify a project-owned release-evidence report.
+/// The project command emits a versioned JSON envelope that records
+/// source revision, release version, artifacts, integrity, SBOM,
+/// provenance, and publication state; Driftwatchdog executes the
+/// command, applies exit-code authority, and refuses a stale revision
+/// or a missing required-evidence claim. It does not become a release
+/// publisher, signer, SBOM generator, or deployment executor.
+pub const RELEASE_EVIDENCE: &str = "release-evidence";
+
+/// Every release-gate concern id the Gate recognises. The list is
+/// sorted so iteration and diagnostic output stay deterministic.
+pub const RELEASE_GATE_CONCERNS: &[&str] = &[CAPABILITY_CONFORMANCE, RELEASE_EVIDENCE];
+
+/// True when `id` is a recognised release-gate concern id.
+pub fn is_release_gate_concern(id: &str) -> bool {
+    RELEASE_GATE_CONCERNS.contains(&id)
+}
+
+/// True when `id` is the `release-evidence` concern id.
+pub fn is_release_evidence_concern(id: &str) -> bool {
+    id == RELEASE_EVIDENCE
+}
+
+/// True when `id` is the `capability-conformance` concern id.
+pub fn is_capability_conformance_concern(id: &str) -> bool {
+    id == CAPABILITY_CONFORMANCE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,12 +108,18 @@ mod tests {
     fn concern_ids_are_stable_strings() {
         assert_eq!(PRODUCT_CODE_BOUNDARY, "product-code-boundary");
         assert_eq!(PLACEHOLDER_THRESHOLD, "placeholder-threshold");
+        assert_eq!(CAPABILITY_CONFORMANCE, "capability-conformance");
+        assert_eq!(RELEASE_EVIDENCE, "release-evidence");
     }
 
     #[test]
     fn vocabulary_recognises_known_ids() {
         assert!(is_product_quality_concern(PRODUCT_CODE_BOUNDARY));
         assert!(is_product_quality_concern(PLACEHOLDER_THRESHOLD));
+        assert!(is_release_gate_concern(CAPABILITY_CONFORMANCE));
+        assert!(is_release_gate_concern(RELEASE_EVIDENCE));
+        assert!(is_release_evidence_concern(RELEASE_EVIDENCE));
+        assert!(is_capability_conformance_concern(CAPABILITY_CONFORMANCE));
     }
 
     #[test]
@@ -69,12 +129,28 @@ mod tests {
         assert!(!is_product_quality_concern("a11y"));
         assert!(!is_product_quality_concern("PRODUCT_CODE_BOUNDARY"));
         assert!(!is_product_quality_concern("product-code-boundary "));
+        assert!(!is_release_gate_concern(""));
+        assert!(!is_release_gate_concern("api-contract"));
+        assert!(!is_release_gate_concern("RELEASE_EVIDENCE"));
+        // Cross-vocabulary recognition stays negative: a product-quality
+        // id is not a release-gate id and vice versa.
+        assert!(!is_release_gate_concern(PRODUCT_CODE_BOUNDARY));
+        assert!(!is_release_gate_concern(PLACEHOLDER_THRESHOLD));
+        assert!(!is_product_quality_concern(CAPABILITY_CONFORMANCE));
+        assert!(!is_product_quality_concern(RELEASE_EVIDENCE));
+        assert!(!is_release_evidence_concern(CAPABILITY_CONFORMANCE));
+        assert!(!is_capability_conformance_concern(RELEASE_EVIDENCE));
     }
 
     #[test]
     fn vocabulary_is_sorted_for_deterministic_iteration() {
-        let mut sorted = PRODUCT_QUALITY_CONCERNS.to_vec();
-        sorted.sort();
-        assert_eq!(sorted, PRODUCT_QUALITY_CONCERNS.to_vec());
+        for (label, slice) in [
+            ("product-quality", PRODUCT_QUALITY_CONCERNS),
+            ("release-gate", RELEASE_GATE_CONCERNS),
+        ] {
+            let mut sorted = slice.to_vec();
+            sorted.sort();
+            assert_eq!(sorted, slice.to_vec(), "{label} slice not sorted");
+        }
     }
 }

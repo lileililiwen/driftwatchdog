@@ -23,6 +23,7 @@ Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in
 | v1.0 Stable | Future hardening changes | Stabilize schema, config, checker protocol, CLI, cross-platform behavior, documentation, and real-project validation. |
 | v1.1 Engineering Gates | Nine planned packages (all nine archived) | Add generic Gate contracts, project policy, evidence, tool lifecycle, adapters, optional context providers, AI evaluation, and local Gate/history integration. |
 | v1.2 Product-quality Gate | `product-quality-gate-contract` | Add `product`/`rust-product` built-in profiles, the `product-code-boundary` and `placeholder-threshold` concern IDs, and a versioned JSON-envelope adapter with exit-code authority so a project-owned checker can report product-quality status without Driftwatchdog embedding a language scanner. |
+| v1.3 Release-evidence and capability-conformance Gate | `release-evidence-and-capability-gate` | Add `release` built-in profile plus the `release-evidence` and `capability-conformance` concern IDs with a versioned JSON-envelope adapter (exit-code authority, required-evidence guards, stale-revision and out-of-scope-verified downgrade to REVIEW_REQUIRED) so project-owned publisher- or scanner-free commands can report release evidence and capability verification without Driftwatchdog becoming a release publisher, signer, SBOM generator, or deployment executor. |
 
 ## Closed change inventory
 
@@ -43,6 +44,7 @@ The following change packages have been implemented and archived:
 - `github-actions-templates` — reusable `templates/github-actions/driftwatch-check.yml` (`workflow_call` + `workflow_dispatch`) that pins a `driftwatchdog` install, always renders the AI report, uploads only `drift.md`, summarises `top` into the step summary, with `contents: read` and the `fail_on_drift`/`upload_report` inputs; shape test in `tests/packaging/test_gha_templates.sh`.
 - `checker-machine-output` — `driftwatch check --format human|json` with a versioned `driftwatch-checker/0.1.0` document on stdout (declaration order, `ok`/`alerting`/`failed`/`timeout`/`protocol-error` statuses, parsed `alerts[]` in the existing wire shape, bounded `error` note, summary counts) while human output, dry-run persistence and exit-status semantics are unchanged. Enables the Forge `driftwatch-cli-alignment` consumption path.
 - `product-quality-gate-contract` — `product` and `rust-product` built-in profiles, stable concern IDs `product-code-boundary` and `placeholder-threshold`, versioned JSON-envelope result normalization (wire version `1`, exit-code authority rule: `PASS`→0, `FAIL`→1, `REVIEW_REQUIRED`→2, `NOT_APPLICABLE`→0, mismatches and malformed envelopes downgrade to `REVIEW_REQUIRED`), text-mode fallback for legacy commands, and end-to-end coverage including persistence, `--format json`, dry-run, and optional-concern relaxation. Pure data + bounded redaction; no provider SDKs or embedded scanners.
+- `release-evidence-and-capability-gate` — `release` built-in profile + stable concern IDs `release-evidence` and `capability-conformance`; shared wire shape with the product-quality envelope (wire version `1`, exit-code authority rule, bounded fields, secret redaction); release-evidence required-evidence guard (PASS requires `revision`, `product_version`, at least one `artifacts` entry, and `provenance`; stale-revision vs current git rev downgrades to `REVIEW_REQUIRED`); capability-conformance required-evidence guard (PASS requires non-empty `verified` whose ids are all in the resolved plan; out-of-scope verified ids downgrade to `REVIEW_REQUIRED`); malformed/missing/wrong-version envelopes downgrade to `REVIEW_REQUIRED`; text-mode fallback is deliberately not provided for these concerns so missing coverage can never be silently treated as a pass. Driftwatchdog remains an executor/aggregator: no release publisher, signer, SBOM generator, or deployment executor is added.
 
 ## Change dependency graph
 
@@ -98,10 +100,10 @@ no specification framework.
 
 ## Proposed planning queue (not selected)
 
-- `release-evidence-and-capability-gate` — generic Gate concerns
-  `capability-conformance` and `release-evidence` so projects can prove
-  artifact integrity and platform coverage. Authored; no `current_spec`
-  pointer and no implementation authority until selected.
+*(empty — every authored package has been promoted.)*
+
+The previously proposed `release-evidence-and-capability-gate` planning
+package is implemented and archived as v1.3 of the roadmap.
 
 ## Explicit non-goals for v1
 

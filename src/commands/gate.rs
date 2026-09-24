@@ -28,10 +28,15 @@ use std::path::Path;
 
 use crate::cli::{GateArgs, GateFormatArg};
 use crate::error::Error;
-use crate::gate::adapters::{default_registry, run_product_quality_adapter, AdapterInput};
+use crate::gate::adapters::{
+    default_registry, run_capability_conformance_adapter, run_product_quality_adapter,
+    run_release_evidence_adapter, AdapterInput,
+};
 use crate::gate::aggregate::{aggregate, AggregateOutcome, GatePlan, PlannedCheck};
 use crate::gate::ai::{self, AiEvalInput, AiRule};
-use crate::gate::concerns::is_product_quality_concern;
+use crate::gate::concerns::{
+    is_capability_conformance_concern, is_product_quality_concern, is_release_evidence_concern,
+};
 use crate::gate::manifest::{self, ResolvedGatePlan};
 use crate::gate::types::{GateResult, GateSeverity, GateStatus};
 use crate::project::{git, ProjectRoot};
@@ -133,6 +138,22 @@ fn execute_plan(
     let runtime = registry
         .get("project-runtime")
         .expect("built-in project-runtime adapter is registered");
+    // Capture Git metadata once for the release-evidence staleness
+    // check. The capture is bounded and never aborts execution; a
+    // missing Git context is recorded as no-revision so the
+    // release-evidence adapter simply skips the staleness rule
+    // (still applies the required-evidence rule).
+    let git_ctx = git::capture(&proj.root);
+    let current_revision: Option<String> = git_ctx.commit.clone();
+    // Scheduled concern ids in the resolved plan, used by the
+    // capability-conformance adapter to reject verified claims
+    // outside the gate's vocabulary.
+    let scheduled_ids: Vec<String> = resolved
+        .plan
+        .checks
+        .iter()
+        .map(|c| c.gate_id.clone())
+        .collect();
     let mut results = Vec::with_capacity(resolved.plan.checks.len() + 1);
     for check in &resolved.plan.checks {
         match commands.get(check.gate_id.as_str()) {
@@ -146,13 +167,28 @@ fn execute_plan(
                     max_output_bytes: CHECK_MAX_OUTPUT_BYTES,
                     evidence: vec![],
                 };
-                // Product-quality concerns use the dedicated
-                // product-quality adapter (envelope parsing +
-                // exit-code authority + malformed fallback). Every
-                // other concern keeps the project-runtime text
-                // adapter unchanged.
+                // Concern-specific adapters (product-quality,
+                // release-evidence, capability-conformance) parse a
+                // versioned JSON envelope, apply exit-code authority,
+                // and downgrade malformed/missing/contradictory output
+                // to REVIEW_REQUIRED. Every other concern keeps the
+                // project-runtime text adapter unchanged.
                 let result = if is_product_quality_concern(&check.gate_id) {
                     run_product_quality_adapter("project-runtime", Some(&check.gate_id), &input)
+                } else if is_release_evidence_concern(&check.gate_id) {
+                    run_release_evidence_adapter(
+                        "project-runtime",
+                        Some(&check.gate_id),
+                        &input,
+                        current_revision.as_deref(),
+                    )
+                } else if is_capability_conformance_concern(&check.gate_id) {
+                    run_capability_conformance_adapter(
+                        "project-runtime",
+                        Some(&check.gate_id),
+                        &input,
+                        &scheduled_ids,
+                    )
                 } else {
                     crate::gate::adapters::run_adapter(
                         runtime,

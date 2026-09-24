@@ -31,6 +31,13 @@
 //!   that picks either profile without binding `commands.<id>`
 //!   lands on `REVIEW_REQUIRED` via the existing required +
 //!   missing-command path.
+//! * `release` — the two release-gate concern ids
+//!   (`capability-conformance`, `release-evidence`). The profile is
+//!   data only; a project that picks `release` without binding
+//!   `commands.<id>` lands on `REVIEW_REQUIRED` via the existing
+//!   required + missing-command path. Driftwatchdog does not become
+//!   a release publisher, signer, SBOM generator, or deployment
+//!   executor.
 //!
 //! Projects may enable extra checks or relax a profile default to
 //! `required = false`. Tightening an optional default to required is
@@ -60,7 +67,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::gate::aggregate::{BlockingPolicy, GatePlan, PlannedCheck};
-use crate::gate::concerns::PRODUCT_QUALITY_CONCERNS;
+use crate::gate::concerns::{PRODUCT_QUALITY_CONCERNS, RELEASE_GATE_CONCERNS};
 use crate::gate::dto::GATE_CONTRACT_VERSION;
 
 /// Profile defaults. Kept as functions so the contract stays
@@ -84,6 +91,14 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
         // on REVIEW_REQUIRED via the existing required +
         // missing-command path.
         "product" | "rust-product" => Some(PRODUCT_QUALITY_CONCERNS),
+        // Release-gate profile selects the two stable release-gate
+        // concern ids. The profile is data only and never invents a
+        // command; a project that picks `release` without binding
+        // `commands.<id>` lands on REVIEW_REQUIRED via the existing
+        // required + missing-command path. Driftwatchdog does not
+        // become a release publisher, signer, SBOM generator, or
+        // deployment executor.
+        "release" => Some(RELEASE_GATE_CONCERNS),
         _ => None,
     }
 }
@@ -96,6 +111,7 @@ pub const SUPPORTED_PROFILES: &[&str] = &[
     "minimal",
     "product",
     "rust-product",
+    "release",
 ];
 
 /// Resolve the default concern set for `profile` in the context of a
@@ -524,6 +540,7 @@ pub fn resolve(
     let mut not_scheduled: Vec<String> = ["responsive", "browser", "a11y"]
         .into_iter()
         .chain(PRODUCT_QUALITY_CONCERNS.iter().copied())
+        .chain(RELEASE_GATE_CONCERNS.iter().copied())
         .filter(|id| !scheduled.contains(id))
         .map(|s| s.to_string())
         .collect();
@@ -995,5 +1012,127 @@ enabled = false
                 "is_builtin_profile must accept `{name}`"
             );
         }
+    }
+
+    #[test]
+    fn release_profile_schedules_both_release_gate_concerns() {
+        let text = r#"
+version = 1
+profile = "release"
+"#;
+        let m = parse(text).unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        let ids: Vec<&str> = plan
+            .plan
+            .checks
+            .iter()
+            .map(|c| c.gate_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["capability-conformance", "release-evidence"],
+            "release profile selects both release-gate concerns in sorted order"
+        );
+        // Both are required by default: the profile does not silently
+        // relax the gate.
+        for c in &plan.plan.checks {
+            assert!(
+                c.required,
+                "release profile default is required: {}",
+                c.gate_id
+            );
+        }
+        // Frontend + product-quality concerns stay explicit "not
+        // scheduled" for the release profile.
+        assert!(plan.not_scheduled.contains(&"responsive".to_string()));
+        assert!(plan
+            .not_scheduled
+            .contains(&"product-code-boundary".to_string()));
+        assert!(plan
+            .not_scheduled
+            .contains(&"placeholder-threshold".to_string()));
+    }
+
+    #[test]
+    fn release_profile_check_can_be_relaxed_to_optional() {
+        let text = r#"
+version = 1
+profile = "release"
+[[checks]]
+id = "release-evidence"
+required = false
+"#;
+        let m = parse(text).unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        let evidence = plan
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "release-evidence")
+            .unwrap();
+        assert!(!evidence.required, "explicit `required = false` wins");
+        let capability = plan
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "capability-conformance")
+            .unwrap();
+        assert!(
+            capability.required,
+            "untouched concern keeps the profile default"
+        );
+    }
+
+    #[test]
+    fn release_profile_can_be_disabled_explicitly() {
+        let text = r#"
+version = 1
+profile = "release"
+[[checks]]
+id = "capability-conformance"
+enabled = false
+"#;
+        let m = parse(text).unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        assert!(!plan
+            .plan
+            .checks
+            .iter()
+            .any(|c| c.gate_id == "capability-conformance"));
+        assert!(plan
+            .plan
+            .checks
+            .iter()
+            .any(|c| c.gate_id == "release-evidence"));
+    }
+
+    #[test]
+    fn unsupported_plan_records_release_gate_concerns_as_not_scheduled() {
+        // A `backend` plan must still mention the release-gate
+        // concerns as "not scheduled" so a reader knows they exist
+        // and were consciously excluded.
+        let m = parse(VALID).unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        assert!(plan
+            .not_scheduled
+            .contains(&"capability-conformance".to_string()));
+        assert!(plan.not_scheduled.contains(&"release-evidence".to_string()));
+    }
+
+    #[test]
+    fn supported_profiles_lists_release_entry() {
+        let name = "release";
+        assert!(
+            SUPPORTED_PROFILES.contains(&name),
+            "SUPPORTED_PROFILES must list `{name}`"
+        );
+        assert!(
+            profile_defaults(name).is_some(),
+            "profile_defaults must resolve `{name}`"
+        );
+        assert!(
+            is_builtin_profile(name),
+            "is_builtin_profile must accept `{name}`"
+        );
     }
 }

@@ -1397,6 +1397,776 @@ pub fn run_product_quality_adapter(
     }
 }
 
+/// Wire version of the release-gate JSON envelope. Both
+/// `release-evidence` and `capability-conformance` consume envelopes
+/// at this version; the parser distinguishes them by their key set.
+pub const RELEASE_GATE_ENVELOPE_VERSION: u32 = 1;
+
+/// Parsed release-evidence JSON envelope. The shape is project-owned
+/// data: a versioned JSON document on stdout naming the source
+/// revision, release version, artifacts, integrity, SBOM, provenance,
+/// and publication state. Driftwatchdog never embeds a release
+/// publisher, signer, SBOM generator, or deployment executor.
+///
+/// ## Wire shape (envelope `version: 1`)
+///
+/// * `version` (number, required): envelope wire version. Always `1`.
+/// * `status` (string, required): `PASS` / `FAIL` / `REVIEW_REQUIRED`
+///   / `NOT_APPLICABLE`. Exit-code authority is enforced separately.
+/// * `severity` (string, optional): `info` / `warning` / `error`.
+/// * `revision` (string, optional): source revision (typically a git
+///   commit). Compared against the captured current revision when
+///   both are present; a mismatch downgrades a `PASS` to
+///   `REVIEW_REQUIRED`.
+/// * `product_version` (string, optional): the version of the
+///   released product (e.g. `1.2.3`). Required for a `PASS`.
+/// * `artifacts` (array of strings, optional): artifact names
+///   (e.g. `["binary.tar.gz", "checksums.txt"]`). At least one
+///   required for a `PASS`.
+/// * `provenance` (object or string, optional): provenance
+///   evidence. Required for a `PASS`.
+/// * `sbom` (object or string, optional): SBOM evidence.
+/// * `publication_state` (string, optional): `draft` / `published` /
+///   anything project-defined.
+/// * `findings`, `evidence`, `missing_evidence`, `diagnostic`,
+///   `remediation`: shared shape (see [`crate::gate::dto`]).
+///
+/// The release version is keyed `product_version` (not `version`) so
+/// the envelope wire version can keep the simple `version` field that
+/// every Gate envelope uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReleaseEvidenceEnvelope {
+    status: GateStatus,
+    severity: Option<GateSeverity>,
+    revision: Option<String>,
+    product_version: Option<String>,
+    artifacts: Vec<String>,
+    has_sbom: bool,
+    has_provenance: bool,
+    publication_state: Option<String>,
+    findings: Vec<Finding>,
+    evidence: Vec<EvidenceRef>,
+    missing_evidence: Vec<String>,
+    diagnostic: Option<String>,
+    remediation: Option<String>,
+}
+
+/// Parsed capability-conformance JSON envelope. The shape is
+/// project-owned data: a versioned JSON document on stdout naming the
+/// declared, configured, verified, and unverified capabilities.
+/// Driftwatchdog never embeds a capability scanner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapabilityEnvelope {
+    status: GateStatus,
+    severity: Option<GateSeverity>,
+    declared: Vec<String>,
+    configured: Vec<String>,
+    verified: Vec<String>,
+    unverified: Vec<String>,
+    findings: Vec<Finding>,
+    evidence: Vec<EvidenceRef>,
+    missing_evidence: Vec<String>,
+    diagnostic: Option<String>,
+    remediation: Option<String>,
+}
+
+fn parse_findings(value: Option<&serde_json::Value>) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    if let Some(arr) = value.and_then(|v| v.as_array()) {
+        for f in arr.iter().take(MAX_FINDINGS) {
+            let title = match f.get("title").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let severity = f
+                .get("severity")
+                .and_then(|v| v.as_str())
+                .and_then(GateSeverity::parse)
+                .unwrap_or(GateSeverity::Warning);
+            let location = f
+                .get("location")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let rule = f
+                .get("rule")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            findings.push(Finding {
+                title: bound_text(&redact_secrets(&title), MAX_TITLE_BYTES),
+                severity,
+                location: location.map(|s| bound_text(&redact_secrets(&s), MAX_LOCATION_BYTES)),
+                rule: rule.map(|s| bound_text(&s, 256)),
+            });
+        }
+    }
+    findings
+}
+
+fn parse_evidence(value: Option<&serde_json::Value>) -> Vec<EvidenceRef> {
+    let mut evidence = Vec::new();
+    if let Some(arr) = value.and_then(|v| v.as_array()) {
+        for e in arr.iter().take(MAX_EVIDENCE_REFS) {
+            let key = match e.get("key").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let digest = e
+                .get("digest")
+                .and_then(|v| v.as_str())
+                .map(|s| bound_text(s, 128));
+            let media_type = e
+                .get("media_type")
+                .and_then(|v| v.as_str())
+                .map(|s| bound_text(s, 128));
+            let byte_size = e.get("byte_size").and_then(|v| v.as_u64());
+            let preview = e
+                .get("preview")
+                .and_then(|v| v.as_str())
+                .map(|s| bound_text(&redact_secrets(s), MAX_PREVIEW_BYTES));
+            evidence.push(EvidenceRef {
+                key: bound_text(&key, MAX_EVIDENCE_KEY_BYTES),
+                digest,
+                media_type,
+                byte_size,
+                preview,
+            });
+        }
+    }
+    evidence
+}
+
+fn parse_missing_evidence(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .take(MAX_MISSING_EVIDENCE)
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .map(|s| bound_text(&s, MAX_EVIDENCE_KEY_BYTES))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_status_and_severity(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<(GateStatus, Option<GateSeverity>)> {
+    let status_str = obj.get("status").and_then(|v| v.as_str())?;
+    let status = GateStatus::parse(status_str)?;
+    let severity = obj
+        .get("severity")
+        .and_then(|v| v.as_str())
+        .and_then(GateSeverity::parse);
+    Some((status, severity))
+}
+
+fn parse_release_envelope(bytes: &[u8]) -> Option<ReleaseEvidenceEnvelope> {
+    let trimmed = String::from_utf8_lossy(bytes).trim().to_string();
+    if !trimmed.starts_with('{') {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(&trimmed).ok()?;
+    let obj = value.as_object()?;
+    let version = obj.get("version").and_then(|v| v.as_u64())?;
+    if version != u64::from(RELEASE_GATE_ENVELOPE_VERSION) {
+        return None;
+    }
+    let (status, severity) = parse_status_and_severity(obj)?;
+    let revision = obj
+        .get("revision")
+        .and_then(|v| v.as_str())
+        .map(|s| bound_text(s, 128));
+    let product_version = obj
+        .get("product_version")
+        .and_then(|v| v.as_str())
+        .map(|s| bound_text(s, 128));
+    let artifacts: Vec<String> = obj
+        .get("artifacts")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .map(|s| bound_text(&s, 256))
+                .collect()
+        })
+        .unwrap_or_default();
+    let has_sbom = obj
+        .get("sbom")
+        .map(|v| v.is_object() || v.is_string())
+        .unwrap_or(false);
+    let has_provenance = obj
+        .get("provenance")
+        .map(|v| v.is_object() || v.is_string())
+        .unwrap_or(false);
+    let publication_state = obj
+        .get("publication_state")
+        .and_then(|v| v.as_str())
+        .map(|s| bound_text(s, 64));
+    let findings = parse_findings(obj.get("findings"));
+    let evidence = parse_evidence(obj.get("evidence"));
+    let missing_evidence = parse_missing_evidence(obj.get("missing_evidence"));
+    let diagnostic = obj
+        .get("diagnostic")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let remediation = obj
+        .get("remediation")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(ReleaseEvidenceEnvelope {
+        status,
+        severity,
+        revision,
+        product_version,
+        artifacts,
+        has_sbom,
+        has_provenance,
+        publication_state,
+        findings,
+        evidence,
+        missing_evidence,
+        diagnostic,
+        remediation,
+    })
+}
+
+fn parse_capability_envelope(bytes: &[u8]) -> Option<CapabilityEnvelope> {
+    let trimmed = String::from_utf8_lossy(bytes).trim().to_string();
+    if !trimmed.starts_with('{') {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(&trimmed).ok()?;
+    let obj = value.as_object()?;
+    let version = obj.get("version").and_then(|v| v.as_u64())?;
+    if version != u64::from(RELEASE_GATE_ENVELOPE_VERSION) {
+        return None;
+    }
+    let (status, severity) = parse_status_and_severity(obj)?;
+    // `capabilities` is a sub-object: the parser looks inside it
+    // (not at the top level) so the envelope's wire shape stays
+    // compact. A missing `capabilities` object yields empty lists
+    // rather than a parse error — the required-evidence guard then
+    // refuses PASS for an empty `verified` list.
+    let caps = obj.get("capabilities").and_then(|v| v.as_object());
+    let read_list = |key: &str| -> Vec<String> {
+        caps.and_then(|c| c.get(key))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                    .map(|s| bound_text(&s, 128))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let declared = read_list("declared");
+    let configured = read_list("configured");
+    let verified = read_list("verified");
+    let unverified = read_list("unverified");
+    let findings = parse_findings(obj.get("findings"));
+    let evidence = parse_evidence(obj.get("evidence"));
+    let missing_evidence = parse_missing_evidence(obj.get("missing_evidence"));
+    let diagnostic = obj
+        .get("diagnostic")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let remediation = obj
+        .get("remediation")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(CapabilityEnvelope {
+        status,
+        severity,
+        declared,
+        configured,
+        verified,
+        unverified,
+        findings,
+        evidence,
+        missing_evidence,
+        diagnostic,
+        remediation,
+    })
+}
+
+fn envelope_review_result(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    reason: &str,
+    evidence: Vec<EvidenceRef>,
+    input_evidence: Vec<EvidenceRef>,
+) -> GateResult {
+    let mut combined = input_evidence;
+    combined.extend(evidence);
+    let mut missing = vec![format!("{tool_id}:output")];
+    missing.truncate(MAX_MISSING_EVIDENCE);
+    let diagnostic = bound_text(&redact_secrets(reason), MAX_DIAGNOSTIC_BYTES);
+    GateResult {
+        gate_id: gate_id_for(tool_id, gate_id),
+        source: source_for(tool_id),
+        status: GateStatus::ReviewRequired,
+        severity: GateSeverity::Warning,
+        findings: vec![],
+        evidence: bound_evidence(combined),
+        missing_evidence: missing,
+        diagnostic: Some(diagnostic),
+        remediation: Some(bound_text(
+            "Re-run the command and emit a valid release-gate envelope; review the listed reason.",
+            MAX_REMEDIATION_BYTES,
+        )),
+    }
+}
+
+// Helper that promotes parsed envelope fields into a GateResult.
+// Bounded inputs plus redaction are enforced here so the call sites
+// only have to forward the envelope values.
+#[allow(clippy::too_many_arguments)]
+fn envelope_to_result(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    status: GateStatus,
+    severity: Option<GateSeverity>,
+    findings: Vec<Finding>,
+    evidence: Vec<EvidenceRef>,
+    missing_evidence: Vec<String>,
+    diagnostic: Option<String>,
+    remediation: Option<String>,
+    input_evidence: Vec<EvidenceRef>,
+) -> GateResult {
+    let severity = severity.unwrap_or_else(|| default_severity_for_status(status));
+    let diagnostic = diagnostic
+        .as_deref()
+        .map(|d| bound_text(&redact_secrets(d), MAX_DIAGNOSTIC_BYTES))
+        .filter(|s| !s.is_empty());
+    let remediation = remediation
+        .as_deref()
+        .map(|d| bound_text(&redact_secrets(d), MAX_REMEDIATION_BYTES))
+        .filter(|s| !s.is_empty());
+    let mut combined: Vec<EvidenceRef> = input_evidence;
+    combined.extend(evidence);
+    GateResult {
+        gate_id: gate_id_for(tool_id, gate_id),
+        source: source_for(tool_id),
+        status,
+        severity,
+        findings,
+        evidence: bound_evidence(combined),
+        missing_evidence,
+        diagnostic,
+        remediation,
+    }
+}
+
+/// Run a project-owned command that reports release evidence.
+///
+/// The command must emit a versioned JSON envelope on stdout
+/// describing the source revision, release version, artifacts,
+/// integrity, SBOM, provenance, and publication state. The result
+/// is normalised by:
+///
+/// * applying the same exit-code authority rule as the product-quality
+///   adapter (`PASS`=0, `FAIL`=1, `REVIEW_REQUIRED`=2,
+///   `NOT_APPLICABLE`=0; mismatches downgrade to `REVIEW_REQUIRED`);
+/// * refusing `PASS` when required evidence is absent (revision,
+///   release version, at least one artifact, provenance);
+/// * refusing `PASS` when the envelope's revision does not match the
+///   supplied `current_revision` (when both are present) — stale
+///   evidence is `REVIEW_REQUIRED`;
+/// * returning `REVIEW_REQUIRED` for malformed, missing, or
+///   wrong-version envelopes so missing coverage is never silently
+///   treated as a pass.
+pub fn run_release_evidence_adapter(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    input: &AdapterInput,
+    current_revision: Option<&str>,
+) -> GateResult {
+    let spec = input.checker_spec(tool_id);
+    let run = run_checker(&spec);
+    if let Some(detail) = run.spawn_error.clone() {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::SpawnFailed {
+                tool: tool_id.to_string(),
+                detail,
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    if run.timed_out {
+        let mut result = infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::Timeout {
+                tool: tool_id.to_string(),
+                timeout_ms: input.timeout_ms,
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+        result.missing_evidence.push(format!("{tool_id}:timeout"));
+        result.missing_evidence.truncate(MAX_MISSING_EVIDENCE);
+        return result;
+    }
+    if run.signalled {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::Signalled {
+                tool: tool_id.to_string(),
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    let exit = run.exit_code.unwrap_or(-1);
+
+    if let Some(envelope) = parse_release_envelope(run.stdout.as_bytes()) {
+        let expected = expected_exit_for_status(envelope.status);
+        if let Some(code) = expected {
+            if exit != code {
+                return contradiction_result_release(
+                    tool_id, gate_id, &envelope, exit, &run, input,
+                );
+            }
+        }
+        // Stale-evidence guard: if the envelope reports a revision
+        // and the project exposes a current one (typically via git)
+        // and the two disagree, the evidence is stale and a PASS
+        // claim is refused.
+        if let (Some(claimed), Some(actual)) = (envelope.revision.as_deref(), current_revision) {
+            if claimed != actual && envelope.status == GateStatus::Pass {
+                return envelope_review_result(
+                    tool_id,
+                    gate_id,
+                    &format!(
+                        "release evidence is stale: envelope claims revision `{claimed}` but current revision is `{actual}`"
+                    ),
+                    envelope.evidence.clone(),
+                    input.evidence.clone(),
+                );
+            }
+        }
+        // Required-evidence guard for PASS: revision, product
+        // version, at least one artifact, and provenance must all be
+        // present.
+        if envelope.status == GateStatus::Pass {
+            let mut missing: Vec<String> = Vec::new();
+            if envelope
+                .revision
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true)
+            {
+                missing.push("revision".to_string());
+            }
+            if envelope
+                .product_version
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true)
+            {
+                missing.push("product_version".to_string());
+            }
+            if envelope.artifacts.is_empty() {
+                missing.push("artifacts".to_string());
+            }
+            if !envelope.has_provenance {
+                missing.push("provenance".to_string());
+            }
+            if !missing.is_empty() {
+                missing.sort();
+                missing.dedup();
+                return envelope_review_result(
+                    tool_id,
+                    gate_id,
+                    &format!(
+                        "release evidence claims PASS but is missing required fields: {}",
+                        missing.join(", ")
+                    ),
+                    envelope.evidence,
+                    input.evidence.clone(),
+                );
+            }
+        }
+        return envelope_to_result(
+            tool_id,
+            gate_id,
+            envelope.status,
+            envelope.severity,
+            envelope.findings,
+            envelope.evidence,
+            envelope.missing_evidence,
+            envelope.diagnostic,
+            envelope.remediation,
+            input.evidence.clone(),
+        );
+    }
+
+    // No envelope: malformed or missing output cannot claim any
+    // status. We downgrade to REVIEW_REQUIRED with a bounded,
+    // secret-redacted diagnostic.
+    let output = if run.stdout.trim().is_empty() {
+        run.stderr.clone()
+    } else {
+        run.stdout.clone()
+    };
+    let output_diag = bound_text(&redact_secrets(output.trim()), MAX_DIAGNOSTIC_BYTES);
+    if output.trim().is_empty() {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::MalformedOutput {
+                tool: tool_id.to_string(),
+                format: "release-gate".to_string(),
+                detail: "no JSON envelope and empty output".to_string(),
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    envelope_review_result(
+        tool_id,
+        gate_id,
+        &format!(
+            "no release-gate JSON envelope; exit {exit}; output starts with: {}",
+            output_diag.chars().take(128).collect::<String>()
+        ),
+        vec![],
+        input.evidence.clone(),
+    )
+}
+
+fn contradiction_result_release(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    envelope: &ReleaseEvidenceEnvelope,
+    exit: i32,
+    run: &CheckerRun,
+    input: &AdapterInput,
+) -> GateResult {
+    let mut detail = format!(
+        "command exited {exit} but envelope claimed {}; exit code is authoritative",
+        envelope.status.as_str()
+    );
+    if !run.stderr.trim().is_empty() {
+        detail.push_str(" | stderr: ");
+        detail.push_str(&redact_secrets(run.stderr.trim()));
+    }
+    let diagnostic = bound_text(&detail, MAX_DIAGNOSTIC_BYTES);
+    let mut missing = vec![format!("{tool_id}:output")];
+    missing.truncate(MAX_MISSING_EVIDENCE);
+    GateResult {
+        gate_id: gate_id_for(tool_id, gate_id),
+        source: source_for(tool_id),
+        status: GateStatus::ReviewRequired,
+        severity: GateSeverity::Warning,
+        findings: vec![],
+        evidence: bound_evidence(input.evidence.clone()),
+        missing_evidence: missing,
+        diagnostic: Some(diagnostic),
+        remediation: Some(bound_text(
+            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0).",
+            MAX_REMEDIATION_BYTES,
+        )),
+    }
+}
+
+/// Run a project-owned command that reports capability conformance.
+///
+/// The command must emit a versioned JSON envelope on stdout
+/// describing the declared, configured, verified, and unverified
+/// capabilities of the project. The result is normalised by:
+///
+/// * applying the same exit-code authority rule as the product-quality
+///   and release-evidence adapters;
+/// * refusing `PASS` when `capabilities.verified` is empty or absent —
+///   unverified capabilities block;
+/// * refusing `PASS` when the envelope claims to verify a capability
+///   that is not part of the resolved plan (`scheduled_ids`) — the
+///   claim would be evidence the gate cannot reproduce;
+/// * returning `REVIEW_REQUIRED` for malformed, missing, or
+///   wrong-version envelopes.
+pub fn run_capability_conformance_adapter(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    input: &AdapterInput,
+    scheduled_ids: &[String],
+) -> GateResult {
+    let spec = input.checker_spec(tool_id);
+    let run = run_checker(&spec);
+    if let Some(detail) = run.spawn_error.clone() {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::SpawnFailed {
+                tool: tool_id.to_string(),
+                detail,
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    if run.timed_out {
+        let mut result = infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::Timeout {
+                tool: tool_id.to_string(),
+                timeout_ms: input.timeout_ms,
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+        result.missing_evidence.push(format!("{tool_id}:timeout"));
+        result.missing_evidence.truncate(MAX_MISSING_EVIDENCE);
+        return result;
+    }
+    if run.signalled {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::Signalled {
+                tool: tool_id.to_string(),
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    let exit = run.exit_code.unwrap_or(-1);
+
+    if let Some(envelope) = parse_capability_envelope(run.stdout.as_bytes()) {
+        let expected = expected_exit_for_status(envelope.status);
+        if let Some(code) = expected {
+            if exit != code {
+                return contradiction_result_capability(
+                    tool_id, gate_id, &envelope, exit, &run, input,
+                );
+            }
+        }
+        if envelope.status == GateStatus::Pass {
+            // Empty verified list is a claim that nothing is verified:
+            // a PASS without verified capabilities is a contradiction.
+            if envelope.verified.is_empty() {
+                return envelope_review_result(
+                    tool_id,
+                    gate_id,
+                    "capability-conformance claims PASS but `verified` is empty",
+                    envelope.evidence.clone(),
+                    input.evidence.clone(),
+                );
+            }
+            // Stale-evidence guard: a verified capability that is not
+            // in the resolved plan is a claim the gate cannot
+            // reproduce. We compare against the scheduled ids (the
+            // canonical gate vocabulary for this project) so projects
+            // with custom checks do not get false positives for
+            // their own ids.
+            let scheduled: std::collections::BTreeSet<&str> =
+                scheduled_ids.iter().map(|s| s.as_str()).collect();
+            let mut out_of_scope: Vec<String> = envelope
+                .verified
+                .iter()
+                .filter(|id| !scheduled.contains(id.as_str()))
+                .cloned()
+                .collect();
+            if !out_of_scope.is_empty() {
+                out_of_scope.sort();
+                out_of_scope.dedup();
+                return envelope_review_result(
+                    tool_id,
+                    gate_id,
+                    &format!(
+                        "capability-conformance claims verified capabilities not in the resolved plan: {}",
+                        out_of_scope.join(", ")
+                    ),
+                    envelope.evidence.clone(),
+                    input.evidence.clone(),
+                );
+            }
+        }
+        return envelope_to_result(
+            tool_id,
+            gate_id,
+            envelope.status,
+            envelope.severity,
+            envelope.findings,
+            envelope.evidence,
+            envelope.missing_evidence,
+            envelope.diagnostic,
+            envelope.remediation,
+            input.evidence.clone(),
+        );
+    }
+
+    let output = if run.stdout.trim().is_empty() {
+        run.stderr.clone()
+    } else {
+        run.stdout.clone()
+    };
+    let output_diag = bound_text(&redact_secrets(output.trim()), MAX_DIAGNOSTIC_BYTES);
+    if output.trim().is_empty() {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::MalformedOutput {
+                tool: tool_id.to_string(),
+                format: "release-gate".to_string(),
+                detail: "no JSON envelope and empty output".to_string(),
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    envelope_review_result(
+        tool_id,
+        gate_id,
+        &format!(
+            "no release-gate JSON envelope; exit {exit}; output starts with: {}",
+            output_diag.chars().take(128).collect::<String>()
+        ),
+        vec![],
+        input.evidence.clone(),
+    )
+}
+
+fn contradiction_result_capability(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    envelope: &CapabilityEnvelope,
+    exit: i32,
+    run: &CheckerRun,
+    input: &AdapterInput,
+) -> GateResult {
+    let mut detail = format!(
+        "command exited {exit} but envelope claimed {}; exit code is authoritative",
+        envelope.status.as_str()
+    );
+    if !run.stderr.trim().is_empty() {
+        detail.push_str(" | stderr: ");
+        detail.push_str(&redact_secrets(run.stderr.trim()));
+    }
+    let diagnostic = bound_text(&detail, MAX_DIAGNOSTIC_BYTES);
+    let mut missing = vec![format!("{tool_id}:output")];
+    missing.truncate(MAX_MISSING_EVIDENCE);
+    GateResult {
+        gate_id: gate_id_for(tool_id, gate_id),
+        source: source_for(tool_id),
+        status: GateStatus::ReviewRequired,
+        severity: GateSeverity::Warning,
+        findings: vec![],
+        evidence: bound_evidence(input.evidence.clone()),
+        missing_evidence: missing,
+        diagnostic: Some(diagnostic),
+        remediation: Some(bound_text(
+            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0).",
+            MAX_REMEDIATION_BYTES,
+        )),
+    }
+}
+
 /// Run every adapter input in order, collecting one [`GateResult`] per
 /// adapter. A failing adapter never aborts the rest: each result is
 /// independent, mirroring the checker failure-isolation rule.
@@ -2290,5 +3060,530 @@ mod tests {
         );
         assert_eq!(result.status, GateStatus::Pass);
         assert!(result.evidence.len() <= crate::gate::dto::MAX_EVIDENCE_REFS);
+    }
+
+    // --- release-evidence adapter ---------------------------------------
+
+    const RELEASE_PASS_ENVELOPE: &str = r#"{
+        "version":1,
+        "status":"PASS",
+        "severity":"info",
+        "revision":"abc123",
+        "product_version":"1.2.3",
+        "artifacts":["binary.tar.gz","checksums.txt"],
+        "provenance":{"type":"slsa-provenance/v0.2","digest":"sha256:deadbeef"},
+        "sbom":{"media_type":"text/spdx","digest":"sha256:beefdead"},
+        "publication_state":"draft",
+        "findings":[]
+    }"#;
+    const RELEASE_FAIL_ENVELOPE: &str = r#"{
+        "version":1,
+        "status":"FAIL",
+        "severity":"error",
+        "findings":[{"title":"missing SBOM","severity":"error","rule":"sbom-required"}]
+    }"#;
+    const RELEASE_REVIEW_ENVELOPE: &str = r#"{
+        "version":1,
+        "status":"REVIEW_REQUIRED",
+        "severity":"warning",
+        "findings":[],
+        "missing_evidence":["provenance"]
+    }"#;
+
+    fn re_input(program: &str, args: &[&str]) -> AdapterInput {
+        AdapterInput {
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            working_dir: std::env::temp_dir(),
+            env: BTreeMap::new(),
+            timeout_ms: 10_000,
+            max_output_bytes: 1024 * 1024,
+            evidence: vec![],
+        }
+    }
+
+    #[test]
+    fn release_evidence_complete_pass_envelope_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), RELEASE_PASS_ENVELOPE, 0);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            Some("abc123"),
+        );
+        assert_eq!(result.status, GateStatus::Pass);
+        assert_eq!(result.severity, GateSeverity::Info);
+    }
+
+    #[test]
+    fn release_evidence_failing_envelope_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), RELEASE_FAIL_ENVELOPE, 1);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::Fail);
+        assert_eq!(result.severity, GateSeverity::Error);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].title, "missing SBOM");
+    }
+
+    #[test]
+    fn release_evidence_review_envelope_reviews() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), RELEASE_REVIEW_ENVELOPE, 2);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        assert!(result.missing_evidence.contains(&"provenance".to_string()));
+    }
+
+    #[test]
+    fn release_evidence_contradictory_exit_for_pass_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), RELEASE_PASS_ENVELOPE, 1);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            Some("abc123"),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("exited 1"));
+        assert!(diag.contains("PASS"));
+        assert!(diag.contains("exit code is authoritative"));
+    }
+
+    #[test]
+    fn release_evidence_stale_revision_downgrades_pass_to_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), RELEASE_PASS_ENVELOPE, 0);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            // Current revision is different from the envelope's
+            // claim: stale evidence must refuse PASS.
+            Some("def456"),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("stale"), "diag: {diag}");
+        assert!(diag.contains("abc123"), "diag: {diag}");
+        assert!(diag.contains("def456"), "diag: {diag}");
+    }
+
+    #[test]
+    fn release_evidence_missing_current_revision_does_not_trigger_staleness() {
+        // No git rev available (project not in a worktree): the
+        // adapter skips the staleness rule and honours the envelope
+        // status (still subject to required-evidence checks).
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), RELEASE_PASS_ENVELOPE, 0);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::Pass);
+    }
+
+    #[test]
+    fn release_evidence_missing_required_field_downgrades_pass_to_review() {
+        // No revision, no product_version, no artifacts, no
+        // provenance: required-evidence guard refuses PASS.
+        let env = r#"{"version":1,"status":"PASS","findings":[]}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("missing required fields"), "diag: {diag}");
+        assert!(diag.contains("revision"), "diag: {diag}");
+        assert!(diag.contains("product_version"), "diag: {diag}");
+        assert!(diag.contains("artifacts"), "diag: {diag}");
+        assert!(diag.contains("provenance"), "diag: {diag}");
+    }
+
+    #[test]
+    fn release_evidence_no_artifacts_becomes_review() {
+        // Revision + product_version + provenance but no artifacts:
+        // still missing a required field.
+        let env = r#"{"version":1,"status":"PASS","revision":"abc","product_version":"1.0","provenance":{"type":"x"}}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("artifacts"), "diag: {diag}");
+    }
+
+    #[test]
+    fn release_evidence_wrong_version_becomes_review() {
+        let env = r#"{"version":99,"status":"PASS","findings":[]}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(
+            diag.contains("no release-gate JSON envelope"),
+            "diag: {diag}"
+        );
+    }
+
+    #[test]
+    fn release_evidence_malformed_envelope_with_output_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.json");
+        std::fs::write(&path, "not json").unwrap();
+        let script = format!("cat {} ; exit 0", path.display());
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(
+            diag.contains("no release-gate JSON envelope"),
+            "diag: {diag}"
+        );
+    }
+
+    #[test]
+    fn release_evidence_empty_output_becomes_review() {
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", "exit 0"]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        assert!(result.missing_evidence.iter().any(|k| k.contains("output")));
+    }
+
+    #[test]
+    fn release_evidence_unknown_status_becomes_review() {
+        let env = r#"{"version":1,"status":"MAYBE","findings":[]}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        // Unknown status: envelope parsing returns None (no status
+        // match), so we fall through to "no envelope" → REVIEW_REQUIRED.
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn release_evidence_redacts_secrets_in_diagnostic() {
+        let env =
+            r#"{"version":1,"status":"FAIL","diagnostic":"api_key=hunter2-secret","findings":[]}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 1);
+        let result = run_release_evidence_adapter(
+            "project-runtime",
+            Some("release-evidence"),
+            &re_input("sh", &["-c", &script]),
+            None,
+        );
+        assert_eq!(result.status, GateStatus::Fail);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(!diag.contains("hunter2-secret"), "diag: {diag}");
+    }
+
+    #[test]
+    fn release_evidence_provenance_can_be_a_string_or_object() {
+        // Both shapes are accepted: a plain string is treated as
+        // "provenance present" (the producer's own format), an
+        // object is parsed in place.
+        for value in [
+            r#""https://example.com/provenance.json""#,
+            r#"{"type":"slsa-provenance/v0.2"}"#,
+        ] {
+            let env = format!(
+                r#"{{"version":1,"status":"PASS","revision":"abc","product_version":"1.0","artifacts":["a"],"provenance":{value}}}"#
+            );
+            let tmp = tempfile::tempdir().unwrap();
+            let script = write_envelope_exit(tmp.path(), &env, 0);
+            let result = run_release_evidence_adapter(
+                "project-runtime",
+                Some("release-evidence"),
+                &re_input("sh", &["-c", &script]),
+                None,
+            );
+            assert_eq!(result.status, GateStatus::Pass, "provenance={value}");
+        }
+    }
+
+    // --- capability-conformance adapter ---------------------------------
+
+    const CAPABILITY_PASS_ENVELOPE: &str = r#"{
+        "version":1,
+        "status":"PASS",
+        "severity":"info",
+        "capabilities":{
+            "declared":["api-contract","migration"],
+            "configured":["api-contract","migration"],
+            "verified":["api-contract","migration"],
+            "unverified":[]
+        },
+        "findings":[]
+    }"#;
+    const CAPABILITY_FAIL_ENVELOPE: &str = r#"{
+        "version":1,
+        "status":"FAIL",
+        "severity":"error",
+        "capabilities":{
+            "declared":["api-contract","migration"],
+            "configured":["api-contract"],
+            "verified":["api-contract"],
+            "unverified":["migration"]
+        },
+        "findings":[{"title":"migration unverified","severity":"error","rule":"capability-missing"}]
+    }"#;
+
+    fn cap_input(program: &str, args: &[&str]) -> AdapterInput {
+        AdapterInput {
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            working_dir: std::env::temp_dir(),
+            env: BTreeMap::new(),
+            timeout_ms: 10_000,
+            max_output_bytes: 1024 * 1024,
+            evidence: vec![],
+        }
+    }
+
+    #[test]
+    fn capability_conformance_pass_with_verified_subset_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), CAPABILITY_PASS_ENVELOPE, 0);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &[
+                "api-contract".to_string(),
+                "migration".to_string(),
+                "capability-conformance".to_string(),
+            ],
+        );
+        assert_eq!(result.status, GateStatus::Pass);
+    }
+
+    #[test]
+    fn capability_conformance_failing_envelope_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), CAPABILITY_FAIL_ENVELOPE, 1);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &[
+                "api-contract".to_string(),
+                "migration".to_string(),
+                "capability-conformance".to_string(),
+            ],
+        );
+        assert_eq!(result.status, GateStatus::Fail);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].title, "migration unverified");
+    }
+
+    #[test]
+    fn capability_conformance_contradictory_exit_for_pass_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), CAPABILITY_PASS_ENVELOPE, 1);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &[
+                "api-contract".to_string(),
+                "migration".to_string(),
+                "capability-conformance".to_string(),
+            ],
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("exited 1"));
+        assert!(diag.contains("PASS"));
+    }
+
+    #[test]
+    fn capability_conformance_pass_with_empty_verified_becomes_review() {
+        // PASS with no verified capabilities is a contradiction: it
+        // claims the gate passed but verifies nothing.
+        let env = r#"{
+            "version":1,
+            "status":"PASS",
+            "capabilities":{
+                "declared":["api-contract"],
+                "configured":[],
+                "verified":[],
+                "unverified":["api-contract"]
+            }
+        }"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &[
+                "api-contract".to_string(),
+                "capability-conformance".to_string(),
+            ],
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("`verified` is empty"), "diag: {diag}");
+    }
+
+    #[test]
+    fn capability_conformance_pass_with_out_of_scope_verified_becomes_review() {
+        // PASS with verified "ui-review" but the plan does not include
+        // it: stale evidence. Driftwatchdog refuses the claim because
+        // the gate cannot reproduce it.
+        let env = r#"{
+            "version":1,
+            "status":"PASS",
+            "capabilities":{
+                "declared":["ui-review","api-contract"],
+                "configured":["ui-review","api-contract"],
+                "verified":["ui-review","api-contract"],
+                "unverified":[]
+            }
+        }"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &[
+                "api-contract".to_string(),
+                "capability-conformance".to_string(),
+            ],
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("not in the resolved plan"), "diag: {diag}");
+        assert!(diag.contains("ui-review"), "diag: {diag}");
+    }
+
+    #[test]
+    fn capability_conformance_not_applicable_with_empty_verified_passes() {
+        // NOT_APPLICABLE with empty verified list is acceptable: the
+        // gate is opt-out for this run.
+        let env = r#"{
+            "version":1,
+            "status":"NOT_APPLICABLE",
+            "capabilities":{
+                "declared":[],
+                "configured":[],
+                "verified":[],
+                "unverified":[]
+            }
+        }"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &["capability-conformance".to_string()],
+        );
+        assert_eq!(result.status, GateStatus::NotApplicable);
+    }
+
+    #[test]
+    fn capability_conformance_wrong_version_becomes_review() {
+        let env = r#"{"version":2,"status":"PASS","capabilities":{"verified":["a"]}}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 0);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &["a".to_string()],
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn capability_conformance_malformed_envelope_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.json");
+        std::fs::write(&path, "not json").unwrap();
+        let script = format!("cat {} ; exit 0", path.display());
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &["capability-conformance".to_string()],
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn capability_conformance_empty_output_becomes_review() {
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", "exit 0"]),
+            &["capability-conformance".to_string()],
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn capability_conformance_redacts_secrets_in_diagnostic() {
+        let env = r#"{"version":1,"status":"FAIL","diagnostic":"api_key=hunter2-secret","capabilities":{"verified":["api-contract"]},"findings":[]}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), env, 1);
+        let result = run_capability_conformance_adapter(
+            "project-runtime",
+            Some("capability-conformance"),
+            &cap_input("sh", &["-c", &script]),
+            &[
+                "api-contract".to_string(),
+                "capability-conformance".to_string(),
+            ],
+        );
+        assert_eq!(result.status, GateStatus::Fail);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(!diag.contains("hunter2-secret"), "diag: {diag}");
     }
 }
