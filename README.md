@@ -359,18 +359,94 @@ Local verification comes first: a change that has not passed its local
 Gate must not be represented as complete merely because CI is
 configured. CI templates repeat the same command as a second layer.
 
+### Product-quality Gate contract
+
+Two built-in profiles, `product` and `rust-product`, schedule the
+`product-code-boundary` and `placeholder-threshold` concerns. The
+profiles are aliases: `rust-product` exists for projects that want a
+Rust-flavored name without changing the concern set. Both concerns are
+required by default; relax an individual concern to `required = false`
+when a project cannot bind a command yet.
+
+The concerns are data only: Driftwatchdog never embeds a language
+scanner, runs a provider SDK, or installs a tool. The project binds a
+command to each concern in `gate.toml` (or `.ai-gate/gate.yaml`):
+
+```toml
+version = 1
+profile = "product"
+[[checks]]
+id = "product-code-boundary"
+command = "tools/product-boundary check --envelope"
+[[checks]]
+id = "placeholder-threshold"
+command = "tools/placeholder-threshold check --envelope"
+```
+
+When the command runs, the adapter parses the versioned JSON envelope
+emitted on stdout and applies the **exit-code authority rule**:
+
+| Envelope status      | Required exit code | Adapter result |
+| -------------------- | ------------------ | -------------- |
+| `PASS`               | `0`                | `PASS`         |
+| `FAIL`               | `1`                | `FAIL`         |
+| `REVIEW_REQUIRED`    | `2`                | `REVIEW_REQUIRED` |
+| `NOT_APPLICABLE`     | `0`                | `NOT_APPLICABLE` |
+
+A status/exit mismatch, a missing envelope, an unparsable envelope, or
+an unknown `version` field all downgrade the result to
+`REVIEW_REQUIRED` so missing coverage is never silently treated as a
+pass. Infrastructure failures (spawn, timeout, signal) stay
+`REVIEW_REQUIRED` and name the missing evidence key. When the command
+exits cleanly but emits no envelope, the adapter falls back to the
+existing text-mode mapping (exit `0` → `PASS`, nonzero → `FAIL`) so
+commands that pre-date the envelope contract keep working.
+
+Envelope shape (wire version `1`):
+
+```json
+{
+  "version": 1,
+  "status": "FAIL",
+  "severity": "error",
+  "findings": [
+    {
+      "title": "test code reached product source",
+      "severity": "error",
+      "location": "src/lib.rs",
+      "rule": "no-tests-in-product"
+    }
+  ],
+  "evidence": [],
+  "missing_evidence": [],
+  "diagnostic": "see findings",
+  "remediation": "move the offending test to tests/"
+}
+```
+
+`severity` defaults to `info` for `PASS`, `error` for `FAIL`,
+`warning` for `REVIEW_REQUIRED`, and `info` for `NOT_APPLICABLE` when
+the envelope omits it. Every string is bounded and secret-redacted
+using the same limits the rest of the Gate contract applies
+(`MAX_FINDINGS`, `MAX_DIAGNOSTIC_BYTES`, `MAX_REMEDIATION_BYTES`,
+`MAX_EVIDENCE_REFS`, `MAX_MISSING_EVIDENCE`, etc.), so a malformed or
+oversized producer cannot break the Gate's output invariants. The
+`rust-product` profile is a strict alias for `product`; the two names
+select the same concerns with the same default severity model.
+
 ## Project status
 
-v0.1 through v0.6 are shipped: every change listed in `ROADMAP.md` is
-implemented and archived, the full CLI surface (`init`, `run`, `list`,
-`top`, `show`, `report --ai`, `gc`, `export`, `doctor`, `check`,
-`link`, `unlink`, `completions`, `man`, `mcp`) is functional, the
-packaging suite is green (7/7 bash tests including
-`agent_examples` and `gha_templates`), and CI enforces fmt, clippy
-(`-D warnings`, `--all-features`), MSRV 1.74, cargo-deny, tarpaulin
-coverage, macOS (`macos-14`) parity, shellcheck, npm audit, and the
-end-to-end smoke test. The next planning milestone is v1.0
-(Stable); see `ROADMAP.md` for the delivery sequence and
+v0.1 through v0.6 are shipped. v1.1 (Engineering Gates) and v1.2
+(Product-quality Gate) are also shipped: every change listed in
+`ROADMAP.md` is implemented and archived, the full CLI surface (`init`,
+`run`, `list`, `top`, `show`, `report --ai`, `gc`, `export`, `doctor`,
+`check`, `gate`, `link`, `unlink`, `completions`, `man`, `mcp`) is
+functional, the packaging suite is green (8/8 bash tests including
+`agent_examples`, `gha_templates`, and `change_workflow`), and CI
+enforces fmt, clippy (`-D warnings`, `--all-features`), MSRV 1.74,
+cargo-deny, tarpaulin coverage, macOS (`macos-14`) parity, shellcheck,
+npm audit, and the end-to-end smoke test. The next planning milestone
+is v1.0 (Stable); see `ROADMAP.md` for the delivery sequence and
 `HANDOFF.md` for the current implementation handoff.
 
 ## Development

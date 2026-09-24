@@ -22,6 +22,7 @@ Driftwatch is a local-first, language-agnostic CLI for runtime failure memory in
 | v0.6 Integrate | `mcp-read-tools`, `agent-examples`, `github-actions-templates` | Serve read-only MCP tools over stdio, ship tested Claude Code/OpenCode/Aider examples, and publish a reusable GitHub Actions check template. |
 | v1.0 Stable | Future hardening changes | Stabilize schema, config, checker protocol, CLI, cross-platform behavior, documentation, and real-project validation. |
 | v1.1 Engineering Gates | Nine planned packages (all nine archived) | Add generic Gate contracts, project policy, evidence, tool lifecycle, adapters, optional context providers, AI evaluation, and local Gate/history integration. |
+| v1.2 Product-quality Gate | `product-quality-gate-contract` | Add `product`/`rust-product` built-in profiles, the `product-code-boundary` and `placeholder-threshold` concern IDs, and a versioned JSON-envelope adapter with exit-code authority so a project-owned checker can report product-quality status without Driftwatchdog embedding a language scanner. |
 
 ## Closed change inventory
 
@@ -41,6 +42,7 @@ The following change packages have been implemented and archived:
 - `agent-examples` — tested copy-paste MCP + workflow examples for Claude Code, OpenCode, and Aider; Aider includes the `report --ai > drift.md` fallback; consistency test in `tests/packaging/test_agent_examples.sh`.
 - `github-actions-templates` — reusable `templates/github-actions/driftwatch-check.yml` (`workflow_call` + `workflow_dispatch`) that pins a `driftwatchdog` install, always renders the AI report, uploads only `drift.md`, summarises `top` into the step summary, with `contents: read` and the `fail_on_drift`/`upload_report` inputs; shape test in `tests/packaging/test_gha_templates.sh`.
 - `checker-machine-output` — `driftwatch check --format human|json` with a versioned `driftwatch-checker/0.1.0` document on stdout (declaration order, `ok`/`alerting`/`failed`/`timeout`/`protocol-error` statuses, parsed `alerts[]` in the existing wire shape, bounded `error` note, summary counts) while human output, dry-run persistence and exit-status semantics are unchanged. Enables the Forge `driftwatch-cli-alignment` consumption path.
+- `product-quality-gate-contract` — `product` and `rust-product` built-in profiles, stable concern IDs `product-code-boundary` and `placeholder-threshold`, versioned JSON-envelope result normalization (wire version `1`, exit-code authority rule: `PASS`→0, `FAIL`→1, `REVIEW_REQUIRED`→2, `NOT_APPLICABLE`→0, mismatches and malformed envelopes downgrade to `REVIEW_REQUIRED`), text-mode fallback for legacy commands, and end-to-end coverage including persistence, `--format json`, dry-run, and optional-concern relaxation. Pure data + bounded redaction; no provider SDKs or embedded scanners.
 
 ## Change dependency graph
 
@@ -96,10 +98,6 @@ no specification framework.
 
 ## Proposed planning queue (not selected)
 
-- `product-quality-gate-contract` — generic Gate concerns
-  `product-code-boundary` and `placeholder-threshold` for AI-assisted
-  projects. Authored; no `current_spec` pointer and no implementation
-  authority until selected.
 - `release-evidence-and-capability-gate` — generic Gate concerns
   `capability-conformance` and `release-evidence` so projects can prove
   artifact integrity and platform coverage. Authored; no `current_spec`
