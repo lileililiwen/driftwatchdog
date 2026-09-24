@@ -14,10 +14,15 @@
 //! `CheckerSpec`, calls [`runner::run_checker`], and feeds the resulting
 //! `CheckerRun` into [`protocol::parse_alerts_document`].
 
+pub mod json;
 pub mod protocol;
 pub mod report;
 pub mod runner;
 
+pub use json::{
+    CheckerReportAlert, CheckerReportDocument, CheckerReportRow, CheckerReportSummary, ProjectInfo,
+    CHECKER_REPORT_CONTRACT,
+};
 pub use protocol::{
     parse_alerts_document, AlertsDocument, DriftAlert, ProtocolError, MAX_ALERTS, MAX_MESSAGE_BYTES,
 };

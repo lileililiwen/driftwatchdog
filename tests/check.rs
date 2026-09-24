@@ -744,3 +744,310 @@ args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"
     let conn = open_db(&tmp);
     assert_eq!(snapshot_count(&conn), 0);
 }
+
+// ----- JSON format (--format json) -----
+//
+// The JSON document is the only thing on stdout; human-format text
+// stays byte-for-byte unchanged. Diagnostics (dry-run banner, etc.)
+// move to stderr in JSON mode.
+
+#[test]
+fn check_format_json_emits_versioned_document() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "spec"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"source\":\"s\",\"symbol\":\"S\"}]}'"]
+"#,
+    );
+    let out = driftwatch()
+        .args(["check", "--format", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    // The stdout must be a single JSON document. The human banner
+    // ("driftwatch check: N checker(s) run") must not appear.
+    assert!(
+        !stdout.contains("checker(s) run"),
+        "human banner leaked into JSON: {stdout}"
+    );
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON document");
+    assert_eq!(v["contract"], "driftwatch-checker/0.1.0");
+    assert_eq!(v["tool"], "driftwatchdog");
+    assert!(v["version"].is_string());
+    assert!(v["generated_at"].is_string());
+    assert!(v["checkers"].is_array());
+    let rows = v["checkers"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "spec");
+    assert_eq!(rows[0]["status"], "alerting");
+    let alerts = rows[0]["alerts"].as_array().unwrap();
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0]["severity"], "warning");
+    assert_eq!(alerts[0]["symbol"], "S");
+    let summary = &v["summary"];
+    assert_eq!(summary["total"], 1);
+    assert_eq!(summary["alerting"], 1);
+    assert_eq!(summary["alerts"], 1);
+    assert_eq!(summary["ok"], 0);
+    assert_eq!(summary["failed"], 0);
+    assert_eq!(summary["timeout"], 0);
+    assert_eq!(summary["protocol_error"], 0);
+}
+
+#[test]
+fn check_format_json_mixed_outcomes_preserve_declaration_order() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "clean"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[]}'"]
+
+[[checkers]]
+name = "alerting"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"source\":\"s\",\"symbol\":\"S\"}]}'"]
+
+[[checkers]]
+name = "broken"
+command = "sh"
+args = ["-c", "exit 1"]
+"#,
+    );
+    let out = driftwatch()
+        .args(["check", "--format", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(1);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let rows = v["checkers"].as_array().unwrap();
+    let names: Vec<&str> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["clean", "alerting", "broken"]);
+    assert_eq!(rows[0]["status"], "ok");
+    assert_eq!(rows[1]["status"], "alerting");
+    assert_eq!(rows[2]["status"], "failed");
+    assert!(rows[0]["error"].is_null());
+    assert!(rows[1]["error"].is_null());
+    assert!(
+        rows[2]["error"].is_string(),
+        "broken row missing error: {rows:?}"
+    );
+    let summary = &v["summary"];
+    assert_eq!(summary["total"], 3);
+    assert_eq!(summary["ok"], 1);
+    assert_eq!(summary["alerting"], 1);
+    assert_eq!(summary["failed"], 1);
+}
+
+#[test]
+fn check_format_json_malformed_isolation_keeps_other_rows() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "malformed"
+command = "sh"
+args = ["-c", "echo '{}'"]
+
+[[checkers]]
+name = "healthy"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"source\":\"s\",\"symbol\":\"S\"}]}'"]
+"#,
+    );
+    let out = driftwatch()
+        .args(["check", "--format", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .code(1);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let rows = v["checkers"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let malformed = rows.iter().find(|r| r["name"] == "malformed").unwrap();
+    assert_eq!(malformed["status"], "protocol-error");
+    assert!(malformed["error"].is_string());
+    let healthy = rows.iter().find(|r| r["name"] == "healthy").unwrap();
+    assert_eq!(healthy["status"], "alerting");
+    let summary = &v["summary"];
+    assert_eq!(summary["protocol_error"], 1);
+    assert_eq!(summary["alerting"], 1);
+}
+
+#[test]
+fn check_format_json_dry_run_persists_nothing() {
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "spec"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"source\":\"s\",\"symbol\":\"S\"}]}'"]
+"#,
+    );
+    let out = driftwatch()
+        .args(["check", "--dry-run", "--format", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    // The document is valid JSON on stdout; the dry-run banner is on
+    // stderr so consumers do not have to filter it out.
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["contract"], "driftwatch-checker/0.1.0");
+    assert_eq!(v["checkers"].as_array().unwrap().len(), 1);
+    assert!(
+        stderr.contains("dry-run"),
+        "dry-run banner missing from stderr: {stderr}"
+    );
+    // The banner must not appear in stdout.
+    assert!(
+        !stdout.contains("dry-run"),
+        "dry-run banner leaked into stdout: {stdout}"
+    );
+    // Persistence is unaffected by format.
+    let conn = open_db(&tmp);
+    assert_eq!(snapshot_count(&conn), 0);
+    assert_eq!(alert_count(&conn), 0);
+}
+
+#[test]
+fn check_format_json_no_checkers_still_emits_valid_document() {
+    let tmp = init_dir();
+    let out = driftwatch()
+        .args(["check", "--format", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["contract"], "driftwatch-checker/0.1.0");
+    assert_eq!(v["checkers"].as_array().unwrap().len(), 0);
+    assert_eq!(v["summary"]["total"], 0);
+    // The human banner must not appear; it would defeat the purpose
+    // of the JSON document.
+    assert!(
+        !stdout.contains("no checkers configured"),
+        "human banner leaked into JSON: {stdout}"
+    );
+    let conn = open_db(&tmp);
+    assert_eq!(snapshot_count(&conn), 0);
+}
+
+#[test]
+fn check_format_json_exit_code_matches_human_mode() {
+    // Exit-code parity is required by the design contract: adding
+    // --format must not change the success/failure mapping. Two
+    // checkers, one failing, one passing -> exit 1 in both modes.
+    let tmp_h = init_dir();
+    write_config(
+        &tmp_h,
+        r#"
+[[checkers]]
+name = "broken"
+command = "sh"
+args = ["-c", "exit 1"]
+
+[[checkers]]
+name = "ok"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[]}'"]
+"#,
+    );
+    let human = driftwatch()
+        .arg("check")
+        .current_dir(tmp_h.path())
+        .assert()
+        .failure()
+        .code(1);
+    let _ = human.get_output();
+
+    let tmp_j = init_dir();
+    write_config(
+        &tmp_j,
+        r#"
+[[checkers]]
+name = "broken"
+command = "sh"
+args = ["-c", "exit 1"]
+
+[[checkers]]
+name = "ok"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[]}'"]
+"#,
+    );
+    let json = driftwatch()
+        .args(["check", "--format", "json"])
+        .current_dir(tmp_j.path())
+        .assert()
+        .failure()
+        .code(1);
+    let _ = json.get_output();
+
+    // Persistence parity: both invocations wrote the same number of
+    // rows. The two tmp dirs are independent so we count each.
+    let conn_h = open_db(&tmp_h);
+    let conn_j = open_db(&tmp_j);
+    assert_eq!(snapshot_count(&conn_h), snapshot_count(&conn_j));
+    assert_eq!(snapshot_count(&conn_h), 2);
+}
+
+#[test]
+fn check_format_json_human_text_unchanged() {
+    // The human output must be byte-for-byte identical to the
+    // pre-existing default; adding --format must not change the
+    // existing table. Compare to the implicit default of --format
+    // human, which is the same code path the existing tests use.
+    let tmp = init_dir();
+    write_config(
+        &tmp,
+        r#"
+[[checkers]]
+name = "spec"
+command = "sh"
+args = ["-c", "echo '{\"alerts\":[{\"severity\":\"warning\",\"message\":\"m\",\"source\":\"s\",\"symbol\":\"S\"}]}'"]
+"#,
+    );
+    let implicit = driftwatch()
+        .arg("check")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let explicit = driftwatch()
+        .args(["check", "--format", "human"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    let s_implicit = String::from_utf8(implicit.get_output().stdout.clone()).unwrap();
+    let s_explicit = String::from_utf8(explicit.get_output().stdout.clone()).unwrap();
+    assert_eq!(s_implicit, s_explicit);
+    // And the explicit default must match the pre-existing human
+    // text shape.
+    assert!(s_implicit.contains("driftwatch check: 1 checker(s) run"));
+    assert!(s_implicit.contains("CHECKER"));
+    assert!(s_implicit.contains("Total alerts: 1"));
+}
+
+#[test]
+fn check_help_documents_format_flag() {
+    driftwatch()
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--format"))
+        .stdout(predicates::str::contains("json"));
+}

@@ -18,13 +18,21 @@
 //!   one also produced a result.
 //! * 2 — every configured checker produced a failure status (mirrors
 //!   `driftwatch doctor`'s strict-fail exit code).
+//!
+//! `--format human|json` selects the output format. Human output is
+//! the unchanged default; JSON output emits one versioned
+//! `driftwatch-checker/0.1.0` document on stdout with every
+//! diagnostic (dry-run banner, correlation-skip warning) on stderr.
+//! Execution, isolation, persistence, and exit-status semantics are
+//! identical across formats.
 
 use std::path::Path;
 
 use crate::checker::{
+    json::{CheckerReportDocument, ProjectInfo},
     parse_alerts_document, run_checker, CheckerOutcome, CheckerSpec, ProtocolError, Status,
 };
-use crate::cli::CheckArgs;
+use crate::cli::{CheckArgs, CheckFormatArg};
 use crate::error::Error;
 use crate::project::{config::Config, git, ProjectRoot};
 use crate::repo::alerts::{NewAlert, NewSnapshot};
@@ -41,7 +49,25 @@ pub fn check(args: CheckArgs, cwd: &Path) -> Result<i32, Error> {
     cfg.validate_working_dirs(&proj.config_path, &proj.root)?;
 
     if cfg.checkers.is_empty() {
-        println!("driftwatch check: no checkers configured in driftwatch.toml.");
+        match args.format {
+            CheckFormatArg::Human => {
+                println!("driftwatch check: no checkers configured in driftwatch.toml.");
+            }
+            CheckFormatArg::Json => {
+                // The no-checkers case still emits a valid document so
+                // consumers never have to special-case the empty
+                // configuration. Diagnostics (if any) stay on stderr.
+                let doc = CheckerReportDocument::build(
+                    &[],
+                    ProjectInfo {
+                        root: Some(&proj.root),
+                    },
+                    chrono::Utc::now().to_rfc3339(),
+                );
+                let json = serde_json::to_string_pretty(&doc).unwrap_or_default();
+                println!("{json}");
+            }
+        }
         return Ok(EXIT_OK);
     }
 
@@ -90,7 +116,7 @@ pub fn check(args: CheckArgs, cwd: &Path) -> Result<i32, Error> {
         outcomes.push(outcome);
     }
 
-    print_summary(&outcomes, args.dry_run);
+    print_summary(&outcomes, args.dry_run, args.format);
 
     let had_failure = outcomes.iter().any(|o| o.status.is_failure());
     let all_failed = !outcomes.is_empty() && outcomes.iter().all(|o| o.status.is_failure());
@@ -102,6 +128,9 @@ pub fn check(args: CheckArgs, cwd: &Path) -> Result<i32, Error> {
     // "isolate checker failures" rule applies to correlation too).
     if !args.dry_run && !all_failed {
         if let Err(e) = crate::correlate::run_after_check(&mut db) {
+            // Always stderr: in JSON mode stdout must carry only the
+            // versioned document, so even a runtime warning cannot
+            // leak into the contract.
             eprintln!("driftwatch: correlation skipped: {e}");
         }
     }
@@ -354,29 +383,48 @@ fn truncate_diagnostic(s: &str) -> String {
     truncate_char_boundary(s, 200)
 }
 
-fn print_summary(outcomes: &[CheckerOutcome], dry_run: bool) {
-    println!("driftwatch check: {} checker(s) run", outcomes.len());
-    if dry_run {
-        println!("(dry-run; nothing was persisted)");
+fn print_summary(outcomes: &[CheckerOutcome], dry_run: bool, format: CheckFormatArg) {
+    match format {
+        CheckFormatArg::Json => {
+            // In JSON mode the document is the only thing on stdout.
+            // The dry-run banner, when present, goes to stderr so
+            // consumers do not have to filter it out before parsing.
+            if dry_run {
+                eprintln!("(dry-run; nothing was persisted)");
+            }
+            let doc = CheckerReportDocument::build(
+                outcomes,
+                ProjectInfo { root: None },
+                chrono::Utc::now().to_rfc3339(),
+            );
+            let json = serde_json::to_string_pretty(&doc).unwrap_or_default();
+            println!("{json}");
+        }
+        CheckFormatArg::Human => {
+            println!("driftwatch check: {} checker(s) run", outcomes.len());
+            if dry_run {
+                println!("(dry-run; nothing was persisted)");
+            }
+            println!();
+            println!(
+                "{:<24}  {:<12}  {:<7}  DIAGNOSTIC",
+                "CHECKER", "STATUS", "ALERTS"
+            );
+            for o in outcomes {
+                let diag = o.diagnostic.as_deref().unwrap_or("-");
+                println!(
+                    "{:<24}  {:<12}  {:<7}  {}",
+                    truncate(&o.name, 24),
+                    o.status.as_str(),
+                    o.alert_count,
+                    truncate(diag, 80)
+                );
+            }
+            let total_alerts: usize = outcomes.iter().map(|o| o.alert_count).sum();
+            println!();
+            println!("Total alerts: {total_alerts}");
+        }
     }
-    println!();
-    println!(
-        "{:<24}  {:<12}  {:<7}  DIAGNOSTIC",
-        "CHECKER", "STATUS", "ALERTS"
-    );
-    for o in outcomes {
-        let diag = o.diagnostic.as_deref().unwrap_or("-");
-        println!(
-            "{:<24}  {:<12}  {:<7}  {}",
-            truncate(&o.name, 24),
-            o.status.as_str(),
-            o.alert_count,
-            truncate(diag, 80)
-        );
-    }
-    let total_alerts: usize = outcomes.iter().map(|o| o.alert_count).sum();
-    println!();
-    println!("Total alerts: {total_alerts}");
 }
 
 fn truncate(s: &str, max: usize) -> String {

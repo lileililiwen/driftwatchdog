@@ -195,10 +195,10 @@ pub enum ExportFormatArg {
 #[derive(Debug, Args, Default, Clone)]
 pub struct DoctorArgs {}
 
-/// `driftwatch check [--only NAMES] [--dry-run]`
+/// `driftwatch check [--only NAMES] [--dry-run] [--format human|json]`
 #[derive(Debug, Args, Default, Clone)]
 #[command(
-    after_help = "Examples:\n  driftwatch check\n  driftwatch check --dry-run\n  driftwatch check --only architecture"
+    after_help = "Examples:\n  driftwatch check\n  driftwatch check --dry-run\n  driftwatch check --only architecture\n  driftwatch check --format json    # machine-readable checker report on stdout"
 )]
 pub struct CheckArgs {
     /// Restrict to the named checkers. Repeat to include more than one,
@@ -210,6 +210,19 @@ pub struct CheckArgs {
     /// command without polluting the database.
     #[arg(long)]
     pub dry_run: bool,
+    /// Output format. `human` (default) prints a per-checker table; `json`
+    /// prints a single versioned checker-report document to stdout with
+    /// every diagnostic on stderr. Execution, isolation, persistence and
+    /// exit-status semantics are identical across formats.
+    #[arg(long, value_enum, default_value_t = CheckFormatArg::Human)]
+    pub format: CheckFormatArg,
+}
+
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub enum CheckFormatArg {
+    #[default]
+    Human,
+    Json,
 }
 
 /// `driftwatch gate [--dry-run] [--format human|json]`
