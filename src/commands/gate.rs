@@ -28,9 +28,10 @@ use std::path::Path;
 
 use crate::cli::{GateArgs, GateFormatArg};
 use crate::error::Error;
-use crate::gate::adapters::{default_registry, AdapterInput};
+use crate::gate::adapters::{default_registry, run_product_quality_adapter, AdapterInput};
 use crate::gate::aggregate::{aggregate, AggregateOutcome, GatePlan, PlannedCheck};
 use crate::gate::ai::{self, AiEvalInput, AiRule};
+use crate::gate::concerns::is_product_quality_concern;
 use crate::gate::manifest::{self, ResolvedGatePlan};
 use crate::gate::types::{GateResult, GateSeverity, GateStatus};
 use crate::project::{git, ProjectRoot};
@@ -145,11 +146,21 @@ fn execute_plan(
                     max_output_bytes: CHECK_MAX_OUTPUT_BYTES,
                     evidence: vec![],
                 };
-                results.push(crate::gate::adapters::run_adapter(
-                    runtime,
-                    &input,
-                    Some(&check.gate_id),
-                ));
+                // Product-quality concerns use the dedicated
+                // product-quality adapter (envelope parsing +
+                // exit-code authority + malformed fallback). Every
+                // other concern keeps the project-runtime text
+                // adapter unchanged.
+                let result = if is_product_quality_concern(&check.gate_id) {
+                    run_product_quality_adapter("project-runtime", Some(&check.gate_id), &input)
+                } else {
+                    crate::gate::adapters::run_adapter(
+                        runtime,
+                        &input,
+                        Some(&check.gate_id),
+                    )
+                };
+                results.push(result);
             }
             None => results.push(GateResult {
                 gate_id: truncate_char_boundary(&check.gate_id, 128),

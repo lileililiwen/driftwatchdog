@@ -54,8 +54,9 @@ use std::time::Duration;
 
 use crate::checker::runner::{run_checker, CheckerRun, CheckerSpec};
 use crate::gate::dto::{
-    MAX_DIAGNOSTIC_BYTES, MAX_EVIDENCE_REFS, MAX_FINDINGS, MAX_LOCATION_BYTES,
-    MAX_MISSING_EVIDENCE, MAX_REMEDIATION_BYTES, MAX_TITLE_BYTES,
+    MAX_DIAGNOSTIC_BYTES, MAX_EVIDENCE_KEY_BYTES, MAX_EVIDENCE_REFS, MAX_FINDINGS,
+    MAX_LOCATION_BYTES, MAX_MISSING_EVIDENCE, MAX_PREVIEW_BYTES, MAX_REMEDIATION_BYTES,
+    MAX_TITLE_BYTES,
 };
 use crate::gate::evidence::ArtifactRecord;
 use crate::gate::redact::{bound_text, redact_secrets};
@@ -1007,6 +1008,395 @@ fn run_text_adapter(tool_id: &str, gate_id: Option<&str>, input: &AdapterInput) 
     }
 }
 
+/// Wire version of the product-quality JSON envelope.
+pub const PRODUCT_QUALITY_ENVELOPE_VERSION: u32 = 1;
+
+/// Parsed product-quality JSON envelope. The shape mirrors the existing
+/// [`GateResult`] wire form so producers can reuse the same JSON
+/// document a normal adapter would emit; Driftwatchdog treats it as
+/// data and never embeds a language scanner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProductQualityEnvelope {
+    status: GateStatus,
+    severity: Option<GateSeverity>,
+    findings: Vec<Finding>,
+    evidence: Vec<EvidenceRef>,
+    missing_evidence: Vec<String>,
+    diagnostic: Option<String>,
+    remediation: Option<String>,
+}
+
+fn parse_envelope(bytes: &[u8]) -> Option<ProductQualityEnvelope> {
+    let trimmed = String::from_utf8_lossy(bytes).trim().to_string();
+    if !trimmed.starts_with('{') {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(&trimmed).ok()?;
+    let obj = value.as_object()?;
+    let version = obj.get("version").and_then(|v| v.as_u64())?;
+    if version != u64::from(PRODUCT_QUALITY_ENVELOPE_VERSION) {
+        return None;
+    }
+    let status_str = obj.get("status").and_then(|v| v.as_str())?;
+    let status = GateStatus::parse(status_str)?;
+    let severity = obj
+        .get("severity")
+        .and_then(|v| v.as_str())
+        .and_then(GateSeverity::parse);
+
+    let mut findings = Vec::new();
+    if let Some(arr) = obj.get("findings").and_then(|v| v.as_array()) {
+        for f in arr.iter().take(MAX_FINDINGS) {
+            let title = match f.get("title").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let severity = f
+                .get("severity")
+                .and_then(|v| v.as_str())
+                .and_then(GateSeverity::parse)
+                .unwrap_or(GateSeverity::Warning);
+            let location = f
+                .get("location")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let rule = f
+                .get("rule")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            findings.push(Finding {
+                title: bound_text(&redact_secrets(&title), MAX_TITLE_BYTES),
+                severity,
+                location: location.map(|s| bound_text(&redact_secrets(&s), MAX_LOCATION_BYTES)),
+                rule: rule.map(|s| bound_text(&s, 256)),
+            });
+        }
+    }
+
+    let mut evidence = Vec::new();
+    if let Some(arr) = obj.get("evidence").and_then(|v| v.as_array()) {
+        for e in arr.iter().take(MAX_EVIDENCE_REFS) {
+            let key = match e.get("key").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let digest = e
+                .get("digest")
+                .and_then(|v| v.as_str())
+                .map(|s| bound_text(s, 128));
+            let media_type = e
+                .get("media_type")
+                .and_then(|v| v.as_str())
+                .map(|s| bound_text(s, 128));
+            let byte_size = e.get("byte_size").and_then(|v| v.as_u64());
+            let preview = e
+                .get("preview")
+                .and_then(|v| v.as_str())
+                .map(|s| bound_text(&redact_secrets(s), MAX_PREVIEW_BYTES));
+            evidence.push(EvidenceRef {
+                key: bound_text(&key, MAX_EVIDENCE_KEY_BYTES),
+                digest,
+                media_type,
+                byte_size,
+                preview,
+            });
+        }
+    }
+
+    let missing_evidence: Vec<String> = obj
+        .get("missing_evidence")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .take(MAX_MISSING_EVIDENCE)
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .map(|s| bound_text(&s, MAX_EVIDENCE_KEY_BYTES))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let diagnostic = obj
+        .get("diagnostic")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let remediation = obj
+        .get("remediation")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some(ProductQualityEnvelope {
+        status,
+        severity,
+        findings,
+        evidence,
+        missing_evidence,
+        diagnostic,
+        remediation,
+    })
+}
+
+fn expected_exit_for_status(status: GateStatus) -> Option<i32> {
+    match status {
+        GateStatus::Pass => Some(0),
+        GateStatus::Fail => Some(1),
+        GateStatus::ReviewRequired => Some(2),
+        GateStatus::NotApplicable => Some(0),
+    }
+}
+
+fn default_severity_for_status(status: GateStatus) -> GateSeverity {
+    match status {
+        GateStatus::Pass => GateSeverity::Info,
+        GateStatus::Fail => GateSeverity::Error,
+        GateStatus::ReviewRequired => GateSeverity::Warning,
+        GateStatus::NotApplicable => GateSeverity::Info,
+    }
+}
+
+fn contradiction_result(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    envelope: &ProductQualityEnvelope,
+    exit: i32,
+    run: &CheckerRun,
+    input: &AdapterInput,
+) -> GateResult {
+    let mut detail = format!(
+        "command exited {exit} but envelope claimed {}; exit code is authoritative",
+        envelope.status.as_str()
+    );
+    if !run.stderr.trim().is_empty() {
+        detail.push_str(" | stderr: ");
+        detail.push_str(&redact_secrets(run.stderr.trim()));
+    }
+    let diagnostic = bound_text(&detail, MAX_DIAGNOSTIC_BYTES);
+    let mut missing = vec![format!("{tool_id}:output")];
+    missing.truncate(MAX_MISSING_EVIDENCE);
+    GateResult {
+        gate_id: gate_id_for(tool_id, gate_id),
+        source: source_for(tool_id),
+        status: GateStatus::ReviewRequired,
+        severity: GateSeverity::Warning,
+        findings: vec![],
+        evidence: bound_evidence(input.evidence.clone()),
+        missing_evidence: missing,
+        diagnostic: Some(diagnostic),
+        remediation: Some(bound_text(
+            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0).",
+            MAX_REMEDIATION_BYTES,
+        )),
+    }
+}
+
+fn envelope_result(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    envelope: &ProductQualityEnvelope,
+    input: &AdapterInput,
+) -> GateResult {
+    // Caller has already validated the exit code; promote envelope
+    // fields to a GateResult with bounds + redaction enforced.
+    let severity = envelope
+        .severity
+        .unwrap_or_else(|| default_severity_for_status(envelope.status));
+    let diagnostic = envelope
+        .diagnostic
+        .as_deref()
+        .map(|d| bound_text(&redact_secrets(d), MAX_DIAGNOSTIC_BYTES))
+        .filter(|s| !s.is_empty());
+    let remediation = envelope
+        .remediation
+        .as_deref()
+        .map(|d| bound_text(&redact_secrets(d), MAX_REMEDIATION_BYTES))
+        .filter(|s| !s.is_empty());
+    // Merge adapter-input evidence (raw-artifact refs from the
+    // caller) with the envelope's own evidence list, bounded.
+    let mut combined: Vec<EvidenceRef> = input.evidence.clone();
+    combined.extend(envelope.evidence.iter().cloned());
+    GateResult {
+        gate_id: gate_id_for(tool_id, gate_id),
+        source: source_for(tool_id),
+        status: envelope.status,
+        severity,
+        findings: envelope.findings.clone(),
+        evidence: bound_evidence(combined),
+        missing_evidence: envelope.missing_evidence.clone(),
+        diagnostic,
+        remediation,
+    }
+}
+
+/// Run a project-runtime command and apply the product-quality result
+/// normalization rules:
+///
+/// * `PASS` requires exit 0, `FAIL` requires exit 1, `REVIEW_REQUIRED`
+///   requires exit 2, `NOT_APPLICABLE` requires exit 0;
+/// * the command exit code is authoritative: a status/exit mismatch
+///   returns `REVIEW_REQUIRED` with the command's stderr as evidence;
+/// * a malformed or absent envelope returns `REVIEW_REQUIRED` so
+///   missing coverage is never silently treated as a pass;
+/// * infrastructure failures (spawn, timeout, signal) stay
+///   `REVIEW_REQUIRED` and name the missing evidence key;
+/// * when no envelope is detected and the command exits cleanly, the
+///   text-mode exit-code mapping preserves the existing
+///   `project-runtime` semantics (exit 0 → `PASS`, nonzero → `FAIL`)
+///   so commands that pre-date the envelope contract keep working.
+///
+/// This function is the entry point for the
+/// `product-code-boundary` / `placeholder-threshold` concern ids. It
+/// never embeds a language scanner or links a provider SDK; the
+/// command binding is project-owned.
+pub fn run_product_quality_adapter(
+    tool_id: &str,
+    gate_id: Option<&str>,
+    input: &AdapterInput,
+) -> GateResult {
+    let spec = input.checker_spec(tool_id);
+    let run = run_checker(&spec);
+    if let Some(detail) = run.spawn_error.clone() {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::SpawnFailed {
+                tool: tool_id.to_string(),
+                detail,
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    if run.timed_out {
+        let mut result = infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::Timeout {
+                tool: tool_id.to_string(),
+                timeout_ms: input.timeout_ms,
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+        result.missing_evidence.push(format!("{tool_id}:timeout"));
+        result.missing_evidence.truncate(MAX_MISSING_EVIDENCE);
+        return result;
+    }
+    if run.signalled {
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::Signalled {
+                tool: tool_id.to_string(),
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    let exit = run.exit_code.unwrap_or(-1);
+
+    if let Some(envelope) = parse_envelope(run.stdout.as_bytes()) {
+        let expected = expected_exit_for_status(envelope.status);
+        return match expected {
+            Some(code) if exit != code => {
+                contradiction_result(tool_id, gate_id, &envelope, exit, &run, input)
+            }
+            _ => envelope_result(tool_id, gate_id, &envelope, input),
+        };
+    }
+
+    // No envelope: malformed output cannot claim PASS. We surface a
+    // bounded, secret-redacted diagnostic. The exit code still drives
+    // the text-mode fallback for the rare case where a project
+    // command predates the envelope contract.
+    let output = if run.stdout.trim().is_empty() {
+        run.stderr.clone()
+    } else {
+        run.stdout.clone()
+    };
+    let output_diag = bound_text(&redact_secrets(output.trim()), MAX_DIAGNOSTIC_BYTES);
+    if output.trim().is_empty() {
+        // No stdout, no stderr, no envelope: REVIEW_REQUIRED so
+        // missing coverage never looks like a pass.
+        return infra_result(
+            tool_id,
+            gate_id,
+            &AdapterError::MalformedOutput {
+                tool: tool_id.to_string(),
+                format: "product-quality".to_string(),
+                detail: "no JSON envelope and empty output".to_string(),
+            },
+            input.evidence.clone(),
+            Some(exit_diagnostic(&run, tool_id)),
+        );
+    }
+    match exit {
+        0 => {
+            // Output present but no envelope and exit 0: treat the
+            // legacy text-mode path as a soft pass, but record the
+            // missing envelope as diagnostic context.
+            let note = "no product-quality JSON envelope; treated as text-mode pass";
+            let diagnostic = if !output_diag.is_empty() {
+                format!("{output_diag} | {note}")
+            } else {
+                note.to_string()
+            };
+            let diagnostic = bound_text(&redact_secrets(&diagnostic), MAX_DIAGNOSTIC_BYTES);
+            GateResult {
+                gate_id: gate_id_for(tool_id, gate_id),
+                source: source_for(tool_id),
+                status: GateStatus::Pass,
+                severity: GateSeverity::Info,
+                findings: vec![],
+                evidence: bound_evidence(input.evidence.clone()),
+                missing_evidence: vec![],
+                diagnostic: Some(diagnostic),
+                remediation: None,
+            }
+        }
+        1 => GateResult {
+            gate_id: gate_id_for(tool_id, gate_id),
+            source: source_for(tool_id),
+            status: GateStatus::Fail,
+            severity: GateSeverity::Error,
+            findings: vec![],
+            evidence: bound_evidence(input.evidence.clone()),
+            missing_evidence: vec![],
+            diagnostic: Some(format!("exit 1 | {output_diag}")),
+            remediation: Some(bound_text(
+                "Fix the failing command and re-run; see the output diagnostic above.",
+                MAX_REMEDIATION_BYTES,
+            )),
+        },
+        2 => GateResult {
+            gate_id: gate_id_for(tool_id, gate_id),
+            source: source_for(tool_id),
+            status: GateStatus::ReviewRequired,
+            severity: GateSeverity::Warning,
+            findings: vec![],
+            evidence: bound_evidence(input.evidence.clone()),
+            missing_evidence: vec![],
+            diagnostic: Some(format!("exit 2 | {output_diag}")),
+            remediation: Some(bound_text(
+                "Address the review concern reported by the command and re-run.",
+                MAX_REMEDIATION_BYTES,
+            )),
+        },
+        _ => GateResult {
+            gate_id: gate_id_for(tool_id, gate_id),
+            source: source_for(tool_id),
+            status: GateStatus::Fail,
+            severity: GateSeverity::Error,
+            findings: vec![],
+            evidence: bound_evidence(input.evidence.clone()),
+            missing_evidence: vec![],
+            diagnostic: Some(format!("exit {exit} | {output_diag}")),
+            remediation: Some(bound_text(
+                "Fix the failing command and re-run; see the output diagnostic above.",
+                MAX_REMEDIATION_BYTES,
+            )),
+        },
+    }
+}
+
 /// Run every adapter input in order, collecting one [`GateResult`] per
 /// adapter. A failing adapter never aborts the rest: each result is
 /// independent, mirroring the checker failure-isolation rule.
@@ -1591,5 +1981,314 @@ mod tests {
                 "banned term `{banned}` in adapters.rs"
             );
         }
+    }
+
+    // --- product-quality adapter ----------------------------------------
+
+    const PASS_ENVELOPE: &str = r#"{"version":1,"status":"PASS","severity":"info","findings":[],"diagnostic":null,"remediation":null}"#;
+    const FAIL_ENVELOPE: &str = r#"{"version":1,"status":"FAIL","severity":"error","findings":[{"title":"tests in src/","severity":"error","location":"src/foo.rs","rule":"no-tests-in-product"}],"diagnostic":"see findings","remediation":"move tests"}"#;
+    const REVIEW_ENVELOPE: &str = r#"{"version":1,"status":"REVIEW_REQUIRED","severity":"warning","findings":[],"missing_evidence":["checker:run"]}"#;
+    const NOT_APPLICABLE_ENVELOPE: &str =
+        r#"{"version":1,"status":"NOT_APPLICABLE","severity":"info","findings":[]}"#;
+
+    fn pq_input(program: &str, args: &[&str]) -> AdapterInput {
+        AdapterInput {
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            working_dir: std::env::temp_dir(),
+            env: BTreeMap::new(),
+            timeout_ms: 10_000,
+            max_output_bytes: 1024 * 1024,
+            evidence: vec![],
+        }
+    }
+
+    fn write_envelope_exit(dir: &std::path::Path, envelope: &str, exit: i32) -> String {
+        let path = dir.join("envelope.json");
+        std::fs::write(&path, envelope).unwrap();
+        format!("cat {} ; exit {}", path.display(), exit)
+    }
+
+    #[test]
+    fn product_quality_passing_envelope_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), PASS_ENVELOPE, 0);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::Pass);
+        assert_eq!(result.severity, GateSeverity::Info);
+        assert!(result.findings.is_empty());
+        assert!(result.diagnostic.is_none() || result.diagnostic.as_deref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn product_quality_failing_envelope_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), FAIL_ENVELOPE, 1);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::Fail);
+        assert_eq!(result.severity, GateSeverity::Error);
+        assert_eq!(result.findings.len(), 1);
+        let f = &result.findings[0];
+        assert_eq!(f.title, "tests in src/");
+        assert_eq!(f.location.as_deref(), Some("src/foo.rs"));
+        assert_eq!(f.rule.as_deref(), Some("no-tests-in-product"));
+    }
+
+    #[test]
+    fn product_quality_review_envelope_reviews() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), REVIEW_ENVELOPE, 2);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("placeholder-threshold"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        assert_eq!(result.severity, GateSeverity::Warning);
+        assert!(result.missing_evidence.contains(&"checker:run".to_string()));
+    }
+
+    #[test]
+    fn product_quality_not_applicable_envelope_passes_as_not_applicable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), NOT_APPLICABLE_ENVELOPE, 0);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("placeholder-threshold"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::NotApplicable);
+        assert_eq!(result.severity, GateSeverity::Info);
+    }
+
+    #[test]
+    fn product_quality_contradictory_exit_for_pass_becomes_review() {
+        // Command exits 1 but claims PASS: exit code is authoritative.
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), PASS_ENVELOPE, 1);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        assert_eq!(result.severity, GateSeverity::Warning);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("exited 1"), "diagnostic: {diag}");
+        assert!(diag.contains("PASS"), "diagnostic: {diag}");
+        assert!(
+            diag.contains("exit code is authoritative"),
+            "diagnostic: {diag}"
+        );
+    }
+
+    #[test]
+    fn product_quality_contradictory_exit_for_fail_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), FAIL_ENVELOPE, 0);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("exited 0"), "diagnostic: {diag}");
+        assert!(diag.contains("FAIL"), "diagnostic: {diag}");
+    }
+
+    #[test]
+    fn product_quality_contradictory_exit_for_review_becomes_review() {
+        // exit 0 with REVIEW_REQUIRED claim: contradiction.
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_envelope_exit(tmp.path(), REVIEW_ENVELOPE, 0);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("placeholder-threshold"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn product_quality_malformed_envelope_with_output_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.json");
+        std::fs::write(&path, "this is not json").unwrap();
+        let script = format!("cat {} ; exit 0", path.display());
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        // No envelope, exit 0, output present: legacy text-mode pass
+        // with envelope-missing diagnostic.
+        assert_eq!(result.status, GateStatus::Pass);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(
+            diag.contains("no product-quality JSON envelope"),
+            "diag: {diag}"
+        );
+    }
+
+    #[test]
+    fn product_quality_empty_output_becomes_review() {
+        // Exit 0, no stdout, no stderr, no envelope: REVIEW_REQUIRED so
+        // missing coverage never looks like a pass.
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", "exit 0"]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        assert!(result.missing_evidence.iter().any(|k| k.contains("output")));
+    }
+
+    #[test]
+    fn product_quality_unknown_status_in_envelope_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bad = r#"{"version":1,"status":"MAYBE","findings":[]}"#;
+        let script = write_envelope_exit(tmp.path(), bad, 0);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        // Unknown status means parse_envelope returns None, so we
+        // fall back to text-mode pass with envelope-missing diagnostic.
+        assert_eq!(result.status, GateStatus::Pass);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(
+            diag.contains("no product-quality JSON envelope"),
+            "diag: {diag}"
+        );
+    }
+
+    #[test]
+    fn product_quality_wrong_envelope_version_becomes_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bad = r#"{"version":99,"status":"PASS","findings":[]}"#;
+        let script = write_envelope_exit(tmp.path(), bad, 0);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        // Wrong version rejects the envelope, so we fall back to
+        // text-mode pass with envelope-missing diagnostic.
+        assert_eq!(result.status, GateStatus::Pass);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(
+            diag.contains("no product-quality JSON envelope"),
+            "diag: {diag}"
+        );
+    }
+
+    #[test]
+    fn product_quality_text_mode_preserves_legacy_exit_one_fail() {
+        // Exit 1 with no envelope and stderr present: the legacy
+        // text-mode FAIL path still applies so old commands work.
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", "echo boom >&2; exit 1"]),
+        );
+        assert_eq!(result.status, GateStatus::Fail);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(diag.contains("exit 1"), "diag: {diag}");
+        assert!(diag.contains("boom"), "diag: {diag}");
+    }
+
+    #[test]
+    fn product_quality_text_mode_preserves_legacy_exit_two_review() {
+        // Exit 2 with no envelope: text-mode path records REVIEW_REQUIRED
+        // so commands that pre-date the envelope still get a useful
+        // status without claiming PASS.
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", "echo review >&2; exit 2"]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn product_quality_timeout_records_timeout_evidence() {
+        let mut input = pq_input("sh", &["-c", "sleep 30"]);
+        input.timeout_ms = 200;
+        let result =
+            run_product_quality_adapter("project-runtime", Some("product-code-boundary"), &input);
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+        assert!(result
+            .missing_evidence
+            .iter()
+            .any(|k| k.contains("timeout")));
+    }
+
+    #[test]
+    fn product_quality_signalled_child_is_review() {
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", "kill -TERM $$"]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn product_quality_missing_executable_is_review() {
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("driftwatch-no-such-tool-xyz", &[]),
+        );
+        assert_eq!(result.status, GateStatus::ReviewRequired);
+    }
+
+    #[test]
+    fn product_quality_redacts_secrets_in_diagnostic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bad = r#"{"version":1,"status":"FAIL","diagnostic":"api_key=hunter2-secret"}"#;
+        let script = write_envelope_exit(tmp.path(), bad, 1);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::Fail);
+        let diag = result.diagnostic.as_deref().unwrap();
+        assert!(!diag.contains("hunter2-secret"), "diag: {diag}");
+        assert!(diag.contains("[REDACTED]"), "diag: {diag}");
+    }
+
+    #[test]
+    fn product_quality_envelope_evidence_is_bounded() {
+        // The envelope can carry evidence; the adapter bounds it
+        // through the shared helper.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut env = r#"{"version":1,"status":"PASS","findings":[],"evidence":["#.to_string();
+        for i in 0..200 {
+            if i > 0 {
+                env.push(',');
+            }
+            env.push_str(&format!(r#"{{"key":"k{i}"}}"#));
+        }
+        env.push_str("]}");
+        let script = write_envelope_exit(tmp.path(), &env, 0);
+        let result = run_product_quality_adapter(
+            "project-runtime",
+            Some("product-code-boundary"),
+            &pq_input("sh", &["-c", &script]),
+        );
+        assert_eq!(result.status, GateStatus::Pass);
+        assert!(result.evidence.len() <= crate::gate::dto::MAX_EVIDENCE_REFS);
     }
 }

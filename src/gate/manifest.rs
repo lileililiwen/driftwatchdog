@@ -25,6 +25,12 @@
 //! * `frontend` — `responsive`, `a11y`, `api-contract`.
 //! * `full` — union of backend + frontend defaults.
 //! * `minimal` — no default checks; only explicit checks apply.
+//! * `product` / `rust-product` — the two product-quality concern
+//!   ids (`product-code-boundary`, `placeholder-threshold`). The
+//!   profile is data only and never invents a command; a project
+//!   that picks either profile without binding `commands.<id>`
+//!   lands on `REVIEW_REQUIRED` via the existing required +
+//!   missing-command path.
 //!
 //! Projects may enable extra checks or relax a profile default to
 //! `required = false`. Tightening an optional default to required is
@@ -54,6 +60,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::gate::aggregate::{BlockingPolicy, GatePlan, PlannedCheck};
+use crate::gate::concerns::PRODUCT_QUALITY_CONCERNS;
 use crate::gate::dto::GATE_CONTRACT_VERSION;
 
 /// Profile defaults. Kept as functions so the contract stays
@@ -70,12 +77,26 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
             "secret-scan",
         ]),
         "minimal" => Some(&[]),
+        // Product-quality profiles select the two stable
+        // product-quality concern ids. Selection is data only and
+        // does not invent a command; a project that picks `product`
+        // (or `rust-product`) without binding `commands.<id>` lands
+        // on REVIEW_REQUIRED via the existing required +
+        // missing-command path.
+        "product" | "rust-product" => Some(PRODUCT_QUALITY_CONCERNS),
         _ => None,
     }
 }
 
 /// Supported profile names, used in diagnostics.
-pub const SUPPORTED_PROFILES: &[&str] = &["backend", "frontend", "full", "minimal"];
+pub const SUPPORTED_PROFILES: &[&str] = &[
+    "backend",
+    "frontend",
+    "full",
+    "minimal",
+    "product",
+    "rust-product",
+];
 
 /// Resolve the default concern set for `profile` in the context of a
 /// concrete manifest: a built-in profile uses [`profile_defaults`];
@@ -502,6 +523,7 @@ pub fn resolve(
     let scheduled: BTreeSet<&str> = checks.iter().map(|c| c.gate_id.as_str()).collect();
     let mut not_scheduled: Vec<String> = ["responsive", "browser", "a11y"]
         .into_iter()
+        .chain(PRODUCT_QUALITY_CONCERNS.iter().copied())
         .filter(|id| !scheduled.contains(id))
         .map(|s| s.to_string())
         .collect();
@@ -830,5 +852,148 @@ test = "cargo test"
         std::fs::write(&primary, VALID).unwrap();
         std::fs::write(&scoped, VALID).unwrap();
         assert_eq!(manifest_path(tmp.path()), Some(primary));
+    }
+
+    #[test]
+    fn product_profile_schedules_both_product_quality_concerns() {
+        let text = r#"
+version = 1
+profile = "product"
+"#;
+        let m = parse(text).unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        let ids: Vec<&str> = plan
+            .plan
+            .checks
+            .iter()
+            .map(|c| c.gate_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["placeholder-threshold", "product-code-boundary"],
+            "product profile selects both product-quality concerns in sorted order"
+        );
+        // Both are required by default: the profile does not silently
+        // relax the threshold.
+        for c in &plan.plan.checks {
+            assert!(
+                c.required,
+                "product profile default is required: {}",
+                c.gate_id
+            );
+        }
+        // Frontend concerns stay explicit "not scheduled" for the
+        // product profile.
+        assert!(plan.not_scheduled.contains(&"responsive".to_string()));
+        assert!(plan.not_scheduled.contains(&"a11y".to_string()));
+    }
+
+    #[test]
+    fn rust_product_profile_schedules_same_concerns_as_product() {
+        let product = parse(
+            r#"version = 1
+profile = "product"
+"#,
+        )
+        .unwrap();
+        let rust_product = parse(
+            r#"version = 1
+profile = "rust-product"
+"#,
+        )
+        .unwrap();
+        let product_plan = resolve(&product, &[]).unwrap();
+        let rust_product_plan = resolve(&rust_product, &[]).unwrap();
+        let product_ids: Vec<&str> = product_plan
+            .plan
+            .checks
+            .iter()
+            .map(|c| c.gate_id.as_str())
+            .collect();
+        let rust_ids: Vec<&str> = rust_product_plan
+            .plan
+            .checks
+            .iter()
+            .map(|c| c.gate_id.as_str())
+            .collect();
+        assert_eq!(product_ids, rust_ids);
+    }
+
+    #[test]
+    fn product_profile_check_can_be_relaxed_to_optional() {
+        let text = r#"
+version = 1
+profile = "product"
+[[checks]]
+id = "product-code-boundary"
+required = false
+"#;
+        let m = parse(text).unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        let boundary = plan
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "product-code-boundary")
+            .unwrap();
+        assert!(!boundary.required, "explicit `required = false` wins");
+        let threshold = plan
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "placeholder-threshold")
+            .unwrap();
+        assert!(
+            threshold.required,
+            "untouched concern keeps the profile default"
+        );
+    }
+
+    #[test]
+    fn product_profile_can_be_disabled_explicitly() {
+        let text = r#"
+version = 1
+profile = "product"
+[[checks]]
+id = "placeholder-threshold"
+enabled = false
+"#;
+        let m = parse(text).unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        assert!(!plan
+            .plan
+            .checks
+            .iter()
+            .any(|c| c.gate_id == "placeholder-threshold"));
+        assert!(plan
+            .plan
+            .checks
+            .iter()
+            .any(|c| c.gate_id == "product-code-boundary"));
+    }
+
+    #[test]
+    fn unknown_profile_still_rejects_typos() {
+        // The new profiles do not weaken the unknown-profile error.
+        let err = parse("version = 1\nprofile = \"prodcut\"\n").unwrap_err();
+        assert!(matches!(err, ManifestError::UnknownProfile { .. }));
+    }
+
+    #[test]
+    fn supported_profiles_lists_product_quality_entries() {
+        for name in ["product", "rust-product"] {
+            assert!(
+                SUPPORTED_PROFILES.contains(&name),
+                "SUPPORTED_PROFILES must list `{name}`"
+            );
+            assert!(
+                profile_defaults(name).is_some(),
+                "profile_defaults must resolve `{name}`"
+            );
+            assert!(
+                is_builtin_profile(name),
+                "is_builtin_profile must accept `{name}`"
+            );
+        }
     }
 }

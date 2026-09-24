@@ -27,6 +27,7 @@ pub mod adapters;
 pub mod aggregate;
 pub mod ai;
 pub mod aigate;
+pub mod concerns;
 pub mod context;
 pub mod dto;
 pub mod evidence;
@@ -42,6 +43,10 @@ pub use ai::{
     run_ai_evaluation, validate_output as validate_ai_output, AiError, AiEvalRequest,
     AiEvaluationRecord, AiProviderConfig, AiProviderOutput, AiRule, AiViolation,
     MissingProviderPolicy, MAX_AI_PROMPT_BYTES, MAX_AI_RESPONSE_BYTES,
+};
+pub use concerns::{
+    is_product_quality_concern, PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY,
+    PRODUCT_QUALITY_CONCERNS,
 };
 pub use context::{
     collect_context, context_checks, selection_from_manifest, ContextBundle, ContextDocument,
