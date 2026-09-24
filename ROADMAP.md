@@ -40,6 +40,7 @@ The following change packages have been implemented and archived:
 - `mcp-read-tools` — stdio JSON-RPC 2.0 MCP server with four read-only tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`), closed input schemas, `SQLITE_OPEN_READ_ONLY` open, and the `driftwatch mcp` subcommand.
 - `agent-examples` — tested copy-paste MCP + workflow examples for Claude Code, OpenCode, and Aider; Aider includes the `report --ai > drift.md` fallback; consistency test in `tests/packaging/test_agent_examples.sh`.
 - `github-actions-templates` — reusable `templates/github-actions/driftwatch-check.yml` (`workflow_call` + `workflow_dispatch`) that pins a `driftwatchdog` install, always renders the AI report, uploads only `drift.md`, summarises `top` into the step summary, with `contents: read` and the `fail_on_drift`/`upload_report` inputs; shape test in `tests/packaging/test_gha_templates.sh`.
+- `checker-machine-output` — `driftwatch check --format human|json` with a versioned `driftwatch-checker/0.1.0` document on stdout (declaration order, `ok`/`alerting`/`failed`/`timeout`/`protocol-error` statuses, parsed `alerts[]` in the existing wire shape, bounded `error` note, summary counts) while human output, dry-run persistence and exit-status semantics are unchanged. Enables the Forge `driftwatch-cli-alignment` consumption path.
 
 ## Change dependency graph
 
@@ -92,6 +93,17 @@ gate-cli-and-memory-integration ←─┘
 OpenSpec is an optional context provider in this queue. The generic Gate
 contract remains usable by projects using OpenAPI, Gherkin, Markdown, Jira, or
 no specification framework.
+
+## Proposed planning queue (not selected)
+
+- `product-quality-gate-contract` — generic Gate concerns
+  `product-code-boundary` and `placeholder-threshold` for AI-assisted
+  projects. Authored; no `current_spec` pointer and no implementation
+  authority until selected.
+- `release-evidence-and-capability-gate` — generic Gate concerns
+  `capability-conformance` and `release-evidence` so projects can prove
+  artifact integrity and platform coverage. Authored; no `current_spec`
+  pointer and no implementation authority until selected.
 
 ## Explicit non-goals for v1
 

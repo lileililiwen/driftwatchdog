@@ -258,6 +258,7 @@ succeeds without edits:
     cp driftwatch.toml.example driftwatch.toml
     driftwatch check --dry-run
     driftwatch check
+    driftwatch check --format json   # versioned checker-report document on stdout
 
 Configure existing local tools in driftwatch.toml
 (see `driftwatch.toml.example` for a copy-paste starter):
@@ -287,6 +288,20 @@ The checker emits a stable JSON document:
     }
 
 Checker failures are isolated: one broken or malformed checker result must not prevent remaining checkers from running.
+
+`driftwatch check --format json` emits a versioned
+`driftwatch-checker/0.1.0` document to stdout with the per-checker
+`status` mapped to one of `ok` / `alerting` / `failed` / `timeout` /
+`protocol-error`, the parsed `alerts[]` array in the same wire shape
+the checker wrote, and a `summary` of counts. The dry-run banner and
+any correlation warning move to stderr so the document is the only
+thing on stdout. Execution, isolation, persistence, and exit-status
+semantics are byte-for-byte identical to human mode, so a CI gate
+that reads JSON cannot drift from a developer running plain
+`driftwatch check`. Use this for control-plane consumers (e.g. the
+Forge policy adapter) that drive checker-only projects; projects with
+a `gate.toml` already have `driftwatch gate --format json` for the
+manifest-driven path.
 
 ## Engineering Gate (local-first)
 

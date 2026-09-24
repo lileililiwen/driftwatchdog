@@ -21,6 +21,34 @@ execution, adapters, context providers, AI evaluation, and local CLI/history
 integration. All nine are now implemented and archived (see below); no
 planning packages remain.
 
+The `checker-machine-output` change is **implemented and archived**
+(2026-09-24): `driftwatch check` gains `--format human|json`; the JSON
+mode emits a single versioned `driftwatch-checker/0.1.0` document on
+stdout (per-checker rows in declaration order with `name`, `status`
+mapped to one of `ok` / `alerting` / `failed` / `timeout` /
+`protocol-error`, the parsed `alerts[]` in the existing wire shape,
+bounded `error` for the failure modes, and `summary` counts) so
+control-plane consumers (notably Forge's policy adapter) can drive
+checker-only projects without parsing human text. The dry-run banner
+and correlation-skip warning move to stderr in JSON mode; human output
+text, dry-run persistence, and exit-status semantics are byte-for-byte
+identical across formats. New `src/checker/json.rs` (8 unit tests on
+the renderer: empty outcome, mixed status mapping, success-with-zero-
+alerts vs alerting, `start_failed`/`unknown` collapsing, alerts wire
+shape + `extra` map, always-present empty `alerts:[]`, project root
+included/omitted, error field reserved for failure modes) and 8 new
+`tests/check.rs` integration tests (versioned document, mixed
+declaration order, malformed isolation, dry-run no-write, no-checkers
+still valid, exit-code parity, human text unchanged, `--help` shows
+the flag). `cargo fmt --check`, `cargo test` (445 lib + 32 check
+integration), `cargo clippy --all-targets --all-features -- -D
+warnings`, and `openspec validate --changes --strict --no-interactive`
+are green. The checker protocol, snapshot persistence, MCP surface, and
+`driftwatch gate --format json` are untouched. Unblocks the Forge
+`driftwatch-cli-alignment` consumption path. Two additional changes
+remain authored but unselected: `product-quality-gate-contract` and
+`release-evidence-and-capability-gate`.
+
 The `ai-gate-manifest-consumption` change is **implemented and archived**
 (2026-09-20): `driftwatch gate` now resolves a business project's
 `.ai-gate/gate.yaml` as a third Gate manifest source (precedence
@@ -249,6 +277,7 @@ Read these in order:
 | generic-context-providers | archived 2026-09-15 | Generic read-only provider registry, bounded hashed documents, Git + project-file + optional OpenSpec providers, `gate.context.*` doctor checks; `src/gate/context.rs` + 20 tests; no OpenSpec types in gate core | gate-adapter-evaluation |
 | gate-ai-evaluation | archived 2026-09-15 | Provider-neutral typed AI evaluation (opt-in redacted bounded fail-closed contract, external-command boundary, no embedded LLM); `src/gate/ai.rs` + 14 tests; `gate.ai.*` doctor checks | generic-context-providers |
 | gate-cli-and-memory-integration | archived 2026-09-15 | Local `driftwatch gate` CLI (dry-run, human/json, nonzero-when-blocked), `gate_runs` history (migration 0006), `gate.history` doctor, export v4, AI-report Gate section; `src/commands/gate.rs` + `src/repo/gates.rs` + 9 tests; `check` untouched | gate-ai-evaluation |
+| checker-machine-output | archived 2026-09-24 | `driftwatch check --format human|json` with a versioned `driftwatch-checker/0.1.0` document on stdout (declaration order, `ok`/`alerting`/`failed`/`timeout`/`protocol-error` statuses, parsed `alerts[]` in the existing wire shape, bounded `error` note, summary counts); dry-run banner and correlation warning on stderr; human output, persistence, and exit-status semantics unchanged. New `src/checker/json.rs` (8 unit tests) + 8 new `tests/check.rs` integration tests. `gate --format json` and the existing checker protocol are untouched. | stable CLI surface |
 
 ## Implementation constraints
 
@@ -287,7 +316,7 @@ Last run on this change:
 ## Module map
 
 - `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`; dispatches all 13 subcommands.
-- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Gate,Link,Unlink,Completions,Man,Mcp}`) and arg structs; `RunArgs` carries opt-in `--timeout-ms`; `GateArgs` carries `--dry-run` and `--format human|json`.
+- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Gate,Link,Unlink,Completions,Man,Mcp}`) and arg structs; `RunArgs` carries opt-in `--timeout-ms`; `GateArgs` carries `--dry-run` and `--format human|json`; `CheckArgs` carries `--format human|json`.
 - `src/error.rs` — `thiserror` `Error` enum used by library code; includes `LinkTarget` and `ManualLinkNotFound` variants.
 - `src/fingerprint/mod.rs` — module entry, re-exports `Rules`, `Canonical`, `fingerprint`.
 - `src/fingerprint/normalizer.rs` — generic normalizer (13 ordered rules).
@@ -311,10 +340,11 @@ Last run on this change:
 - `src/correlate.rs` — `run_after_check` orchestration: loads fingerprints + alerts, runs the candidate generator, persists passing pairs.
 - `src/export/{dto,build,json,jsonl,markdown,mod}.rs` — versioned export DTOs (`SCHEMA_VERSION = 4`, incl. `GateArtifactExport` + `gate_artifacts` array and `GateRunExport` + `gate_runs` array, both with `#[serde(default)]` for older reads) and three serializers (jsonl `gate_artifact`/`gate_run` records, markdown `## Gate evidence` and `## Gate runs` sections).
 - `src/doctor/{check,mod}.rs` — `Check`, `Status`, and the `Report` aggregator. Includes a `checker.last_run` warn when the most recent check snapshot for a configured checker was a failure, plus `gate.toolchain.*`, `gate.context.*`, `gate.ai.*`, and `gate.history` readiness/history checks (absent manifests stay silent; unknown providers are `Warn`; AI stays optional).
-- `src/checker/mod.rs` — public module: `protocol`, `runner`, `report` re-exports.
+- `src/checker/mod.rs` — public module: `protocol`, `runner`, `report`, `json` re-exports.
 - `src/checker/protocol.rs` — `DriftAlert`, `AlertsDocument`, `ProtocolError`, `parse_alerts_document`.
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
 - `src/checker/report.rs` — `Status`, `Severity`, `CheckerOutcome`, `label_for_status`.
+- `src/checker/json.rs` — `CheckerReportDocument` for `driftwatch check --format json` (contract id `driftwatch-checker/0.1.0`, declaration order, `ok`/`alerting`/`failed`/`timeout`/`protocol-error` per row, parsed `alerts[]` in the existing wire shape, bounded `error` for failure modes, summary counts, optional `project` field). Pure projection of the per-checker `CheckerOutcome` values; no execution, isolation, persistence, or exit-status impact.
 - `src/gate/{mod,types,dto,aggregate,redact,adapt}.rs` — generic gate contract (`GateStatus`/`GateSeverity`/`Finding`/`EvidenceRef`/`GateResult`, `GATE_CONTRACT_VERSION = 1` JSON boundary with size caps, deterministic `aggregate` with `BlockingPolicy`, secret-redacting bounded diagnostics, `adapt_checker_outcome` mapping Empty→PASS / Success→FAIL / infra-failure→REVIEW_REQUIRED); no OpenSpec dependency, no storage migration, no CLI surface yet.
 - `src/gate/manifest.rs` — project Gate manifest (`GateManifest`/`ManifestCheck`/`Trigger`/`ResolvedGatePlan`/`LoadOutcome`, `parse`/`resolve`/`render_plan`/`load`/`load_for_runtime`/`manifest_path`); precedence `gate.toml` → `.driftwatch/gate.toml` → `.ai-gate/gate.yaml`, missing manifest is `Ok(None)`; project domain profiles via `profiles` table (`[profiles.<name>]`, `skip_serializing_if` empty so digests stay stable, built-in shadowing rejected) with `profile_defaults_for`/`is_builtin_profile`; `driftwatch.toml` execution untouched; no tool install, no network, no OpenSpec types.
 - `src/gate/aigate.rs` — business `.ai-gate/gate.yaml` → `GateManifest` conversion (`RUNTIME_NAME = "driftwatchdog"`, `AiGateDoc { runtime, manifest }`, strict `yaml-rust2` mapping with `did-you-mean` unknown-field hints, `checks` map of `true|false|"optional"`, `commands` must reference a selected check, empty-command/unknown-blocking rejection before execution, `blocking` list → review-required policy, `rule_pack` → identity, non-built-in profile selects exactly its declared checks); reuses the shared pipeline, no second Gate, no network.
@@ -391,6 +421,20 @@ domain profiles via `[profiles.<name>]`. Rust test suite is now 571 green;
 unblocks the BYOK Translator `product-foundation-and-governance` Gate, whose
 `.ai-gate/gate.yaml` declares `runtime: driftwatchdog` and profile
 `browser-extension`.
+
+The `checker-machine-output` change is **implemented and archived**
+(2026-09-24): `driftwatch check --format human|json` emits a versioned
+`driftwatch-checker/0.1.0` document on stdout in JSON mode; human text,
+dry-run persistence, and exit-status semantics are unchanged. Rust test
+suite is now 579 green (445 lib + 32 check integration + 6 export
+integration + 24 report + … + 8 new `src/checker/json.rs` unit + 8 new
+`tests/check.rs` integration). Two additional changes remain authored
+but unselected: `product-quality-gate-contract` and
+`release-evidence-and-capability-gate`. Per the standing auto-mode
+authorization, the next in dependency order is the one that has no
+remaining dependencies on the v1.1 Engineering Gate queue — pick the
+candidate and proceed under the "Change completion workflow" at the
+top of this file.
 
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.
