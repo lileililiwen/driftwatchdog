@@ -1,5 +1,27 @@
 # Tasks: Export gate-run evidence for portfolio release governance
 
+## 0. Caveats and confirmations
+
+- [ ] **Do not rebuild the release-evidence guards.**
+  `openspec/specs/release-evidence-gate/spec.md` already owns the
+  required-evidence guard, the stale-revision guard, the exit-code authority rule
+  and the no-text-mode-fallback rule. Reuse them; this change adds the *export*.
+- [ ] **Do not add a second evidence store.**
+  `openspec/specs/evidence-and-artifacts/spec.md` owns bounded evidence, digests
+  and redaction; the export references it.
+- [ ] **Read the governance vocabulary, never restate it.**
+  `workspace-governance/docs/capabilities.md` owns the `release_evidence` field
+  and state names. Needing a field outside that set is a governance change, not a
+  Rust one.
+- [ ] **Keep this repository's required task shape.** `AGENTS.md` requires
+  `proposal.md` to be the BFS impact map and `tasks.md` to keep explicit BFS, DFS
+  and final-BFS groups; follow the two-commit completion workflow and do not push.
+- [ ] **Name the governance-side consumption as the next action.** Consuming the
+  export belongs to `workspace-governance`; do not claim it here.
+- [ ] **Stage only this change directory.** `.project.json` is already modified and
+  `scripts/check-openspec-change-names.mjs` is untracked; keep them out of the
+  change's commits.
+
 ## 1. BFS — Baseline and impact coverage
 
 - [ ] Inventory the Gate result structure, the release-gate adapter, the
