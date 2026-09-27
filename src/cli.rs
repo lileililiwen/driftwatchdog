@@ -228,7 +228,7 @@ pub enum CheckFormatArg {
 /// `driftwatch gate [--dry-run] [--format human|json]`
 #[derive(Debug, Args, Default, Clone)]
 #[command(
-    after_help = "Examples:\n  driftwatch gate\n  driftwatch gate --dry-run\n  driftwatch gate --format json"
+    after_help = "Examples:\n  driftwatch gate\n  driftwatch gate --dry-run\n  driftwatch gate --format json\n  driftwatch gate evidence-export                  # completed-run -> governance vocabulary\n  driftwatch gate evidence-export --format json"
 )]
 pub struct GateArgs {
     /// Show the resolved plan without child execution or persistence.
@@ -238,6 +238,38 @@ pub struct GateArgs {
     /// machine-readable status document to stdout.
     #[arg(long, value_enum, default_value_t = GateFormatArg::Human)]
     pub format: GateFormatArg,
+    /// Optional subcommand. When present, the top-level `gate` flags
+    /// are ignored and the subcommand takes over.
+    #[command(subcommand)]
+    pub subcommand: Option<GateSubcommand>,
+}
+
+/// Nested subcommands under `driftwatch gate`. The top-level `gate`
+/// invocation still runs the existing execute-and-aggregate path;
+/// only the explicit subcommands are new.
+#[derive(Debug, Subcommand, Clone)]
+pub enum GateSubcommand {
+    /// Export a completed gate run as a versioned governance-vocabulary
+    /// evidence record. Reads the latest completed `gate_runs` row and
+    /// maps the per-check states into the governance `release_evidence`
+    /// fields; refuses when no run exists.
+    EvidenceExport(GateEvidenceExportArgs),
+}
+
+/// `driftwatch gate evidence-export [--format human|json] [--dry-run]`
+#[derive(Debug, Args, Default, Clone)]
+#[command(
+    after_help = "Examples:\n  driftwatch gate evidence-export\n  driftwatch gate evidence-export --format json\n  driftwatch gate evidence-export --dry-run"
+)]
+pub struct GateEvidenceExportArgs {
+    /// Output format. `human` prints a table; `json` prints the
+    /// versioned `EvidenceExport` document.
+    #[arg(long, value_enum, default_value_t = GateFormatArg::Human)]
+    pub format: GateFormatArg,
+    /// Print the document without writing any state. The export is a
+    /// pure read; this flag documents intent for the audit log.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]

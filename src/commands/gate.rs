@@ -51,7 +51,18 @@ const CHECK_MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 const MAX_RESULTS_JSON_BYTES: usize = 256 * 1024;
 
 /// `driftwatch gate [--dry-run] [--format human|json]`.
+///
+/// The `gate` command also accepts a subcommand (e.g.
+/// `driftwatch gate evidence-export`); when a subcommand is given
+/// the top-level flags are ignored and the subcommand takes over.
 pub fn gate(args: GateArgs, cwd: &Path) -> Result<i32, Error> {
+    if let Some(sub) = args.subcommand {
+        return match sub {
+            crate::cli::GateSubcommand::EvidenceExport(args) => {
+                crate::commands::evidence_export::evidence_export(args, cwd)
+            }
+        };
+    }
     let proj = ProjectRoot::discover(cwd)?;
     let gate_toml =
         manifest::manifest_path(&proj.root).unwrap_or_else(|| proj.root.join("gate.toml"));
@@ -402,6 +413,7 @@ mod tests {
         GateArgs {
             dry_run,
             format: GateFormatArg::Human,
+            subcommand: None,
         }
     }
 

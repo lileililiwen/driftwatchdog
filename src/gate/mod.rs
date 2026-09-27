@@ -7,7 +7,10 @@
 //! bounded diagnostics; [`adapt`] maps the existing checker protocol to
 //! this contract without changing `driftwatch check` persistence;
 //! [`evidence`] owns bounded artifact persistence, path confinement, and
-//! the evidence-backed-`PASS` guard; [`toolchain`] owns pinned tool
+//! the evidence-backed-`PASS` guard; [`evidence_export`] owns the
+//! versioned governance-evidence export that maps a completed gate run
+//! into the workspace-governance `release_evidence` vocabulary
+//! (consumed, not re-declared); [`toolchain`] owns pinned tool
 //! manifests, the verified user cache, and the managed / container /
 //! native / project-runtime backends (offline by default, explicit
 //! bootstrap only); [`adapters`] owns tool-adapter contracts, output
@@ -31,6 +34,7 @@ pub mod concerns;
 pub mod context;
 pub mod dto;
 pub mod evidence;
+pub mod evidence_export;
 pub mod manifest;
 pub mod redact;
 pub mod toolchain;
@@ -65,6 +69,11 @@ pub use evidence::{
     build_record, confine_adapter_path, confined_path, digest_bytes, evidence_backed_pass,
     store_bytes, validate_key, ArtifactKind, ArtifactRecord, EvidenceError, NewArtifact,
     ARTIFACT_DIR_NAME, MAX_ARTIFACT_BYTES, MAX_KEY_BYTES, MAX_PREVIEW_BYTES, UNAVAILABLE_PREVIEW,
+};
+pub use evidence_export::{
+    build as build_evidence_export, fields_for_concern, render_human as render_evidence_human,
+    render_json as render_evidence_json, EvidenceExport, EvidenceState, ExportError, Field,
+    FieldExport, EVIDENCE_EXPORT_SCHEMA_VERSION, GOVERNANCE_FIELDS, GOVERNANCE_STATES,
 };
 pub use manifest::{
     load as load_gate_manifest, load_for_runtime as load_gate_manifest_for_runtime,
