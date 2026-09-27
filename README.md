@@ -311,6 +311,8 @@ before every relevant change is archived or completed:
     driftwatch gate --dry-run   # show the resolved plan; no execution, no persistence
     driftwatch gate             # execute applicable checks, persist the result, exit nonzero when blocked
     driftwatch gate --format json  # machine-readable status document
+    driftwatch gate evidence-export                  # completed-run -> Workspace Governance vocabulary
+    driftwatch gate evidence-export --format json    # versioned `EvidenceExport` document
 
 `driftwatch gate` resolves the plan (profile, explicit checks, blocking
 policy, project commands, rule-pack identity), executes each planned
@@ -321,6 +323,25 @@ enabled = true`, aggregates with the manifest blocking policy, and
 persists one `gate_runs` row with change/revision identity and
 manifest digest. `driftwatch check` remains the compatibility entry
 point for legacy checker-only projects.
+
+### Exporting a run for the Workspace Governance audit
+
+`driftwatch gate evidence-export` reads the latest completed
+`gate_runs` row and prints a versioned evidence record in the
+Workspace Governance `release_evidence` vocabulary. The export is a
+pure read: it never mutates the run, the project, or any registry,
+and it never invokes an LLM, signer, SBOM generator, or publisher.
+One entry is emitted per governance field (`revision`, `version`,
+`toolchain`, `artifacts`, `digests`, `sbom`, `provenance`, `checks`,
+`publication`) carrying a state of `verified`, `unverified`, or
+`blocked` and an `evidence_ref` into the bounded-evidence store. A
+field is `verified` only when a scheduled check actually ran and
+passed and the run's revision matches the project's current
+revision; a check that failed, was not scheduled, or could not
+execute stays `unverified` or `blocked`. When no run exists, the
+export refuses with a non-zero exit and emits no document. The
+governance-side acceptance of the record belongs to
+`workspace-governance`, not to this repository.
 
 ### Business-project policy at `.ai-gate/gate.yaml`
 

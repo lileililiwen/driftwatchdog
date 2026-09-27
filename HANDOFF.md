@@ -14,6 +14,61 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+The `gate-evidence-export` change is **implemented and archived**
+(2026-09-27): a new `driftwatch gate evidence-export` subcommand
+(`--format human|json`, `--dry-run` for documentation) reads the
+latest completed `gate_runs` row and prints a versioned
+`EvidenceExport` document in the workspace-governance
+`release_evidence` vocabulary. The export carries a fixed top-level
+shape (`schema_version: 1`, `project_id` from the project directory
+basename, `revision` from the gate run, `toolchain` as
+`driftwatchdog@<cargo_version>`, the manifest digest, rule-pack
+version, and `gate_run_id`) plus one entry per governance field
+(`revision`, `version`, `toolchain`, `artifacts`, `digests`, `sbom`,
+`provenance`, `checks`, `publication`) carrying `state` in the
+closed set `verified` / `unverified` / `blocked`, an optional
+`evidence_ref` into the bounded-evidence store, and an optional
+`source_gate` naming the check that produced the verdict. The
+per-field state priority is `verified > blocked > unverified`,
+`verified` is reserved for scheduled checks that actually ran and
+passed and the run revision matches the project revision, and a
+stale run emits every field `unverified` with a `stale` diagnostic
+naming both revisions. Unknown governance field names are an
+`ExportError::UnknownField` construction error. The export refuses
+with a non-zero exit when no run exists for the project. The new
+module lives in `src/gate/evidence_export.rs` (closed field and
+state constants, `Field` constructor with unknown-name refusal,
+`FieldExport` / `EvidenceExport` / `StaleDiagnostic` structs, the
+`build` reducer, human and JSON renderers, and 23 unit tests
+covering the field/state closed sets, the priority reduction, the
+stale-revision rule, the unknown-field construction error, and
+bounded redaction); the CLI surface grows a `GateSubcommand` enum
+on `GateArgs` in `src/cli.rs` (the existing `driftwatch gate` flat
+flags are preserved when no subcommand is given) and a new
+`src/commands/evidence_export.rs` orchestrator (8 unit tests
+covering the no-run refusal, human and JSON outputs, malformed-
+`results_json` recovery, idempotent read-only behaviour, and
+project-id resolution). A new `tests/gate_evidence_export.rs`
+integration suite (11 tests, Unix-only) drives the binary through
+the five design scenarios — ran/PASS, ran/FAIL, not-scheduled,
+could-not-execute, and stale revision — plus the field-set, schema,
+and read-only invariants. The bounded-evidence store, the release-
+evidence / capability-conformance adapters, the release-gate
+envelope wire version, the Gate `gate_runs` schema, the
+`driftwatch check` path, and the `gate --format json` path are
+byte-for-byte unchanged. Driftwatchdog remains an executor/
+aggregator: no release publisher, signer, SBOM generator, or
+deployment executor is added. The full test suite is green (533
+lib + 196 integration); `cargo fmt --check`, `cargo clippy
+--all-targets --all-features -- -D warnings`, `openspec validate
+--changes --strict --no-interactive` (the remaining unselected
+change is `post-mvp-readiness`), and `sh tests/packaging.sh` (8/8)
+are green. The ROADMAP now lists v1.4 Governance evidence export,
+the README documents the new subcommand plus the `EvidenceExport`
+schema, and the next action is the governance-side consumption
+(belongs to `workspace-governance`, not to this repository). One
+planning change remains authored but unselected: `post-mvp-readiness`.
+
 The `release-evidence-and-capability-gate` change is **implemented and
 archived** (2026-09-24): `driftwatch gate` gains a third built-in
 profile, `release`, that selects two new stable concern IDs —
@@ -367,6 +422,7 @@ Read these in order:
 | checker-machine-output | archived 2026-09-24 | `driftwatch check --format human|json` with a versioned `driftwatch-checker/0.1.0` document on stdout (declaration order, `ok`/`alerting`/`failed`/`timeout`/`protocol-error` statuses, parsed `alerts[]` in the existing wire shape, bounded `error` note, summary counts); dry-run banner and correlation warning on stderr; human output, persistence, and exit-status semantics unchanged. New `src/checker/json.rs` (8 unit tests) + 8 new `tests/check.rs` integration tests. `gate --format json` and the existing checker protocol are untouched. | stable CLI surface |
 | product-quality-gate-contract | archived 2026-09-24 | `product` and `rust-product` built-in profiles + stable concern IDs `product-code-boundary` and `placeholder-threshold`; versioned JSON-envelope result normalization (`PRODUCT_QUALITY_ENVELOPE_VERSION = 1`, exit-code authority rule PASS→0 / FAIL→1 / REVIEW_REQUIRED→2 / NOT_APPLICABLE→0, mismatches and malformed envelopes downgrade to REVIEW_REQUIRED); text-mode fallback for legacy commands; end-to-end coverage including persistence, `--format json`, dry-run, and optional-concern relaxation. New `src/gate/concerns.rs` (4 unit tests) + 17 new `src/gate/adapters.rs` unit tests + 15 new `tests/gate_product_quality.rs` integration tests + 5 new `src/gate/manifest.rs` unit tests. `driftwatch check` and every other Gate concern path are byte-for-byte unchanged. | gate-cli-and-memory-integration |
 | release-evidence-and-capability-gate | archived 2026-09-24 | `release` built-in profile + stable concern IDs `release-evidence` and `capability-conformance`; shared wire shape with the product-quality envelope (`RELEASE_GATE_ENVELOPE_VERSION = 1`, exit-code authority rule, bounded fields, secret redaction); release-evidence required-evidence guard (PASS requires `revision`, `product_version`, at least one `artifacts` entry, and `provenance`; stale revision vs current git rev downgrades to REVIEW_REQUIRED); capability-conformance required-evidence guard (PASS requires non-empty `verified` whose ids are all in the resolved plan; out-of-scope verified ids downgrade to REVIEW_REQUIRED); malformed/missing/wrong-version envelopes downgrade to REVIEW_REQUIRED; no text-mode fallback so missing coverage can never be silently treated as a pass. New `src/gate/concerns.rs` (6 unit tests) + 5 new `src/gate/manifest.rs` unit tests + 18 new `src/gate/adapters.rs` unit tests + 19 new `tests/gate_release_evidence.rs` integration tests. `driftwatch check` and every other Gate concern path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator (no release publisher, signer, SBOM generator, or deployment executor is added). | product-quality-gate-contract |
+| gate-evidence-export | archived 2026-09-27 | Read-only `driftwatch gate evidence-export` subcommand (`--format human|json`, `--dry-run` for documentation) that maps a completed `gate_runs` row into the workspace-governance `release_evidence` vocabulary (closed field set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed state set `verified` / `unverified` / `blocked`); per-field state priority `verified > blocked > unverified` with `verified` reserved for scheduled checks that ran and passed on the current revision; stale-revision rule emits every field `unverified` with a `stale` diagnostic naming both revisions; unknown governance field is an `ExportError::UnknownField` construction error; refuses with a non-zero exit when no run exists. New `src/gate/evidence_export.rs` (23 unit tests) + new `src/commands/evidence_export.rs` (8 unit tests) + new `tests/gate_evidence_export.rs` (11 integration tests covering ran/PASS, ran/FAIL, not-scheduled, could-not-execute, stale revision, schema, and read-only invariants). The bounded-evidence store, the release-evidence / capability-conformance adapters, the release-gate envelope wire version, the `gate_runs` schema, the `driftwatch check` path, and the `gate --format json` path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator. | release-evidence-and-capability-gate |
 
 ## Implementation constraints
 
@@ -384,9 +440,9 @@ Read these in order:
 Last run on this change:
 
     cargo fmt --check
-    cargo test             # 679 tests pass: lib + integration (incl. packaging; +19 gate-release-evidence integration, +18 release-gate adapter unit, +6 release-gate concerns unit, +5 release-gate manifest unit)
+    cargo test             # lib + integration (incl. 11 new gate_evidence_export integration, 8 new evidence_export command unit, 23 new evidence_export core unit)
     cargo clippy --all-targets --all-features -- -D warnings
-    openspec validate --changes --strict --no-interactive   # no active changes (release-evidence-and-capability-gate archived)
+    openspec validate --changes --strict --no-interactive   # one unselected change remains: post-mvp-readiness
     sh tests/packaging.sh   # 8/8 pass: target_mapping, artifact_naming, checksum_manifest, installer, repo_hygiene, agent_examples, gha_templates, change_workflow
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
@@ -396,19 +452,21 @@ Last run on this change:
     ./target/debug/driftwatch export json                   # valid JSON document
     ./target/debug/driftwatch export jsonl                  # one record per line
     ./target/debug/driftwatch export markdown               # human-readable
-    ./target/debug/driftwatch doctor                        # 6/6 checks pass (1 warn)
+    ./target/debug/driftwatch doctor                        # checks pass
     ./target/debug/driftwatch check                         # runs configured checkers
     ./target/debug/driftwatch link bug:<hash8> spec:<id>    # persists manual link
     ./target/debug/driftwatch unlink <id>                   # removes targeted link
     ./target/debug/driftwatch gate                          # release profile + complete envelopes -> PASS
     ./target/debug/driftwatch gate --dry-run                # release profile: capability-conformance + release-evidence required
     ./target/debug/driftwatch gate --format json            # release-gate rows in machine form
+    ./target/debug/driftwatch gate evidence-export         # 9 governance fields, every field unverified for a non-release run
+    ./target/debug/driftwatch gate evidence-export --format json   # versioned EvidenceExport document
     sh scripts/smoke.sh                                     # release packaging end-to-end
 
 ## Module map
 
-- `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`; dispatches all 13 subcommands.
-- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Gate,Link,Unlink,Completions,Man,Mcp}`) and arg structs; `RunArgs` carries opt-in `--timeout-ms`; `GateArgs` carries `--dry-run` and `--format human|json`; `CheckArgs` carries `--format human|json`.
+- `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`; dispatches all 13 top-level subcommands (the new `driftwatch gate evidence-export` flows through the existing `gate` dispatcher as a `GateSubcommand`).
+- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Gate,Link,Unlink,Completions,Man,Mcp}`) and arg structs; `RunArgs` carries opt-in `--timeout-ms`; `GateArgs` carries `--dry-run` and `--format human|json` plus a new `GateSubcommand::EvidenceExport(GateEvidenceExportArgs)` (with its own `--format` / `--dry-run`) so the existing flat `driftwatch gate` flags are preserved when no subcommand is given; `CheckArgs` carries `--format human|json`.
 - `src/error.rs` — `thiserror` `Error` enum used by library code; includes `LinkTarget` and `ManualLinkNotFound` variants.
 - `src/fingerprint/mod.rs` — module entry, re-exports `Rules`, `Canonical`, `fingerprint`.
 - `src/fingerprint/normalizer.rs` — generic normalizer (13 ordered rules).
@@ -442,6 +500,7 @@ Last run on this change:
 - `src/gate/manifest.rs` — project Gate manifest (`GateManifest`/`ManifestCheck`/`Trigger`/`ResolvedGatePlan`/`LoadOutcome`, `parse`/`resolve`/`render_plan`/`load`/`load_for_runtime`/`manifest_path`); precedence `gate.toml` → `.driftwatch/gate.toml` → `.ai-gate/gate.yaml`, missing manifest is `Ok(None)`; project domain profiles via `profiles` table (`[profiles.<name>]`, `skip_serializing_if` empty so digests stay stable, built-in shadowing rejected) with `profile_defaults_for`/`is_builtin_profile`; built-in profiles `backend`/`frontend`/`full`/`minimal` plus the two product-quality profiles `product` and `rust-product` (alias) and the new `release` profile registered in `SUPPORTED_PROFILES` and `profile_defaults`; the product-quality and release-gate concern ids are also recorded in the `not_scheduled` explanation set for plans that select a different profile; `driftwatch.toml` execution untouched; no tool install, no network, no OpenSpec types.
 - `src/gate/aigate.rs` — business `.ai-gate/gate.yaml` → `GateManifest` conversion (`RUNTIME_NAME = "driftwatchdog"`, `AiGateDoc { runtime, manifest }`, strict `yaml-rust2` mapping with `did-you-mean` unknown-field hints, `checks` map of `true|false|"optional"`, `commands` must reference a selected check, empty-command/unknown-blocking rejection before execution, `blocking` list → review-required policy, `rule_pack` → identity, non-built-in profile selects exactly its declared checks); reuses the shared pipeline, no second Gate, no network.
 - `src/gate/evidence.rs` — bounded evidence domain (`ArtifactKind`/`ArtifactRecord`/`NewArtifact`/`EvidenceError`, `MAX_ARTIFACT_BYTES = 1 MiB`, `MAX_PREVIEW_BYTES = 1024`, `build_record`/`store_bytes` via temp+rename, `confine_adapter_path`/`confined_path` escape rejection, `redact_secrets_with_extra` previews, `evidence_backed_pass` guard, `UNAVAILABLE_PREVIEW` marker); no OpenSpec types, no tool install, no network.
+- `src/gate/evidence_export.rs` — workspace-governance evidence export (closed `GOVERNANCE_FIELDS` set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed `GOVERNANCE_STATES` set `verified` / `unverified` / `blocked`, `EVIDENCE_EXPORT_SCHEMA_VERSION = 1`, `Field` constructor refusing unknown names, `EvidenceState` parse/serialise, `FieldExport` / `EvidenceExport` / `StaleDiagnostic` structs, `fields_for_concern` mapping `release-evidence` → the seven release-evidence fields and `capability-conformance` → `checks`, `build` reducer with `verified > blocked > unverified` priority, stale-revision rule with a `stale` diagnostic naming both revisions, `ExportError::{UnknownField, NoRun}`, `render_human` and `render_json` with secret-redaction re-use); pure read, no execution, no mutation, no second evidence store, no OpenSpec types.
 - `src/gate/adapters.rs` — adapter contracts (`AdapterRegistry`/`AdapterCapability`/`OutputFormat`/`AdapterInput`, duplicate/empty validation before execution), five built-ins (`checker`, `gitleaks`, `osv`, `semgrep`, `project-runtime`) via CLI boundaries only, tolerant normalizers (`parse_checker_json`/`parse_sarif`/`parse_gitleaks` without secret values/`parse_osv`/`parse_semgrep`) with finding/evidence caps and redaction, exit-findings-evidence separated (nonzero-with-findings → `FAIL`), infra mapping (`SpawnFailed`/`NonZeroExit`/`Timeout`+timeout evidence/`Signalled`/`MalformedOutput` → `REVIEW_REQUIRED` + `<tool>:output`), `run_text_adapter` exit-code mapping, `run_all` failure isolation, pure deterministic `evaluate` (threshold rules + rule-required available-evidence guard); also owns the **product-quality envelope adapter** (`PRODUCT_QUALITY_ENVELOPE_VERSION = 1` parser, version + status check, bounded findings/evidence/missing_evidence/diagnostic/remediation and secret redaction, `expected_exit_for_status` / `default_severity_for_status` mapping, `contradiction_result` and `envelope_result` helpers, `run_product_quality_adapter` entry point used by `src/commands/gate.rs` `execute_plan` for the two product-quality concern ids; spawn/timeout/signal map to `infra_result`; the text-mode fallback preserves the existing `project-runtime` semantics for legacy commands) and the **release-gate envelope adapters** (`RELEASE_GATE_ENVELOPE_VERSION = 1` shared wire version, `parse_release_envelope` / `parse_capability_envelope` parsers with `capabilities` sub-object handling for the capability envelope, `envelope_review_result` for malformed/missing cases, `envelope_to_result` helper with secret redaction, `run_release_evidence_adapter` with the required-evidence guard for `revision` / `product_version` / `artifacts` / `provenance` plus the stale-revision guard using a caller-supplied current revision from `git::capture`, `run_capability_conformance_adapter` with the empty-`verified`-list and out-of-scope-verified guards using the resolved plan ids; both release-gate adapters deliberately do not provide a text-mode fallback so missing coverage is never silently treated as a pass); no SDKs, no scanner reimplementation, no network, no LLM.
 - `src/gate/context.rs` — generic read-only context providers (`ProviderRegistry`, bounded hashed `ContextDocument` with kind/path/digest/size/change-id, `git` diff/status + `project-files` + optional `openspec` providers emitting generic documents only, project-root confinement, truncation bounds, secret-safe previews, unavailable-not-empty semantics, `collect_context`/`selection_from_manifest`/`context_checks`); no OpenSpec types in gate core, no mutation, no network.
 - `src/gate/ai.rs` — provider-neutral AI evaluation (`AiProviderConfig` opt-in with explicit missing-provider policy, `AiRule`, bounded redacted `AiEvalRequest` with prompt/rule digests, tolerant `AiProviderOutput` with fail-closed `validate_output`, `run_ai_evaluation` via the bounded checker runner, `AiEvaluationRecord` persistence wrapper, `load_ai_config`/`ai_checks`); no embedded LLM, no API keys, no network, no OpenSpec types.
@@ -449,7 +508,7 @@ Last run on this change:
 - `src/runtime/runner.rs` — `CommandSpec` (incl. opt-in `timeout_ms`), `CapturedStream`, `RunOutcome` (incl. `timed_out` + `diagnostic`), `run`; byte-accumulating UTF-8-once drain, signal-aware status, process-group kill on timeout.
 - `src/util.rs` — `truncate_char_boundary` shared helper (byte limit, char-boundary cut, ellipsis).
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
-- `src/commands/{run,list,top,show,report,gc,export,doctor,check,gate,link,unlink,report_ai}.rs` — per-subcommand orchestration returning process exit code. `top.rs` and `show.rs` expose `render` functions that return the same bytes the CLI prints; `report_ai.rs` exposes `render_ai_for_mcp` for the read-only MCP path and renders a `Gate status` section from the latest `gate_runs` row (tolerant of old DBs). `gate.rs` exposes `gate` plus `gate_history_checks` for `doctor`; its `execute_plan` captures `git::capture` once per run for the release-evidence staleness check and dispatches product-quality / release-evidence / capability-conformance concerns to the dedicated envelope adapters while every other concern keeps the project-runtime text adapter.
+- `src/commands/{run,list,top,show,report,gc,export,doctor,check,gate,link,unlink,report_ai,evidence_export}.rs` — per-subcommand orchestration returning process exit code. `top.rs` and `show.rs` expose `render` functions that return the same bytes the CLI prints; `report_ai.rs` exposes `render_ai_for_mcp` for the read-only MCP path and renders a `Gate status` section from the latest `gate_runs` row (tolerant of old DBs). `gate.rs` exposes `gate` plus `gate_history_checks` for `doctor`; its `execute_plan` captures `git::capture` once per run for the release-evidence staleness check and dispatches product-quality / release-evidence / capability-conformance concerns to the dedicated envelope adapters while every other concern keeps the project-runtime text adapter; its top-level `gate` function also routes the new `GateSubcommand::EvidenceExport` to `evidence_export::evidence_export`. `evidence_export.rs` is the read-only `driftwatch gate evidence-export` orchestrator: it opens the DB read-only, reads the latest `gate_runs` row, parses the persisted `results_json` (bare array; legacy versioned document accepted as a fallback), captures the current project revision via `git::capture`, calls `evidence_export::build`, prints the human or JSON document, and refuses with a non-zero exit when no run exists.
 - `src/commands/meta.rs` — `completions` (all five shells via `clap_complete`) and `man` (via `clap_mangen`) generators.
 - `src/mcp/{mod,server,tools}.rs` — Model Context Protocol server over stdio. `server.rs` is the JSON-RPC 2.0 dispatch loop (newline-delimited, `PROTOCOL_VERSION = "2024-11-05"`, `-32700`/`-32601`/`-32602` error codes, EOF exits 0). `tools.rs` defines four read-only tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`) that reuse the existing CLI builders; every input schema is closed (`additionalProperties: false`). The DB is opened with `SQLITE_OPEN_READ_ONLY` via the existing `Db::open_read_only` so a write attempt fails at the driver level.
 - `src/cli.rs` — `clap` derive types plus `Completions`/`Man` subcommands, `long_about` with examples, per-command `after_help` examples, and the binary-naming rule doc comment.
