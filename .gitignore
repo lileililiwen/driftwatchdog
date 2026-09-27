@@ -31,4 +31,9 @@ driftwatch.toml
 # clean.
 .ariadex/
 
+# Node.js dependencies. The `scripts/check-openspec-change-names.mjs`
+# governance checker has no npm dependencies today, but any future
+# Node tooling (or a stray `npm install`) must stay untracked.
+node_modules/
+
 # Keep Cargo.lock committed for this binary application.

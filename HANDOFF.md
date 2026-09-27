@@ -14,6 +14,43 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+The post-MVP `gate-evidence-export` and `post-mvp-readiness` changes
+are both implemented and archived (2026-09-27). The ROADMAP planning
+queue is empty.
+
+Housekeeping committed on 2026-09-27:
+
+* `.project.json` — `kind` updated from `quality-gate` to `tooling`
+  and `evidence_status` updated from `planned` to `implemented` to
+  reflect the central workspace Gate's role (Driftwatchdog is a
+  shared governance executor, not a deployable product) and the
+  shipped evidence-export path. The file is workspace-governance
+  managed and continues to be tracked.
+* `scripts/check-openspec-change-names.mjs` — Node.js governance
+  checker that validates every active directory under
+  `openspec/changes/` matches the kebab-case pattern the OpenSpec
+  workflow documents. Previously untracked; now committed with a
+  packaging test (`tests/packaging/test_openspec_change_names.sh`,
+  three cases: rejection of invalid names with a named offender,
+  acceptance of a clean queue, tolerance of an absent
+  `openspec/changes/` directory). The script runs from this
+  repository or from the governance repository, per
+  `.ai-rules/workflow.md`.
+* `.ai-rules/workflow.md` — the script reference now reads "from
+  this repository (or the governance repository)" because the
+  script is now in this repo's `scripts/` rather than only in the
+  governance repository.
+
+All `cargo fmt --check`, `cargo test` (533 lib + 196 integration),
+`cargo clippy --all-targets --all-features -- -D warnings`,
+`sh tests/packaging.sh` (now 9/9: the eight previous tests plus
+`test_openspec_change_names` covering the three cases above),
+`openspec validate --changes --strict --no-interactive` (no active
+changes remain), and `git diff --check` are green. No new active
+OpenSpec change is authored; the next action is a new governance-
+directed change when one is authorized by the workspace governance
+queue.
+
 The `post-mvp-readiness` change is **implemented and archived**
 (2026-09-27): a documentation-only README readiness pass that adds a
 checked-in terminal capture under `docs/assets/` (a `driftwatch run`

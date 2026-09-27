@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "id": "driftwatchdog",
-  "kind": "quality-gate",
+  "kind": "tooling",
   "profile": "rust-product",
   "lifecycle": "active",
   "verification": {
     "command": "cargo test --workspace --all-targets",
     "gate_runtime": "driftwatchdog",
-    "evidence_status": "planned"
+    "evidence_status": "implemented"
   },
   "deployment": {
     "deployable": false,
