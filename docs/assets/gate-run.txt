@@ -1,0 +1,55 @@
+$ cat gate.toml
+profile = "minimal"
+[[checks]]
+id = "smoke"
+command = "true"
+
+$ driftwatchdog gate --dry-run
+gate plan (dry-run; nothing was executed)
+contract version: 1 | profile: minimal | rule-pack: local | manifest: sha256:e475940baa00f197
+blocking: review_required_blocks=true
+execution mode: dry-run
+checks:
+  - smoke [required] via manifest
+project commands:
+  (none)
+context providers:
+  (none)
+explicitly not scheduled:
+  - a11y
+  - browser
+  - capability-conformance
+  - placeholder-threshold
+  - product-code-boundary
+  - release-evidence
+  - responsive
+
+$ driftwatchdog gate
+driftwatch gate: PASS (blocked: false)
+manifest: sha256:e475940baa00f197 | rule-pack: local
+
+GATE                      STATUS           SEVERITY  DIAGNOSTIC
+smoke                     PASS             info      -
+
+Gate passed locally. CI repeats this command; it does not replace it.
+
+$ driftwatchdog gate evidence-export
+driftwatch gate-evidence export
+schema_version: 1 | project_id: synth_demo | revision: 2026-09-27T03:09:00Z | toolchain: driftwatchdog@0.1.0
+manifest: sha256:e475940baa00f197
+rule_pack: local
+gate_run_id: 1
+
+FIELD           STATE         SOURCE_GATE               EVIDENCE
+revision        unverified    -                         -
+version         unverified    -                         -
+toolchain       unverified    -                         -
+artifacts       unverified    -                         -
+digests         unverified    -                         -
+sbom            unverified    -                         -
+provenance      unverified    -                         -
+checks          unverified    -                         -
+publication     unverified    -                         -
+
+fields emitted: 9 (one entry per governance `release_evidence` field)
+diagnostic: revision matches project; per-field state reflects the executed run

@@ -1,0 +1,51 @@
+$ driftwatchdog init
+driftwatch: initialized project at /tmp/synth_demo
+  created /tmp/synth_demo/.driftwatch
+  created /tmp/synth_demo/.driftwatch/state.db
+  created /tmp/synth_demo/driftwatch.toml
+  schema version: 6
+
+$ driftwatchdog run sh -c 'echo connection timeout >&2; exit 1'
+driftwatch: FAIL exit=Some(1) duration=0ms
+--- stderr (last 1 lines) ---
+connection timeout
+
+$ driftwatchdog run sh -c 'echo connection timeout >&2; exit 1'
+driftwatch: FAIL exit=Some(1) duration=0ms
+--- stderr (last 1 lines) ---
+connection timeout
+
+$ driftwatchdog run sh -c 'echo connection timeout >&2; exit 1'
+driftwatch: FAIL exit=Some(1) duration=0ms
+--- stderr (last 1 lines) ---
+connection timeout
+
+$ driftwatchdog top
+COUNT    FIRST SEEN            LAST SEEN             HASH        SUMMARY
+3        2026-09-27T03:08:35Z  2026-09-27T03:08:35Z  be3c6a0f    connection timeout
+
+$ driftwatchdog show be3c6a0f
+Bug  : be3c6a0fb772
+ID   : #1 (full hash be3c6a0fb7720bb793b05556d3b0d36c3d8dd19caf70d4ca6d8fa0c60c126a64)
+Summary      : connection timeout
+Occurrences  : 3
+First seen   : 2026-09-27T03:08:35Z
+Last seen    : 2026-09-27T03:08:35Z
+Distinct runs: 3
+
+Recent commits:
+  (no git context captured)
+
+Recent evidence (last 5):
+--- run #3 @ 2026-09-27T03:08:35Z (commit -)
+    connection timeout
+--- run #2 @ 2026-09-27T03:08:35Z (commit -)
+    connection timeout
+--- run #1 @ 2026-09-27T03:08:35Z (commit -)
+    connection timeout
+
+$ driftwatchdog report
+# Driftwatchdog report
+[...]
+- 1 recurring fingerprint: 1 failure, 3 occurrences, 0.0% trend stable
+  - be3c6a0f `connection timeout` (3 occurrences)

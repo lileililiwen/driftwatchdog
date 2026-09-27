@@ -128,6 +128,33 @@ The local source checkout works the same way:
     #12 database connection timeout
     Seen 6 times before.
 
+A real capture from a synthetic project (no network, no real repository
+data) is checked in at [`docs/assets/run-failure.txt`](docs/assets/run-failure.txt):
+
+    $ driftwatchdog init
+    $ driftwatchdog run sh -c 'echo connection timeout >&2; exit 1'   # 3 times
+    $ driftwatchdog top
+    COUNT    FIRST SEEN            LAST SEEN             HASH        SUMMARY
+    3        2026-09-27T03:08:35Z  2026-09-27T03:08:35Z  be3c6a0f    connection timeout
+    $ driftwatchdog show be3c6a0f
+    Bug  : be3c6a0fb772
+    Summary      : connection timeout
+    Occurrences  : 3
+    ...
+    --- run #3 @ 2026-09-27T03:08:35Z (commit -)
+        connection timeout
+    --- run #2 @ 2026-09-27T03:08:35Z (commit -)
+        connection timeout
+    --- run #1 @ 2026-09-27T03:08:35Z (commit -)
+        connection timeout
+
+The full synthetic capture, including the `driftwatchdog report`
+summary and a `driftwatchdog gate` dry-run, is in
+[`docs/assets/run-failure.txt`](docs/assets/run-failure.txt) and
+[`docs/assets/gate-run.txt`](docs/assets/gate-run.txt). Captures are
+redacted, drawn from synthetic projects, and committed to the
+repository (no external image host).
+
 After checker integration:
 
     driftwatchdog check
@@ -135,6 +162,89 @@ After checker integration:
     driftwatchdog report --ai > drift.md
 
 The AI report contains recurring failures, current spec violations, possible heuristic relationships and manual links, recent commits, and instructions to investigate recurrence and add regression coverage. It deliberately does not claim that a similarity score proves root cause.
+
+## Built-in Gate profile and concern catalog
+
+Driftwatchdog owns the central workspace Gate: 75 workspace
+`.ai-gate/gate.yaml` files name `runtime: driftwatchdog`. The catalog
+below ties each built-in profile to its stable concern IDs, the
+default `required = true` flag, the exit-code authority rule, and
+whether a text-mode fallback applies. Concern IDs and profile names
+match `src/gate/concerns.rs`; the code is authoritative — if a name
+here ever disagrees with the code, the code wins and the doc is
+corrected.
+
+| Built-in profile | Stable concern IDs scheduled | Default | Exit-code authority | Text-mode fallback |
+| --- | --- | --- | --- | --- |
+| `minimal` | (none) | — | `PASS`→0, `FAIL`→1, `REVIEW_REQUIRED`→2, `NOT_APPLICABLE`→0 (mismatches and malformed envelopes downgrade to `REVIEW_REQUIRED`) | n/a (no envelope-backed checks) |
+| `backend` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above (project-runtime text adapter) | yes (project-runtime `exit 0 → PASS`, `nonzero → FAIL`) |
+| `frontend` | `a11y`, `responsive`, `secret-scan` | required | as above | yes |
+| `full` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above | yes |
+| `product` (alias `rust-product`) | `placeholder-threshold`, `product-code-boundary` | required | as above (envelope wire version `1`) | yes (legacy commands keep working) |
+| `release` | `capability-conformance`, `release-evidence` | required | as above (envelope wire version `1`, shared with the product-quality shape) | **no** (missing coverage must never silently pass) |
+
+A profile that is not a built-in name selects exactly the concerns
+declared in the manifest (`[profiles.<name>]` in `gate.toml` or
+`checks:` in `.ai-gate/gate.yaml`); a built-in profile keeps its
+default set, adjustable per concern with `required = false` (or the
+`checks:` map `false` / `"optional"` in `.ai-gate/gate.yaml`). When
+the manifest binds a profile default without a `command`, the
+existing required + missing-command aggregate path records
+`REVIEW_REQUIRED`; the catalog does not paper over that case.
+
+## Integration recipe: from no manifest to a first `driftwatch gate` run
+
+1. `driftwatchdog init` — creates `.driftwatch/state.db` and
+   `driftwatch.toml` (the local state directory; nothing is
+   uploaded).
+2. Pick the integration surface.
+   * Native `gate.toml` at the project root (or under
+     `.driftwatch/gate.toml`) for self-contained projects.
+   * `.ai-gate/gate.yaml` for business projects that already follow
+     the `.ai-gate` convention; name `runtime: driftwatchdog` so the
+     shared executor is the one in this repository.
+3. Declare the policy.
+   * `version = 1` is required.
+   * `profile = "<built-in>"` selects the catalog row above. Pick
+     `product` (or `rust-product`) for product-quality, `release`
+     for release-gate, one of `backend` / `frontend` / `full` /
+     `minimal` otherwise.
+   * Bind every selected concern to a project-owned command that
+     emits the versioned JSON envelope (or, for `backend` /
+     `frontend` / `full`, the existing project-runtime text
+     contract).
+4. Override selectively.
+   * `blocking = [FAIL, REVIEW_REQUIRED]` (or any subset) tightens
+     the aggregate policy; the default already blocks both.
+   * `required = false` (or `checks: { <id>: optional }`) relaxes
+     one concern without changing the profile.
+   * `[profiles.<name>]` in `gate.toml` or the `checks:` map in
+     `.ai-gate/gate.yaml` declares a project-defined profile that
+     selects exactly the concerns it lists.
+5. Add optional context providers.
+   * `contexts = [git, project-files]` enables the built-in
+     providers; `[openspec]` is opt-in and stays generic (no
+     OpenSpec types enter the gate core).
+6. Verify locally before every change is archived.
+   * `driftwatch gate --dry-run` — shows the resolved plan, the
+     `manifest: sha256:…` digest, the rule-pack identity, and the
+     `not_scheduled` set. Nothing is executed and nothing is
+     persisted.
+   * `driftwatch gate` — executes, persists one `gate_runs` row,
+     prints the per-check table, and exits nonzero when blocked.
+   * `driftwatch gate --format json` — machine-readable status
+     document on stdout for control-plane consumers.
+   * `driftwatch gate evidence-export` — versioned governance
+     evidence record (read-only; refuses when no run exists).
+7. CI repeats the same `driftwatch gate` invocation as a second
+   layer; the local Gate is the first completion verification for
+   every relevant change, not the last.
+
+Driftwatchdog is an executor and aggregator in every step: it never
+publishes, signs, generates an SBOM, or deploys. The recipe adds
+provenance and capability verification only because the project's
+own command produces it as data; the recipe itself introduces no
+new external dependency.
 
 ## Commands
 
