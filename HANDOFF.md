@@ -14,6 +14,32 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+The `post-mvp-readiness` change is **implemented and archived**
+(2026-09-27): a documentation-only README readiness pass that adds a
+checked-in terminal capture under `docs/assets/` (a `driftwatch run`
+failure plus recurring-bug report, plus a `driftwatch gate`
+dry-run + execute + `driftwatch gate evidence-export` capture), a
+consolidated built-in Gate profile and concern catalog (profile →
+stable concern IDs → default `required = true` → exit-code
+authority rule → text-mode fallback behaviour) sourced from
+`src/gate/concerns.rs` and `src/gate/manifest.rs`, and an ordered
+integration recipe from no manifest to a first `driftwatch gate`
+run covering `gate.toml`, `.ai-gate/gate.yaml`, blocking policy,
+and optional context providers. The catalog and the recipe
+explicitly note that 75 workspace `.ai-gate/gate.yaml` files name
+`runtime: driftwatchdog`, so Driftwatchdog owns the central
+workspace Gate. No `src/**`, concern ID, envelope, wire version,
+CLI surface, profile, rule, or canonical spec was changed;
+`cargo fmt --check`, `cargo test` (533 lib + 196 integration),
+`cargo clippy --all-targets --all-features -- -D warnings`,
+`sh tests/packaging.sh` (8/8), `openspec validate --changes
+--strict --no-interactive`, and `git diff --check` are green. The
+ROADMAP now lists v1.5 README readiness; the README is the
+implementation surface and has no separate `docs/` commit. The
+local Gate was exercised end-to-end on a synthetic project
+(`smoke` check, `PASS (blocked: false)`). The ROADMAP planning
+queue is empty.
+
 The `gate-evidence-export` change is **implemented and archived**
 (2026-09-27): a new `driftwatch gate evidence-export` subcommand
 (`--format human|json`, `--dry-run` for documentation) reads the
@@ -423,6 +449,7 @@ Read these in order:
 | product-quality-gate-contract | archived 2026-09-24 | `product` and `rust-product` built-in profiles + stable concern IDs `product-code-boundary` and `placeholder-threshold`; versioned JSON-envelope result normalization (`PRODUCT_QUALITY_ENVELOPE_VERSION = 1`, exit-code authority rule PASS→0 / FAIL→1 / REVIEW_REQUIRED→2 / NOT_APPLICABLE→0, mismatches and malformed envelopes downgrade to REVIEW_REQUIRED); text-mode fallback for legacy commands; end-to-end coverage including persistence, `--format json`, dry-run, and optional-concern relaxation. New `src/gate/concerns.rs` (4 unit tests) + 17 new `src/gate/adapters.rs` unit tests + 15 new `tests/gate_product_quality.rs` integration tests + 5 new `src/gate/manifest.rs` unit tests. `driftwatch check` and every other Gate concern path are byte-for-byte unchanged. | gate-cli-and-memory-integration |
 | release-evidence-and-capability-gate | archived 2026-09-24 | `release` built-in profile + stable concern IDs `release-evidence` and `capability-conformance`; shared wire shape with the product-quality envelope (`RELEASE_GATE_ENVELOPE_VERSION = 1`, exit-code authority rule, bounded fields, secret redaction); release-evidence required-evidence guard (PASS requires `revision`, `product_version`, at least one `artifacts` entry, and `provenance`; stale revision vs current git rev downgrades to REVIEW_REQUIRED); capability-conformance required-evidence guard (PASS requires non-empty `verified` whose ids are all in the resolved plan; out-of-scope verified ids downgrade to REVIEW_REQUIRED); malformed/missing/wrong-version envelopes downgrade to REVIEW_REQUIRED; no text-mode fallback so missing coverage can never be silently treated as a pass. New `src/gate/concerns.rs` (6 unit tests) + 5 new `src/gate/manifest.rs` unit tests + 18 new `src/gate/adapters.rs` unit tests + 19 new `tests/gate_release_evidence.rs` integration tests. `driftwatch check` and every other Gate concern path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator (no release publisher, signer, SBOM generator, or deployment executor is added). | product-quality-gate-contract |
 | gate-evidence-export | archived 2026-09-27 | Read-only `driftwatch gate evidence-export` subcommand (`--format human|json`, `--dry-run` for documentation) that maps a completed `gate_runs` row into the workspace-governance `release_evidence` vocabulary (closed field set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed state set `verified` / `unverified` / `blocked`); per-field state priority `verified > blocked > unverified` with `verified` reserved for scheduled checks that ran and passed on the current revision; stale-revision rule emits every field `unverified` with a `stale` diagnostic naming both revisions; unknown governance field is an `ExportError::UnknownField` construction error; refuses with a non-zero exit when no run exists. New `src/gate/evidence_export.rs` (23 unit tests) + new `src/commands/evidence_export.rs` (8 unit tests) + new `tests/gate_evidence_export.rs` (11 integration tests covering ran/PASS, ran/FAIL, not-scheduled, could-not-execute, stale revision, schema, and read-only invariants). The bounded-evidence store, the release-evidence / capability-conformance adapters, the release-gate envelope wire version, the `gate_runs` schema, the `driftwatch check` path, and the `gate --format json` path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator. | release-evidence-and-capability-gate |
+| post-mvp-readiness | archived 2026-09-27 | Documentation-only README readiness pass: a checked-in terminal capture under `docs/assets/run-failure.txt` + `docs/assets/gate-run.txt` (synthetic project, no real repo data, no external image host, redacted), a consolidated built-in Gate profile and concern catalog in `README.md` (profile → stable concern IDs → default `required = true` → exit-code authority rule → text-mode fallback behaviour) sourced from `src/gate/concerns.rs` and `src/gate/manifest.rs`, and an ordered integration recipe from no manifest to a first `driftwatch gate` run (init, surface choice, profile + commands, blocking override, context providers, dry-run + run + export). The catalog and the recipe explicitly note Driftwatchdog owns the central workspace Gate (75 workspace `.ai-gate/gate.yaml` files name `runtime: driftwatchdog`). No `src/**`, concern ID, envelope, wire version, CLI surface, profile, rule, or canonical spec was changed; Driftwatchdog remains an executor/aggregator. | gate-evidence-export |
 
 ## Implementation constraints
 
@@ -437,13 +464,7 @@ Read these in order:
 
 ## Verification gates (current)
 
-Last run on this change:
-
-    cargo fmt --check
-    cargo test             # lib + integration (incl. 11 new gate_evidence_export integration, 8 new evidence_export command unit, 23 new evidence_export core unit)
-    cargo clippy --all-targets --all-features -- -D warnings
-    openspec validate --changes --strict --no-interactive   # one unselected change remains: post-mvp-readiness
-    sh tests/packaging.sh   # 8/8 pass: target_mapping, artifact_naming, checksum_manifest, installer, repo_hygiene, agent_examples, gha_templates, change_workflow
+Last run on this change (post-mvp-readiness):\n\n    cargo fmt --check\n    cargo test             # lib + integration (no test count delta; documentation-only change)\n    cargo clippy --all-targets --all-features -- -D warnings\n    openspec validate --changes --strict --no-interactive   # no active changes remain (post-mvp-readiness archived)\n    sh tests/packaging.sh   # 8/8 pass: target_mapping, artifact_naming, checksum_manifest, installer, repo_hygiene, agent_examples, gha_templates, change_workflow\n    git diff --check        # clean (no whitespace errors, no conflict markers)\n    ./target/debug/driftwatch gate                          # synthetic project, smoke check, PASS (blocked: false)\n    ./target/debug/driftwatch gate --dry-run                # resolved plan: smoke [required] via manifest\n    ./target/debug/driftwatch gate evidence-export         # 9 governance fields in human table\n    ./target/debug/driftwatch gate evidence-export --format json   # versioned EvidenceExport document\n    cat docs/assets/run-failure.txt               # 3-occurrence recurring bug, redacted\n    cat docs/assets/gate-run.txt                  # gate --dry-run + gate + gate evidence-export, redacted
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
     ./target/debug/driftwatch report                        # markdown report
