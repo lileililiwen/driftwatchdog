@@ -1,0 +1,6 @@
+services:
+  app:
+    image: busybox:1.36
+    command: ["sh", "-c", "echo deployable compose contract"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "exit 0"]

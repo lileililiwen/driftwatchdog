@@ -182,6 +182,7 @@ corrected.
 | `full` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above | yes |
 | `product` (alias `rust-product`) | `placeholder-threshold`, `product-code-boundary` | required | as above (envelope wire version `1`) | yes (legacy commands keep working) |
 | `release` | `capability-conformance`, `release-evidence` | required | as above (envelope wire version `1`, shared with the product-quality shape) | **no** (missing coverage must never silently pass) |
+| `deployable` | `ci-contract`, `compose-contract` | required | project-runtime exit status (`0`→`PASS`, non-zero→`FAIL`; missing command→`REVIEW_REQUIRED`) | yes |
 
 A profile that is not a built-in name selects exactly the concerns
 declared in the manifest (`[profiles.<name>]` in `gate.toml` or
@@ -221,6 +222,14 @@ existing required + missing-command aggregate path records
    * `[profiles.<name>]` in `gate.toml` or the `checks:` map in
      `.ai-gate/gate.yaml` declares a project-defined profile that
      selects exactly the concerns it lists.
+
+For a deployable project, copy the repository-relative starter files under
+[`templates/deployable/`](templates/deployable/). The `deployable` profile
+requires both a project-owned Compose validation command and a repeatable
+local CI command. The supplied workflow repeats the local command and
+`driftwatch gate`; remote branch protection must separately require that CI
+check. Template presence is bootstrap scaffolding, not runtime or deployment
+evidence.
 5. Add optional context providers.
    * `contexts = [git, project-files]` enables the built-in
      providers; `[openspec]` is opt-in and stays generic (no

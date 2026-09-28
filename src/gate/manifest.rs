@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::gate::aggregate::{BlockingPolicy, GatePlan, PlannedCheck};
-use crate::gate::concerns::{PRODUCT_QUALITY_CONCERNS, RELEASE_GATE_CONCERNS};
+use crate::gate::concerns::{DEPLOYABLE_CONCERNS, PRODUCT_QUALITY_CONCERNS, RELEASE_GATE_CONCERNS};
 use crate::gate::dto::GATE_CONTRACT_VERSION;
 
 /// Profile defaults. Kept as functions so the contract stays
@@ -99,6 +99,9 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
         // become a release publisher, signer, SBOM generator, or
         // deployment executor.
         "release" => Some(RELEASE_GATE_CONCERNS),
+        // Deployable projects must bind both project-owned contract commands;
+        // the profile supplies required checks but never invents commands.
+        "deployable" => Some(DEPLOYABLE_CONCERNS),
         _ => None,
     }
 }
@@ -112,6 +115,7 @@ pub const SUPPORTED_PROFILES: &[&str] = &[
     "product",
     "rust-product",
     "release",
+    "deployable",
 ];
 
 /// Resolve the default concern set for `profile` in the context of a
@@ -264,7 +268,7 @@ pub enum ManifestError {
     #[error("unknown field \"{field}\"{suggestion}")]
     UnknownField { field: String, suggestion: String },
     #[error(
-        "unsupported profile \"{profile}\"; expected a built-in (backend, frontend, full, minimal) or a `[profiles.{profile}]` declaration"
+        "unsupported profile \"{profile}\"; expected a built-in (backend, frontend, full, minimal, product, rust-product, release, deployable) or a `[profiles.{profile}]` declaration"
     )]
     UnknownProfile { profile: String },
     #[error("unsupported manifest version {got}, expected {expected}")]

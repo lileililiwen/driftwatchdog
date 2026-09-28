@@ -8,7 +8,7 @@
 //! project-runtime adapter, so the same command surface that backs
 //! every other Gate concern is reused here.
 //!
-//! Four concern IDs are registered today, organised in two vocabularies:
+//! Six concern IDs are registered today, organised in three vocabularies:
 //!
 //! ## Product-quality vocabulary
 //!
@@ -35,6 +35,13 @@
 //!   and complete; a fail or review report names the missing or
 //!   stale evidence. Driftwatchdog does not become a release
 //!   publisher, signer, SBOM generator, or deployment executor.
+//!
+//! ## Deployable-project vocabulary
+//!
+//! * `compose-contract` — a project-owned command validates the repository's
+//!   Compose contract.
+//! * `ci-contract` — a project-owned command validates the repeatable local CI
+//!   contract that remote CI invokes.
 //!
 //! ## Wire format
 //!
@@ -100,6 +107,20 @@ pub fn is_capability_conformance_concern(id: &str) -> bool {
     id == CAPABILITY_CONFORMANCE
 }
 
+/// Stable concern id: validate a deployable project's Compose contract.
+pub const COMPOSE_CONTRACT: &str = "compose-contract";
+
+/// Stable concern id: validate a deployable project's local CI contract.
+pub const CI_CONTRACT: &str = "ci-contract";
+
+/// Every deployable-project concern id, sorted for deterministic plans.
+pub const DEPLOYABLE_CONCERNS: &[&str] = &[CI_CONTRACT, COMPOSE_CONTRACT];
+
+/// True when `id` is a deployable-project concern.
+pub fn is_deployable_concern(id: &str) -> bool {
+    DEPLOYABLE_CONCERNS.contains(&id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +131,8 @@ mod tests {
         assert_eq!(PLACEHOLDER_THRESHOLD, "placeholder-threshold");
         assert_eq!(CAPABILITY_CONFORMANCE, "capability-conformance");
         assert_eq!(RELEASE_EVIDENCE, "release-evidence");
+        assert_eq!(COMPOSE_CONTRACT, "compose-contract");
+        assert_eq!(CI_CONTRACT, "ci-contract");
     }
 
     #[test]
@@ -120,6 +143,8 @@ mod tests {
         assert!(is_release_gate_concern(RELEASE_EVIDENCE));
         assert!(is_release_evidence_concern(RELEASE_EVIDENCE));
         assert!(is_capability_conformance_concern(CAPABILITY_CONFORMANCE));
+        assert!(is_deployable_concern(COMPOSE_CONTRACT));
+        assert!(is_deployable_concern(CI_CONTRACT));
     }
 
     #[test]
@@ -140,6 +165,7 @@ mod tests {
         assert!(!is_product_quality_concern(RELEASE_EVIDENCE));
         assert!(!is_release_evidence_concern(CAPABILITY_CONFORMANCE));
         assert!(!is_capability_conformance_concern(RELEASE_EVIDENCE));
+        assert!(!is_deployable_concern("docker"));
     }
 
     #[test]
@@ -147,6 +173,7 @@ mod tests {
         for (label, slice) in [
             ("product-quality", PRODUCT_QUALITY_CONCERNS),
             ("release-gate", RELEASE_GATE_CONCERNS),
+            ("deployable", DEPLOYABLE_CONCERNS),
         ] {
             let mut sorted = slice.to_vec();
             sorted.sort();

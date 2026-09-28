@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Docker Compose
+        run: docker compose version
+      - name: Install Driftwatchdog
+        run: |
+          set -eu
+          base="https://github.com/lileililiwen/driftwatchdog/releases/latest/download"
+          curl -fsSL -o install.sh "${base}/install.sh"
+          sh install.sh
+      - name: Run local CI contract
+        run: ./scripts/ci.sh
+      - name: Run mandatory Driftwatch Gate
+        run: driftwatchdog gate

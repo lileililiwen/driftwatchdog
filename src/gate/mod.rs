@@ -49,8 +49,9 @@ pub use ai::{
     MissingProviderPolicy, MAX_AI_PROMPT_BYTES, MAX_AI_RESPONSE_BYTES,
 };
 pub use concerns::{
-    is_capability_conformance_concern, is_product_quality_concern, is_release_evidence_concern,
-    is_release_gate_concern, CAPABILITY_CONFORMANCE, PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY,
+    is_capability_conformance_concern, is_deployable_concern, is_product_quality_concern,
+    is_release_evidence_concern, is_release_gate_concern, CAPABILITY_CONFORMANCE, CI_CONTRACT,
+    COMPOSE_CONTRACT, DEPLOYABLE_CONCERNS, PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY,
     PRODUCT_QUALITY_CONCERNS, RELEASE_EVIDENCE, RELEASE_GATE_CONCERNS,
 };
 pub use context::{

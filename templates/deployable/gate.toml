@@ -1,0 +1,10 @@
+version = 1
+profile = "deployable"
+
+[[checks]]
+id = "ci-contract"
+command = "./scripts/ci.sh"
+
+[[checks]]
+id = "compose-contract"
+command = "docker compose -f compose.yaml config --quiet"
