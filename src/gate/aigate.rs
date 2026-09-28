@@ -37,6 +37,7 @@ use yaml_rust2::{Yaml, YamlLoader};
 use crate::gate::dto::GATE_CONTRACT_VERSION;
 use crate::gate::manifest::{
     self, ContextDecl, GateManifest, ManifestBlocking, ManifestCheck, ManifestError,
+    SourceSizePolicy,
 };
 
 /// The runtime name this binary answers to in a `.ai-gate/gate.yaml`.
@@ -264,6 +265,10 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         contexts,
         triggers: Vec::new(),
         profiles,
+        // Business YAML manifests use the built-in default source-size
+        // policy; the native `gate.toml` `[source_size]` table is the
+        // configuration surface for a custom boundary.
+        source_size: SourceSizePolicy::default(),
     };
     manifest::validate(&gate_manifest)?;
     Ok(AiGateDoc {

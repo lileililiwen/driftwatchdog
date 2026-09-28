@@ -6,12 +6,15 @@
 //! 1. Resolve the project Gate plan from `gate.toml` (pure, no
 //!    execution). `--dry-run` stops here: the plan is printed and
 //!    nothing is persisted.
-//! 2. Execute each planned check locally. A check with a declared
-//!    `command` runs through the project-runtime text adapter (`sh -c`
-//!    over the declared string, bounded capture, timeout,
-//!    process-group kill, secret redaction); a check without a command
-//!    records `NOT_APPLICABLE` so missing coverage is explicit, never
-//!    silent. One failure never aborts the rest.
+//! 2. Execute each planned check locally. The built-in
+//!    `source-file-size` concern runs the in-process repository scanner
+//!    (raw newline counting over a Git-aware boundary, no project
+//!    command). A check with a declared `command` runs through the
+//!    project-runtime text adapter (`sh -c` over the declared string,
+//!    bounded capture, timeout, process-group kill, secret redaction); a
+//!    check without a command records `NOT_APPLICABLE` so missing
+//!    coverage is explicit, never silent. One failure never aborts the
+//!    rest.
 //! 3. When `[ai]` is enabled in `gate.toml`, one additional
 //!    `ai-review` evaluation runs through the provider-neutral AI
 //!    boundary (opt-in, redacted, bounded, fail-closed). Disabled AI
@@ -36,6 +39,7 @@ use crate::gate::aggregate::{aggregate, AggregateOutcome, GatePlan, PlannedCheck
 use crate::gate::ai::{self, AiEvalInput, AiRule};
 use crate::gate::concerns::{
     is_capability_conformance_concern, is_product_quality_concern, is_release_evidence_concern,
+    is_source_file_size_concern,
 };
 use crate::gate::manifest::{self, ResolvedGatePlan};
 use crate::gate::types::{GateResult, GateSeverity, GateStatus};
@@ -67,7 +71,7 @@ pub fn gate(args: GateArgs, cwd: &Path) -> Result<i32, Error> {
     let gate_toml =
         manifest::manifest_path(&proj.root).unwrap_or_else(|| proj.root.join("gate.toml"));
     let manifest = match manifest::load_for_runtime(&proj.root) {
-        Ok(manifest::LoadOutcome::Manifest(m)) => m,
+        Ok(manifest::LoadOutcome::Manifest(m)) => *m,
         Ok(manifest::LoadOutcome::NoManifest) => {
             println!("driftwatch gate: no gate.toml or .ai-gate/gate.yaml; nothing to gate.");
             println!("Legacy `driftwatch check` remains available for checker-only projects.");
@@ -133,7 +137,9 @@ pub fn gate(args: GateArgs, cwd: &Path) -> Result<i32, Error> {
 
 /// Execute every planned check and return results plus the effective
 /// plan (the resolved plan plus an appended `ai-review` check when AI
-/// evaluation is enabled).
+/// evaluation is enabled). The built-in `source-file-size` concern is
+/// dispatched to the in-process repository scanner; every other concern
+/// follows the command/adaptor path below.
 fn execute_plan(
     resolved: &ResolvedGatePlan,
     manifest: &manifest::GateManifest,
@@ -167,6 +173,16 @@ fn execute_plan(
         .collect();
     let mut results = Vec::with_capacity(resolved.plan.checks.len() + 1);
     for check in &resolved.plan.checks {
+        // The built-in `source-file-size` concern is executed in-process
+        // by the repository scanner; it never consults a project command
+        // and never routes through the project-runtime text adapter.
+        if is_source_file_size_concern(&check.gate_id) {
+            results.push(crate::gate::source_size::scan(
+                &proj.root,
+                &resolved.source_size,
+            ));
+            continue;
+        }
         match commands.get(check.gate_id.as_str()) {
             Some(cmd) => {
                 let input = AdapterInput {

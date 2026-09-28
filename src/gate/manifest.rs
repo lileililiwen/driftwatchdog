@@ -25,12 +25,13 @@
 //! * `frontend` — `responsive`, `a11y`, `api-contract`.
 //! * `full` — union of backend + frontend defaults.
 //! * `minimal` — no default checks; only explicit checks apply.
-//! * `product` / `rust-product` — the two product-quality concern
-//!   ids (`product-code-boundary`, `placeholder-threshold`). The
-//!   profile is data only and never invents a command; a project
-//!   that picks either profile without binding `commands.<id>`
-//!   lands on `REVIEW_REQUIRED` via the existing required +
-//!   missing-command path.
+//! * `product` / `rust-product` — the three product-quality concern
+//!   ids (`product-code-boundary`, `placeholder-threshold`,
+//!   `source-file-size`). The profile is data only and never invents a
+//!   command; a project that picks either profile without binding
+//!   `commands.<id>` lands on `REVIEW_REQUIRED` via the existing
+//!   required + missing-command path, except for `source-file-size`,
+//!   which runs the in-process scanner and needs no command at all.
 //! * `release` — the two release-gate concern ids
 //!   (`capability-conformance`, `release-evidence`). The profile is
 //!   data only; a project that picks `release` without binding
@@ -84,12 +85,13 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
             "secret-scan",
         ]),
         "minimal" => Some(&[]),
-        // Product-quality profiles select the two stable
-        // product-quality concern ids. Selection is data only and
-        // does not invent a command; a project that picks `product`
-        // (or `rust-product`) without binding `commands.<id>` lands
-        // on REVIEW_REQUIRED via the existing required +
-        // missing-command path.
+        // Product-quality profiles select the stable product-quality
+        // concern ids. Selection is data only and does not invent a
+        // command; a project that picks `product` (or `rust-product`)
+        // without binding `commands.<id>` lands on REVIEW_REQUIRED
+        // via the existing required + missing-command path. The
+        // `source-file-size` concern is the exception: it is executed
+        // by the in-process scanner and needs no command binding.
         "product" | "rust-product" => Some(PRODUCT_QUALITY_CONCERNS),
         // Release-gate profile selects the two stable release-gate
         // concern ids. The profile is data only and never invents a
@@ -173,6 +175,57 @@ pub struct GateManifest {
     /// stable.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, Vec<String>>,
+    /// Built-in `source-file-size` policy. Defaults are not serialized
+    /// so manifests that never set `[source_size]` keep a stable digest.
+    #[serde(default, skip_serializing_if = "SourceSizePolicy::is_default")]
+    pub source_size: SourceSizePolicy,
+}
+
+/// Default per-file physical-line maximum for `source-file-size`.
+pub const DEFAULT_MAX_LINES: u32 = 1000;
+/// Upper bound accepted for `[source_size] max_lines`.
+pub const MAX_MAX_LINES: u32 = 1_000_000;
+
+/// Repository source-boundary policy for the built-in `source-file-size`
+/// concern. The scanner counts raw newline bytes (`wc -l` semantics) in
+/// candidate files and fails a required Gate when one exceeds
+/// [`SourceSizePolicy::max_lines`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceSizePolicy {
+    /// Positive maximum physical lines per included file.
+    #[serde(default = "default_max_lines")]
+    pub max_lines: u32,
+    /// Repository-relative glob patterns. When non-empty, a file is a
+    /// candidate only if it matches at least one pattern.
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// Repository-relative glob patterns. Always win over `include`
+    /// and default discovery.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+impl Default for SourceSizePolicy {
+    fn default() -> Self {
+        Self {
+            max_lines: DEFAULT_MAX_LINES,
+            include: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+}
+
+impl SourceSizePolicy {
+    /// True when the policy equals the default, so the field is omitted
+    /// from the canonical manifest and existing digests stay stable.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+fn default_max_lines() -> u32 {
+    DEFAULT_MAX_LINES
 }
 
 fn default_manifest_version() -> u32 {
@@ -259,6 +312,10 @@ pub struct ResolvedGatePlan {
     /// backend profile). Kept explicit so absence is never mistaken
     /// for a silent skip.
     pub not_scheduled: Vec<String>,
+    /// Resolved built-in source-size policy (defaults when the manifest
+    /// declares no `[source_size]`). Rendered by `--dry-run` and passed
+    /// to the in-process scanner.
+    pub source_size: SourceSizePolicy,
 }
 
 /// Manifest-level errors. Every variant carries an actionable message;
@@ -281,6 +338,8 @@ pub enum ManifestError {
     InvalidProjectCommand { name: String },
     #[error("trigger for \"{include}\" has an empty `when_changed` pattern")]
     EmptyTrigger { include: String },
+    #[error("invalid [source_size] policy: {detail}")]
+    InvalidSourceSize { detail: String },
     #[error("manifest parse error: {0}")]
     Parse(String),
 }
@@ -304,6 +363,9 @@ const KNOWN_FIELDS: &[&str] = &[
     "when_changed",
     "include",
     "profiles",
+    "source_size",
+    "max_lines",
+    "exclude",
 ];
 
 pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
@@ -476,6 +538,59 @@ pub(crate) fn validate(manifest: &GateManifest) -> Result<(), ManifestError> {
             ));
         }
     }
+    validate_source_size(&manifest.source_size)?;
+    Ok(())
+}
+
+/// Validate the `[source_size]` policy before any execution: a positive
+/// maximum within range, and repository-relative glob patterns that are
+/// non-empty and free of absolute or `..` traversal components.
+fn validate_source_size(policy: &SourceSizePolicy) -> Result<(), ManifestError> {
+    if policy.max_lines == 0 {
+        return Err(ManifestError::InvalidSourceSize {
+            detail: "max_lines must be a positive integer".to_string(),
+        });
+    }
+    if policy.max_lines > MAX_MAX_LINES {
+        return Err(ManifestError::InvalidSourceSize {
+            detail: format!("max_lines must be <= {MAX_MAX_LINES}"),
+        });
+    }
+    for (label, patterns) in [("include", &policy.include), ("exclude", &policy.exclude)] {
+        for pattern in patterns {
+            validate_source_pattern(label, pattern)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_source_pattern(label: &str, pattern: &str) -> Result<(), ManifestError> {
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() {
+        return Err(ManifestError::InvalidSourceSize {
+            detail: format!("{label} contains an empty pattern"),
+        });
+    }
+    if trimmed.starts_with('/') || trimmed.starts_with('\\') {
+        return Err(ManifestError::InvalidSourceSize {
+            detail: format!("{label} pattern \"{trimmed}\" must be repository-relative"),
+        });
+    }
+    // A Windows drive prefix (`C:`) is an absolute reference in disguise.
+    let bytes: Vec<char> = trimmed.chars().collect();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == ':' {
+        return Err(ManifestError::InvalidSourceSize {
+            detail: format!("{label} pattern \"{trimmed}\" must be repository-relative"),
+        });
+    }
+    if trimmed
+        .split(['/', '\\'])
+        .any(|component| component == "..")
+    {
+        return Err(ManifestError::InvalidSourceSize {
+            detail: format!("{label} pattern \"{trimmed}\" must not traverse with `..`"),
+        });
+    }
     Ok(())
 }
 
@@ -573,6 +688,7 @@ pub fn resolve(
             .map(|c| c.provider.clone())
             .collect(),
         not_scheduled,
+        source_size: manifest.source_size.clone(),
     })
 }
 
@@ -593,6 +709,12 @@ pub fn render_plan(resolved: &ResolvedGatePlan) -> String {
         resolved.plan.policy.review_required_blocks
     ));
     out.push_str(&format!("execution mode: {}\n", resolved.execution_mode));
+    out.push_str(&format!(
+        "source_size: max_lines={} include=[{}] exclude=[{}]\n",
+        resolved.source_size.max_lines,
+        resolved.source_size.include.join(", "),
+        resolved.source_size.exclude.join(", ")
+    ));
     out.push_str("checks:\n");
     if resolved.plan.checks.is_empty() {
         out.push_str("  (none)\n");
@@ -656,7 +778,9 @@ pub enum LoadOutcome {
     ForeignRuntime {
         runtime: String,
     },
-    Manifest(GateManifest),
+    /// Boxed because the full manifest is much larger than the other
+    /// variants and is moved exactly once per gate run.
+    Manifest(Box<GateManifest>),
 }
 
 /// Read and parse the manifest at `path`, dispatching on extension:
@@ -678,7 +802,7 @@ fn read_manifest(path: &Path) -> Result<GateManifest, ManifestError> {
 /// diagnostics.
 pub fn load(project_root: &Path) -> Result<Option<GateManifest>, ManifestError> {
     match load_for_runtime(project_root)? {
-        LoadOutcome::Manifest(m) => Ok(Some(m)),
+        LoadOutcome::Manifest(m) => Ok(Some(*m)),
         LoadOutcome::NoManifest | LoadOutcome::ForeignRuntime { .. } => Ok(None),
     }
 }
@@ -703,9 +827,9 @@ pub fn load_for_runtime(project_root: &Path) -> Result<LoadOutcome, ManifestErro
                 });
             }
         }
-        return Ok(LoadOutcome::Manifest(doc.manifest));
+        return Ok(LoadOutcome::Manifest(Box::new(doc.manifest)));
     }
-    read_manifest(&path).map(LoadOutcome::Manifest)
+    read_manifest(&path).map(|m| LoadOutcome::Manifest(Box::new(m)))
 }
 
 #[cfg(test)]
@@ -876,7 +1000,7 @@ test = "cargo test"
     }
 
     #[test]
-    fn product_profile_schedules_both_product_quality_concerns() {
+    fn product_profile_schedules_all_product_quality_concerns() {
         let text = r#"
 version = 1
 profile = "product"
@@ -891,10 +1015,14 @@ profile = "product"
             .collect();
         assert_eq!(
             ids,
-            vec!["placeholder-threshold", "product-code-boundary"],
-            "product profile selects both product-quality concerns in sorted order"
+            vec![
+                "placeholder-threshold",
+                "product-code-boundary",
+                "source-file-size"
+            ],
+            "product profile selects all product-quality concerns in sorted order"
         );
-        // Both are required by default: the profile does not silently
+        // All are required by default: the profile does not silently
         // relax the threshold.
         for c in &plan.plan.checks {
             assert!(
@@ -1138,5 +1266,110 @@ enabled = false
             is_builtin_profile(name),
             "is_builtin_profile must accept `{name}`"
         );
+    }
+
+    #[test]
+    fn source_size_defaults_to_1000_lines_and_is_rendered() {
+        let m = parse("version = 1\nprofile = \"product\"\n").unwrap();
+        assert_eq!(m.source_size, SourceSizePolicy::default());
+        assert_eq!(m.source_size.max_lines, DEFAULT_MAX_LINES);
+        let plan = resolve(&m, &[]).unwrap();
+        assert_eq!(plan.source_size, SourceSizePolicy::default());
+        let text = render_plan(&plan);
+        assert!(text.contains("source_size: max_lines=1000"), "got: {text}");
+        assert!(text.contains("source-file-size"));
+    }
+
+    #[test]
+    fn source_size_policy_parses_and_changes_the_digest() {
+        let base = parse("version = 1\nprofile = \"product\"\n").unwrap();
+        let base_digest = resolve(&base, &[]).unwrap().manifest_digest;
+        let text = r#"
+version = 1
+profile = "product"
+
+[source_size]
+max_lines = 250
+include = ["src/**"]
+exclude = ["src/generated/**"]
+"#;
+        let m = parse(text).unwrap();
+        assert_eq!(m.source_size.max_lines, 250);
+        assert_eq!(m.source_size.include, vec!["src/**".to_string()]);
+        let plan = resolve(&m, &[]).unwrap();
+        assert_eq!(plan.source_size.max_lines, 250);
+        assert_ne!(
+            base_digest, plan.manifest_digest,
+            "a policy change must change the manifest digest"
+        );
+    }
+
+    #[test]
+    fn source_size_rejects_zero_and_out_of_range_max_lines() {
+        for body in [
+            "version = 1\nprofile = \"product\"\n[source_size]\nmax_lines = 0\n",
+            "version = 1\nprofile = \"product\"\n[source_size]\nmax_lines = 1000001\n",
+        ] {
+            let err = parse(body).unwrap_err();
+            assert!(
+                matches!(err, ManifestError::InvalidSourceSize { .. }),
+                "expected InvalidSourceSize, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_size_rejects_absolute_traversal_and_empty_patterns() {
+        for pattern in ["/etc/passwd", "../secrets", "", "C:/src"] {
+            let body = format!(
+                "version = 1\nprofile = \"product\"\n[source_size]\ninclude = [\"{pattern}\"]\n"
+            );
+            let err = parse(&body).unwrap_err();
+            assert!(
+                matches!(err, ManifestError::InvalidSourceSize { .. }),
+                "pattern {pattern:?} should be rejected, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_size_unknown_field_is_rejected_with_hint() {
+        let err = parse("version = 1\nprofile = \"product\"\n[source_size]\nmax_line = 10\n")
+            .unwrap_err();
+        match err {
+            ManifestError::UnknownField { field, suggestion } => {
+                assert_eq!(field, "max_line");
+                assert!(suggestion.contains("max_lines"), "got: {suggestion}");
+            }
+            other => panic!("unexpected: {other}"),
+        }
+    }
+
+    #[test]
+    fn source_file_size_can_be_relaxed_or_disabled() {
+        let relaxed = parse(
+            "version = 1\nprofile = \"product\"\n[[checks]]\nid = \"source-file-size\"\nrequired = false\n",
+        )
+        .unwrap();
+        let plan = resolve(&relaxed, &[]).unwrap();
+        let check = plan
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "source-file-size")
+            .unwrap();
+        assert!(!check.required);
+
+        let disabled = parse(
+            "version = 1\nprofile = \"product\"\n[[checks]]\nid = \"source-file-size\"\nenabled = false\n",
+        )
+        .unwrap();
+        let plan = resolve(&disabled, &[]).unwrap();
+        assert!(!plan
+            .plan
+            .checks
+            .iter()
+            .any(|c| c.gate_id == "source-file-size"));
+        assert!(plan.not_scheduled.contains(&"source-file-size".to_string()));
     }
 }

@@ -20,7 +20,9 @@
 //! provider-neutral semantic evaluation contract (opt-in, redacted,
 //! bounded, fail-closed) without embedding an LLM; [`aigate`] converts a
 //! business project's `.ai-gate/gate.yaml` policy into the same native
-//! manifest so the shared pipeline executes it unchanged.
+//! manifest so the shared pipeline executes it unchanged; [`source_size`]
+//! owns the built-in `source-file-size` scanner (raw `wc -l` counting over
+//! a Git-aware repository boundary, no language parsing).
 //!
 //! No OpenSpec types appear here. No tool is installed implicitly, no
 //! network call is made, and no LLM is invoked.
@@ -37,6 +39,7 @@ pub mod evidence;
 pub mod evidence_export;
 pub mod manifest;
 pub mod redact;
+pub mod source_size;
 pub mod toolchain;
 pub mod types;
 
@@ -50,9 +53,10 @@ pub use ai::{
 };
 pub use concerns::{
     is_capability_conformance_concern, is_deployable_concern, is_product_quality_concern,
-    is_release_evidence_concern, is_release_gate_concern, CAPABILITY_CONFORMANCE, CI_CONTRACT,
-    COMPOSE_CONTRACT, DEPLOYABLE_CONCERNS, PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY,
-    PRODUCT_QUALITY_CONCERNS, RELEASE_EVIDENCE, RELEASE_GATE_CONCERNS,
+    is_release_evidence_concern, is_release_gate_concern, is_source_file_size_concern,
+    CAPABILITY_CONFORMANCE, CI_CONTRACT, COMPOSE_CONTRACT, DEPLOYABLE_CONCERNS,
+    PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY, PRODUCT_QUALITY_CONCERNS, RELEASE_EVIDENCE,
+    RELEASE_GATE_CONCERNS, SOURCE_FILE_SIZE,
 };
 pub use context::{
     collect_context, context_checks, selection_from_manifest, ContextBundle, ContextDocument,
@@ -80,6 +84,7 @@ pub use manifest::{
     load as load_gate_manifest, load_for_runtime as load_gate_manifest_for_runtime,
     manifest_path as gate_manifest_path, parse as parse_gate_manifest,
     render_plan as render_gate_plan, resolve as resolve_gate_manifest, LoadOutcome,
+    SourceSizePolicy, DEFAULT_MAX_LINES, MAX_MAX_LINES,
 };
 pub use redact::{
     bound_text_with_extra, bounded_diagnostic, redact_secrets, redact_secrets_with_extra,

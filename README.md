@@ -180,7 +180,7 @@ corrected.
 | `backend` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above (project-runtime text adapter) | yes (project-runtime `exit 0 → PASS`, `nonzero → FAIL`) |
 | `frontend` | `a11y`, `responsive`, `secret-scan` | required | as above | yes |
 | `full` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above | yes |
-| `product` (alias `rust-product`) | `placeholder-threshold`, `product-code-boundary` | required | as above (envelope wire version `1`) | yes (legacy commands keep working) |
+| `product` (alias `rust-product`) | `placeholder-threshold`, `product-code-boundary`, `source-file-size` (built-in, no command) | required | envelope wire version `1` for the two project-owned concerns; in-process normalized result for the built-in scanner | yes for the project-owned concerns; n/a for the built-in scanner |
 | `release` | `capability-conformance`, `release-evidence` | required | as above (envelope wire version `1`, shared with the product-quality shape) | **no** (missing coverage must never silently pass) |
 | `deployable` | `ci-contract`, `compose-contract` | required | project-runtime exit status (`0`→`PASS`, non-zero→`FAIL`; missing command→`REVIEW_REQUIRED`) | yes |
 
@@ -501,16 +501,20 @@ configured. CI templates repeat the same command as a second layer.
 
 ### Product-quality Gate contract
 
-Two built-in profiles, `product` and `rust-product`, schedule the
-`product-code-boundary` and `placeholder-threshold` concerns. The
-profiles are aliases: `rust-product` exists for projects that want a
-Rust-flavored name without changing the concern set. Both concerns are
-required by default; relax an individual concern to `required = false`
-when a project cannot bind a command yet.
+The `product` and `rust-product` built-in profiles schedule three
+concerns: `product-code-boundary`, `placeholder-threshold`, and the
+built-in `source-file-size`. The profiles are aliases: `rust-product`
+exists for projects that want a Rust-flavored name without changing the
+concern set. All three are required by default; relax an individual
+concern to `required = false`, or remove it with `enabled = false`, when
+a project cannot meet it yet.
 
-The concerns are data only: Driftwatchdog never embeds a language
-scanner, runs a provider SDK, or installs a tool. The project binds a
-command to each concern in `gate.toml` (or `.ai-gate/gate.yaml`):
+`product-code-boundary` and `placeholder-threshold` are data only:
+Driftwatchdog never embeds a language scanner, runs a provider SDK, or
+installs a tool for them. The project binds a command to each concern in
+`gate.toml` (or `.ai-gate/gate.yaml`). `source-file-size` is different:
+it is executed in-process by Driftwatchdog and needs no project command
+(see [Source-file-size Gate concern](#source-file-size-gate-concern)).
 
 ```toml
 version = 1
@@ -573,6 +577,69 @@ using the same limits the rest of the Gate contract applies
 oversized producer cannot break the Gate's output invariants. The
 `rust-product` profile is a strict alias for `product`; the two names
 select the same concerns with the same default severity model.
+
+### Source-file-size Gate concern
+
+`source-file-size` is a **built-in** concern: the `product` and
+`rust-product` profiles schedule it by default, and Driftwatchdog scans
+the repository in-process without a `commands.source-file-size`
+binding. It counts each `0x0A` byte in every included file — exactly the
+observable `wc -l` rule, so a final line without a trailing newline does
+not increment the count. It does not remove blank lines, comments, or
+strings, and it never parses a language.
+
+By default a file must contain at most **1,000** physical lines. A
+required Gate **fails** when any included file exceeds the maximum; the
+finding names the repository-relative path, the counted lines, and the
+limit:
+
+```text
+title    = "<relative path> has <actual> physical lines; maximum is <limit>"
+severity = error
+location = <relative path>
+rule     = "source-file-size"
+```
+
+The scanner resolves a repository-owned source boundary:
+
+* In a Git repository, candidates come from
+  `git ls-files --cached --others --exclude-standard`, so `.gitignore`
+  excludes untracked dependency/build content while tracked files stay
+  visible for review.
+* In a non-Git directory, Driftwatchdog walks the project root without
+  following symlinks and applies a root `.gitignore` when present.
+* Dependency, vendor, build, state, coverage, generated, and test
+  directories (`node_modules`, `target`, `vendor`, `dist`, `build`,
+  `coverage`, `test`, `tests`, …) are excluded by default.
+* With no explicit `include`, conventional source roots (`src`, `app`,
+  `lib`, `bin`, `cmd`, `internal`, `packages`, `server`, `client`) are
+  discovered. Root READMEs, lockfiles, and arbitrary metadata are not
+  source findings.
+* Symlinks are not followed; binary or invalid-UTF-8 files (NUL bytes)
+  are skipped as non-source and never fail the Gate.
+* A Git-boundary, ignore-evaluation, path, or candidate-read failure
+  returns `REVIEW_REQUIRED` with bounded missing-evidence fields. When a
+  required concern blocks, incomplete coverage never becomes a pass.
+
+Tighten or relax the boundary and threshold with a top-level
+`[source_size]` table in `gate.toml`:
+
+```toml
+version = 1
+profile = "product"
+
+[source_size]
+max_lines = 800                          # positive, <= 1_000_000
+include = ["packages/service/**"]        # repository-relative globs
+exclude = ["packages/service/legacy/**"] # always wins over include
+```
+
+`include` and `exclude` use `/`-separated repository-relative globs;
+absolute patterns, `..` traversal, and empty patterns are rejected before
+execution. A policy change (`max_lines`, `include`, or `exclude`) changes
+the manifest digest. The `.ai-gate/gate.yaml` form uses the built-in
+default policy; the native `[source_size]` table is the custom-boundary
+surface.
 
 ### Release-evidence and capability-conformance Gate contract
 

@@ -8,7 +8,7 @@
 //! project-runtime adapter, so the same command surface that backs
 //! every other Gate concern is reused here.
 //!
-//! Six concern IDs are registered today, organised in three vocabularies:
+//! Seven concern IDs are registered today, organised in three vocabularies:
 //!
 //! ## Product-quality vocabulary
 //!
@@ -20,6 +20,12 @@
 //!   threshold on placeholder debt (TODO/FIXME density, missing
 //!   implementations, etc.). A pass report keeps the threshold; a
 //!   fail/review report names the offending surface in the findings.
+//! * `source-file-size` — a **built-in** concern (no project command):
+//!   Driftwatchdog discovers repository-owned source files, counts raw
+//!   newline bytes like `wc -l`, and fails a required Gate when an
+//!   included file exceeds the configured (default 1,000) physical-line
+//!   maximum. The scanner lives in [`crate::gate::source_size`] and
+//!   never parses a language.
 //!
 //! ## Release-gate vocabulary
 //!
@@ -61,15 +67,32 @@ pub const PRODUCT_CODE_BOUNDARY: &str = "product-code-boundary";
 /// debt. Bound to a project-owned checker command.
 pub const PLACEHOLDER_THRESHOLD: &str = "placeholder-threshold";
 
+/// Stable concern id: enforce a per-file source-size boundary. This is
+/// a **built-in** concern executed by [`crate::gate::source_size`]; it
+/// does not require a project command and counts raw newline bytes,
+/// never parsing a language.
+pub const SOURCE_FILE_SIZE: &str = "source-file-size";
+
 /// Every product-quality concern id the Gate recognises. The list is
 /// sorted so iteration and diagnostic output stay deterministic.
-pub const PRODUCT_QUALITY_CONCERNS: &[&str] = &[PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY];
+pub const PRODUCT_QUALITY_CONCERNS: &[&str] = &[
+    PLACEHOLDER_THRESHOLD,
+    PRODUCT_CODE_BOUNDARY,
+    SOURCE_FILE_SIZE,
+];
 
 /// True when `id` is a recognised product-quality concern id. The
 /// check is exact (no fuzzy match): the vocabulary is closed and
 /// projects that want other ids use the existing `[[checks]]` table.
 pub fn is_product_quality_concern(id: &str) -> bool {
     PRODUCT_QUALITY_CONCERNS.contains(&id)
+}
+
+/// True when `id` is the built-in `source-file-size` concern id. The
+/// scanner is dispatched in-process; it never consumes a project
+/// command.
+pub fn is_source_file_size_concern(id: &str) -> bool {
+    id == SOURCE_FILE_SIZE
 }
 
 /// Stable concern id: verify a project-owned capability-conformance
@@ -129,6 +152,7 @@ mod tests {
     fn concern_ids_are_stable_strings() {
         assert_eq!(PRODUCT_CODE_BOUNDARY, "product-code-boundary");
         assert_eq!(PLACEHOLDER_THRESHOLD, "placeholder-threshold");
+        assert_eq!(SOURCE_FILE_SIZE, "source-file-size");
         assert_eq!(CAPABILITY_CONFORMANCE, "capability-conformance");
         assert_eq!(RELEASE_EVIDENCE, "release-evidence");
         assert_eq!(COMPOSE_CONTRACT, "compose-contract");
@@ -139,6 +163,8 @@ mod tests {
     fn vocabulary_recognises_known_ids() {
         assert!(is_product_quality_concern(PRODUCT_CODE_BOUNDARY));
         assert!(is_product_quality_concern(PLACEHOLDER_THRESHOLD));
+        assert!(is_product_quality_concern(SOURCE_FILE_SIZE));
+        assert!(is_source_file_size_concern(SOURCE_FILE_SIZE));
         assert!(is_release_gate_concern(CAPABILITY_CONFORMANCE));
         assert!(is_release_gate_concern(RELEASE_EVIDENCE));
         assert!(is_release_evidence_concern(RELEASE_EVIDENCE));
@@ -154,6 +180,8 @@ mod tests {
         assert!(!is_product_quality_concern("a11y"));
         assert!(!is_product_quality_concern("PRODUCT_CODE_BOUNDARY"));
         assert!(!is_product_quality_concern("product-code-boundary "));
+        assert!(!is_source_file_size_concern(PRODUCT_CODE_BOUNDARY));
+        assert!(!is_source_file_size_concern("SOURCE_FILE_SIZE"));
         assert!(!is_release_gate_concern(""));
         assert!(!is_release_gate_concern("api-contract"));
         assert!(!is_release_gate_concern("RELEASE_EVIDENCE"));
