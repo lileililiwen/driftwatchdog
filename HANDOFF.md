@@ -14,6 +14,54 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+The `installer-stdout-purity` change is implemented and **deliberately not
+archived** (it carries an open dependency recorded elsewhere). The shell
+installer's stdout is a contract: exactly one line on success, the absolute path
+of the installed executable, and **nothing at all on failure** — every progress
+and diagnostic line already carried an explicit `>&2`. Two cleanup deletes
+could append to that contract. The `EXIT` trap at `scripts/install.sh` (the
+work-directory removal) fires *after* the final `printf`, and the staged-binary
+cleanup further down redirected stderr but not stdout. On a host whose `rm` is a
+wrapper that reports what it removed on **stdout** — a recoverable-delete shim,
+an audit wrapper, a sandbox filesystem — `$( install.sh ... )` captured two
+lines and `tests/packaging/test_installer.sh:21` failed. This is the "the one
+packaging failure" that the `gate-unbound-check-fails` verification record at
+the end of this file notes; it is now genuinely fixed rather than annotated
+around.
+
+Both sites now redirect stdout. The trap keeps its **stderr** channel on
+purpose, so a real "could not remove the work directory" is still visible, and
+gains `|| true` so a delete wrapper that fails cannot turn a successful install
+into a non-zero exit (an `EXIT` trap's last status can become the script's in
+some `sh` implementations). The staged-binary cleanup keeps the stderr redirect
+it already had. Nothing else changed: not the installer's stderr text, not
+`--dry-run`, not exit codes (`--bogus` still 64, unsupported host still
+non-zero), not checksum verification, and not the stage-then-rename atomic
+install. The install path is `scripts/install.sh` plus the two helpers it
+sources, `scripts/lib/platform.sh` and `scripts/lib/release.sh`; the sweep found
+those helpers contain no delete at all. `scripts/package.sh` and
+`scripts/smoke.sh` also delete, but they are not the install path and publish no
+machine-readable stdout (`smoke.sh` discards the installer's stdout entirely), so
+they are left alone by design rather than overlooked.
+
+`tests/packaging/test_installer_stdout.sh` is the regression test, and it is
+built so that a plain "stdout is one line" assertion is not the thing doing the
+work — that assertion is green before the fix on any stock machine. The test
+instead controls the environment: a deliberately chatty `rm` (prints its
+arguments to stdout, deletes nothing) and, for the failure path, an `mv` that
+fails from its second call — which is the final move into place, and therefore
+what reaches the staged-binary cleanup — are prepended to the installer's
+`PATH`. Each shim also logs its invocations to a file, which is how the test
+proves *each cleanup site was actually reached* without constraining which
+stream the installer redirects. Verified failing before the fix and at each
+site independently: with both sites reverted the happy-path scenario reports
+`stdout must be exactly 1 line, got 2`; with only the staged-binary site
+reverted the failure-path scenario reports the leaked
+`shim: rm -f …/.driftwatchdog.install.<pid>`. `test_installer.sh` keeps all of
+its assertions and gained the line-count check *ahead of* the path equality, so
+a correct-looking first line with trailing garbage is caught; nothing was
+weakened, skipped, or deleted to reach green.
+
 The `bind-governance-quality-checks` change is implemented (not yet
 archived). The `product` and `rust-product` profiles now schedule a
 fourth concern, `governance-quality`, served by the code-scoped adapter
@@ -573,6 +621,7 @@ Read these in order:
 | release-evidence-and-capability-gate | archived 2026-09-24 | `release` built-in profile + stable concern IDs `release-evidence` and `capability-conformance`; shared wire shape with the product-quality envelope (`RELEASE_GATE_ENVELOPE_VERSION = 1`, exit-code authority rule, bounded fields, secret redaction); release-evidence required-evidence guard (PASS requires `revision`, `product_version`, at least one `artifacts` entry, and `provenance`; stale revision vs current git rev downgrades to REVIEW_REQUIRED); capability-conformance required-evidence guard (PASS requires non-empty `verified` whose ids are all in the resolved plan; out-of-scope verified ids downgrade to REVIEW_REQUIRED); malformed/missing/wrong-version envelopes downgrade to REVIEW_REQUIRED; no text-mode fallback so missing coverage can never be silently treated as a pass. New `src/gate/concerns.rs` (6 unit tests) + 5 new `src/gate/manifest.rs` unit tests + 18 new `src/gate/adapters.rs` unit tests + 19 new `tests/gate_release_evidence.rs` integration tests. `driftwatch check` and every other Gate concern path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator (no release publisher, signer, SBOM generator, or deployment executor is added). | product-quality-gate-contract |
 | gate-evidence-export | archived 2026-09-27 | Read-only `driftwatch gate evidence-export` subcommand (`--format human|json`, `--dry-run` for documentation) that maps a completed `gate_runs` row into the workspace-governance `release_evidence` vocabulary (closed field set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed state set `verified` / `unverified` / `blocked`); per-field state priority `verified > blocked > unverified` with `verified` reserved for scheduled checks that ran and passed on the current revision; stale-revision rule emits every field `unverified` with a `stale` diagnostic naming both revisions; unknown governance field is an `ExportError::UnknownField` construction error; refuses with a non-zero exit when no run exists. New `src/gate/evidence_export.rs` (23 unit tests) + new `src/commands/evidence_export.rs` (8 unit tests) + new `tests/gate_evidence_export.rs` (11 integration tests covering ran/PASS, ran/FAIL, not-scheduled, could-not-execute, stale revision, schema, and read-only invariants). The bounded-evidence store, the release-evidence / capability-conformance adapters, the release-gate envelope wire version, the `gate_runs` schema, the `driftwatch check` path, and the `gate --format json` path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator. | release-evidence-and-capability-gate |
 | post-mvp-readiness | archived 2026-09-27 | Documentation-only README readiness pass: a checked-in terminal capture under `docs/assets/run-failure.txt` + `docs/assets/gate-run.txt` (synthetic project, no real repo data, no external image host, redacted), a consolidated built-in Gate profile and concern catalog in `README.md` (profile → stable concern IDs → default `required = true` → exit-code authority rule → text-mode fallback behaviour) sourced from `src/gate/concerns.rs` and `src/gate/manifest.rs`, and an ordered integration recipe from no manifest to a first `driftwatch gate` run (init, surface choice, profile + commands, blocking override, context providers, dry-run + run + export). The catalog and the recipe explicitly note Driftwatchdog owns the central workspace Gate (75 workspace `.ai-gate/gate.yaml` files name `runtime: driftwatchdog`). No `src/**`, concern ID, envelope, wire version, CLI surface, profile, rule, or canonical spec was changed; Driftwatchdog remains an executor/aggregator. | gate-evidence-export |
+| installer-stdout-purity | implemented 2026-10-03, NOT archived (open dependency recorded elsewhere) | The shell installer's stdout is a contract: exactly one line on success (the installed path) and nothing on failure. Two cleanup deletes could append to it — the `EXIT` trap that removes the work directory (fires *after* the final `printf`) and the staged-binary cleanup further down (redirected stderr but not stdout). On a host whose `rm` is a wrapper that reports what it removed on stdout, `$( install.sh ... )` captured two lines and `test_installer.sh:21` failed. Both sites now redirect stdout; the trap keeps its stderr channel so a real cleanup failure is still visible and gains `|| true` so a failing delete cannot become a failed install. Regression test `tests/packaging/test_installer_stdout.sh` puts a chatty `rm` (and a second-call-failing `mv` for the failure path) on the installer's PATH so the defect reproduces on every host, and asserts one-line/empty stdout plus that each cleanup site was reached. Installer stderr, `--dry-run`, exit codes, checksum verification, and the atomic install are unchanged. | bind-governance-quality-checks (recorded dependency only) |
 | source-file-size-gate | archived 2026-09-28 | Built-in `source-file-size` concern scheduled by the `product`/`rust-product` profiles and executed in-process by a new `src/gate/source_size.rs` scanner (no project command, no language parsing). It resolves a repository-owned source boundary (Git: `git ls-files --cached --others --exclude-standard`; non-Git: symlink-free walk with root `.gitignore`), applies default dependency/build/vendor/state/generated/test exclusions plus conventional source roots, honors repository-relative `include`/`exclude` glob overrides (exclude wins), skips symlinks and binary/invalid-UTF-8 files, and counts raw `0x0A` bytes (`wc -l` semantics) per file. A required concern returns `FAIL` with one bounded finding per file above the default 1,000-line maximum; boundary/read uncertainty returns `REVIEW_REQUIRED`, so incomplete coverage never becomes a pass. A strict `[source_size]` manifest table (`max_lines` positive and <= 1,000,000; `include`/`exclude` repository-relative, non-empty, no absolute/`..` patterns) is validated before execution and participates in the manifest digest; `.ai-gate/gate.yaml` uses the built-in default. `--dry-run` renders `source_size: max_lines=... include=[...] exclude=[...]` without scanning or persisting. New `src/gate/source_size.rs` (18 unit tests) + `tests/gate_source_file_size.rs` (13 integration tests) + `concerns.rs`/`manifest.rs`/`mod.rs`/`aigate.rs`/`commands/gate.rs` updates. `driftwatch check`, every other concern path, the CLI surface, and the SQLite schema are unchanged. | product-quality-gate-contract |
 
 ## Implementation constraints
@@ -588,7 +637,7 @@ Read these in order:
 
 ## Verification gates (current)
 
-Last run on this change (source-file-size-gate):\n\n    cargo fmt --check\n    cargo test             # lib (557) + integration incl. 13 new tests/gate_source_file_size.rs tests\n    cargo clippy --all-targets --all-features -- -D warnings\n    openspec validate --changes --strict --no-interactive   # no active changes remain (source-file-size-gate archived)\n    sh tests/packaging.sh   # 10/10 pass: target_mapping, artifact_naming, checksum_manifest, deployable_templates, installer, repo_hygiene, agent_examples, gha_templates, openspec_change_names, change_workflow\n    git diff --check        # clean (no whitespace errors, no conflict markers)\n    ./target/debug/driftwatch gate                          # synthetic project, smoke check, PASS (blocked: false)\n    ./target/debug/driftwatch gate --dry-run                # resolved plan: smoke [required] via manifest\n    ./target/debug/driftwatch gate evidence-export         # 9 governance fields in human table\n    ./target/debug/driftwatch gate evidence-export --format json   # versioned EvidenceExport document\n    cat docs/assets/run-failure.txt               # 3-occurrence recurring bug, redacted\n    cat docs/assets/gate-run.txt                  # gate --dry-run + gate + gate evidence-export, redacted
+Last run on this change (installer-stdout-purity), 2026-10-03:\n\n    cargo fmt --check                                   # clean, exit 0\n    cargo test                                          # 869 passed, 0 failed across 28 suites, exit 0\n                                                      #   packaging_bash_and_node_suites_pass: 1 passed, 0 failed (was 0 passed, 1 failed)\n                                                      #   lib 623; then 32/12/6/10/7/3/13/14/11/15/19/13/15/7/2/5/6/15; then packaging 1;\n                                                      #   then 3/11/7/7/8/4/0. The 41-test delta from the 828/1 baseline is\n                                                      #   the newly-passing packaging test plus the seven suites cargo had\n                                                      #   skipped by aborting at that binary — no new Rust tests.\n    cargo clippy --all-targets --all-features -- -D warnings   # clean, exit 0\n    openspec validate installer-stdout-purity --strict # "Change 'installer-stdout-purity' is valid"\n    openspec validate --changes --strict --no-interactive  # 3 passed, 0 failed (3 items)\n    sh tests/packaging/run_all.sh                      # 11/11 bash sub-suites ok (was 10/10 with installer failing) + Node 11/11\n    git diff --check                                   # clean, exit 0\n\n    Note: `openspec list --changes --strict` is NOT a valid invocation on the pinned\n    CLI (v1.6.0) — it exits 1 with `unknown option '--strict' (Did you mean --sort?)`.\n    Use `openspec list --changes`, or the strict `openspec validate --changes --strict`.\n\nEarlier run on source-file-size-gate:\n\n    cargo fmt --check\n    cargo test             # lib (557) + integration incl. 13 new tests/gate_source_file_size.rs tests\n    cargo clippy --all-targets --all-features -- -D warnings\n    openspec validate --changes --strict --no-interactive   # no active changes remain (source-file-size-gate archived)\n    sh tests/packaging.sh   # 10/10 pass: target_mapping, artifact_naming, checksum_manifest, deployable_templates, installer, repo_hygiene, agent_examples, gha_templates, openspec_change_names, change_workflow\n    git diff --check        # clean (no whitespace errors, no conflict markers)\n    ./target/debug/driftwatch gate                          # synthetic project, smoke check, PASS (blocked: false)\n    ./target/debug/driftwatch gate --dry-run                # resolved plan: smoke [required] via manifest\n    ./target/debug/driftwatch gate evidence-export         # 9 governance fields in human table\n    ./target/debug/driftwatch gate evidence-export --format json   # versioned EvidenceExport document\n    cat docs/assets/run-failure.txt               # 3-occurrence recurring bug, redacted\n    cat docs/assets/gate-run.txt                  # gate --dry-run + gate + gate evidence-export, redacted
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
     ./target/debug/driftwatch report                        # markdown report
@@ -666,7 +715,7 @@ Last run on this change (source-file-size-gate):\n\n    cargo fmt --check\n    c
 - `scripts/lib/{config,version,platform,release}.sh` — shared packaging helpers: target matrix, version source (Cargo.toml), host detection, and URL construction.
 - `scripts/package.sh` — reproducible per-target release builder (`cargo build --release --locked`, then archive).
 - `scripts/checksum.sh` — deterministic SHA-256 manifest generator from the final archives.
-- `scripts/install.sh` — POSIX shell installer: strict mode, `--version`/`--dest`/`--allow-root`/`--dry-run` (early exit, no network), mandatory SHA-256 verification, HTTPS download, `cargo install` fallback on unsupported hosts, atomic install into a user-writable default.
+- `scripts/install.sh` — POSIX shell installer: strict mode, `--version`/`--dest`/`--allow-root`/`--dry-run` (early exit, no network), mandatory SHA-256 verification, HTTPS download, `cargo install` fallback on unsupported hosts, atomic install into a user-writable default. stdout contract: exactly one line on success (the installed path) and nothing on failure — all progress and diagnostic lines carry an explicit `>&2`, and **every cleanup delete redirects stdout** (the work-dir `EXIT` trap and the staged-binary cleanup), so nothing an external command prints can reach a caller's `$( )` capture.
 - `scripts/bump.sh` — conventional-commit bump heuristic with cold-start at `0.1.0`.
 - `npm/driftwatchdog/scripts/install-guard.js` — preinstall preflight failing fast on unsupported hosts (incl. darwin-arm64).
 - `scripts/smoke.sh` — opt-in local release smoke test that drives the installer against a hand-built fixture.
@@ -676,7 +725,8 @@ Last run on this change (source-file-size-gate):\n\n    cargo fmt --check\n    c
 - `npm/driftwatchdog/lib/release.js` — npm-side `releaseUrls`, mirrors `scripts/lib/release.sh`.
 - `npm/driftwatchdog/lib/verify.js` — dependency-free HTTP, SHA-256, manifest parser, and tar.gz extractor (with path-traversal safety).
 - `npm/driftwatchdog/test/launcher.test.js` — `node:test` suite covering supported/unsupported hosts, verification, round-trip exec, cache reuse, and traversal rejection.
-- `tests/packaging.sh` + `tests/packaging/{test_*.sh,fixture.sh}` — bash packaging tests (target mapping, artifact naming, checksum manifest, installer, repo hygiene, agent examples) and shared fixture.
+- `tests/packaging.sh` + `tests/packaging/{test_*.sh,fixture.sh}` — bash packaging tests (target mapping, artifact naming, checksum manifest, installer, installer stdout purity, repo hygiene, agent examples) and shared fixture.
+- `tests/packaging/test_installer_stdout.sh` — `installer-stdout-purity` regression test. Prepends a chatty non-deleting `rm` shim (and, for the failure path, an `mv` that fails from its second call) to the installer's `PATH`, so the stdout leak reproduces on every host rather than only where `rm` happens to be noisy. Asserts the happy path's stdout is exactly one line equal to the installed path and the failure path's is empty, and that each cleanup site was actually reached via the shims' invocation log. Auto-picked by `tests/packaging.sh`; never invokes a delete.
 - `tests/packaging/test_change_workflow.sh` — `bfs-dfs-bfs-change-workflow` authoring check: phase order, per-phase checkboxes, final-BFS verification, spec Scenarios, negative missing-DFS fixture; auto-picked by `tests/packaging.sh`.- `tests/packaging/run_all.sh` + `tests/packaging.rs` — combined bash+node runner and a Rust integration test that invokes it from `cargo test`.
 - `tests/packaging/test_agent_examples.sh` — `agent-examples` consistency test: every `examples/*/mcp.json` parses, declares a stdio server with `driftwatch` + `mcp`, and every `driftwatch <sub>` token in `workflow.md` exists in `driftwatchdog --help`; no `run`/`check` is allowed as an agent step. Auto-picked by `tests/packaging.sh`.
 - `tests/packaging/test_gha_templates.sh` — `github-actions-templates` shape test: triggers (`workflow_call` + `workflow_dispatch`), installer base URL matches the release repository in `scripts/lib/release.sh`, `driftwatch check` + `report --ai` + step summary + upload-artifact anchors present, upload `path:` is `drift.md` (never `state.db` or anything under `.driftwatch/`), `fail_on_drift` documented in both files, `contents: read` set; embedded `run:` blocks pass `shellcheck -S error` when the tool is available (soft-skip otherwise). Auto-picked by `tests/packaging.sh`.
@@ -694,6 +744,18 @@ Last run on this change (source-file-size-gate):\n\n    cargo fmt --check\n    c
 OpenSpec Codex skill generation initially hit a read-only sandbox directory. The integration was regenerated successfully in the writable host checkout with `openspec init --tools codex --force` and `openspec update --force`. Restart the IDE if slash commands are not visible.
 
 ## Next action
+
+**`installer-stdout-purity` is implemented and must stay unarchived.** Every
+box in its `tasks.md` is checked and the full suite is green, but it carries an
+open dependency recorded elsewhere, so do not run `openspec archive` on it until
+that dependency is resolved. It is the change that made the last failing test in
+this repository pass: `packaging_bash_and_node_suites_pass` was
+`0 passed; 1 failed` (the `installer` sub-suite, caused by the `EXIT` trap
+leaking a delete notice into the installer's machine-readable stdout) and is now
+`1 passed; 0 failed`, with `cargo test` at 869 passed / 0 failed. The
+`gate-unbound-check-fails` verification record at the end of this file still
+describes that failure as pre-existing and unrelated; it is now fixed, and the
+Current state section above supersedes it.
 
 **v0.6 (Integrate) is complete.** All three v0.6 change packages
 (`mcp-read-tools`, `agent-examples`, `github-actions-templates`) are
