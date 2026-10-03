@@ -529,9 +529,14 @@ pub fn run_governance_quality_adapter(
     // because the command's own exit (recorded above) is not the one
     // that maps to it.
     let expected_exit = expected_exit_for_status(status).unwrap_or(1);
+    // The unmatched count is every finding the checker reported that this
+    // concern did not own, not a count of this concern's own codes: a
+    // fleet-wide run reports every code the workspace configures, so
+    // describing the remainder as "this concern's codes" would name codes
+    // the concern never declared and cannot act on.
     let diagnostic = format!(
         "{} of {} governance findings matched this concern's scope ({error_count} error, \
-         {warning_count} warning, {} of this concern's codes outside the scope or unrecognised); \
+         {warning_count} warning, {} reported by other codes and left to the governance audit); \
          checker exit {exit} is expected for this run and does not set the status, which maps to \
          exit {expected_exit}",
         matched.len(),
