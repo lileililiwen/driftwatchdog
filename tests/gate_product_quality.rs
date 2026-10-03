@@ -245,7 +245,13 @@ command = "cat {envelope} ; exit 0"
     let run = latest_run(&tmp);
     assert_eq!(run.status, "PASS");
     assert!(!run.blocked);
-    assert!(run.results_json.contains("NOT_APPLICABLE"));
+    // An optional concern with no bound command is recorded as `UNBOUND`
+    // with the aggregate's `optional:` marker, never as the
+    // `NOT_APPLICABLE` a required concern must not use either: nothing
+    // ran, and the record says so.
+    assert!(run.results_json.contains("UNBOUND"));
+    assert!(!run.results_json.contains("NOT_APPLICABLE"));
+    assert!(run.results_json.contains("optional:placeholder-threshold"));
 }
 
 #[test]

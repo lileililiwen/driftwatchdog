@@ -81,10 +81,12 @@ pub use evidence_export::{
     FieldExport, EVIDENCE_EXPORT_SCHEMA_VERSION, GOVERNANCE_FIELDS, GOVERNANCE_STATES,
 };
 pub use manifest::{
+    exemption_cap as gate_exemption_cap, is_non_exempable_concern as is_non_exempable_gate_concern,
     load as load_gate_manifest, load_for_runtime as load_gate_manifest_for_runtime,
     manifest_path as gate_manifest_path, parse as parse_gate_manifest,
-    render_plan as render_gate_plan, resolve as resolve_gate_manifest, LoadOutcome,
-    SourceSizePolicy, DEFAULT_MAX_LINES, MAX_MAX_LINES,
+    render_plan as render_gate_plan, resolve as resolve_gate_manifest, ExemptionBudget,
+    ExemptionVerdict, LoadOutcome, SourceSizePolicy, DEFAULT_MAX_LINES, EXEMPTION_BUDGET_CHECK,
+    MAX_EXEMPTION_CAP, MAX_MAX_LINES, NON_EXEMPTABLE_ALIASES, NON_EXEMPTABLE_CONCERNS,
 };
 pub use redact::{
     bound_text_with_extra, bounded_diagnostic, redact_secrets, redact_secrets_with_extra,

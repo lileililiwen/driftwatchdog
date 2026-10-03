@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::cli::{GateEvidenceExportArgs, GateFormatArg};
 use crate::error::Error;
-use crate::gate::dto::parse_gate_result_document;
+use crate::gate::dto::{parse_gate_result_document, GateRunResultsDocument};
 use crate::gate::evidence_export::{
     build as build_evidence_export, render_human as render_export_human,
     render_json as render_export_json, ExportError,
@@ -81,8 +81,11 @@ pub fn evidence_export(args: GateEvidenceExportArgs, cwd: &Path) -> Result<i32, 
 }
 
 /// Parse the canonical per-check results JSON for a gate run. The
-/// gate command persists the result list as a bare JSON array
-/// (`[{GateResult}, ...]`); a missing or malformed document is
+/// gate command persists a versioned document
+/// (`{"version":1,"results":[...],"unbound":[...]}`); earlier releases
+/// persisted a bare JSON array (`[{GateResult}, ...]`) and an older
+/// versioned document without `unbound`. All three shapes are read, so
+/// stored history stays exportable; a missing or malformed document is
 /// treated as no results so the export still runs (every supplied
 /// field becomes `unverified`).
 fn parse_results_for_row(
@@ -90,6 +93,9 @@ fn parse_results_for_row(
 ) -> Result<Vec<crate::gate::types::GateResult>, Error> {
     if row.results_json.is_empty() {
         return Ok(Vec::new());
+    }
+    if let Ok(doc) = serde_json::from_str::<GateRunResultsDocument>(&row.results_json) {
+        return Ok(doc.results);
     }
     match serde_json::from_str::<Vec<crate::gate::types::GateResult>>(&row.results_json) {
         Ok(results) => Ok(results),

@@ -1141,6 +1141,12 @@ fn expected_exit_for_status(status: GateStatus) -> Option<i32> {
         GateStatus::Fail => Some(1),
         GateStatus::ReviewRequired => Some(2),
         GateStatus::NotApplicable => Some(0),
+        // `UNBOUND` asserts that nothing ran, so the only coherent
+        // exit code for a command that claims it is a rejection
+        // (1). Mapping it is deliberate: an unmapped status would be
+        // accepted from any exit code, which is the fail-open this
+        // change exists to close.
+        GateStatus::Unbound => Some(1),
     }
 }
 
@@ -1150,6 +1156,10 @@ fn default_severity_for_status(status: GateStatus) -> GateSeverity {
         GateStatus::Fail => GateSeverity::Error,
         GateStatus::ReviewRequired => GateSeverity::Warning,
         GateStatus::NotApplicable => GateSeverity::Info,
+        // The default for a *required* unbound check. An optional
+        // unbound check is downgraded to `Warning` where the result
+        // is constructed, because it never blocks.
+        GateStatus::Unbound => GateSeverity::Error,
     }
 }
 
@@ -1182,7 +1192,7 @@ fn contradiction_result(
         missing_evidence: missing,
         diagnostic: Some(diagnostic),
         remediation: Some(bound_text(
-            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0).",
+            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0, UNBOUND=1).",
             MAX_REMEDIATION_BYTES,
         )),
     }
@@ -1968,7 +1978,7 @@ fn contradiction_result_release(
         missing_evidence: missing,
         diagnostic: Some(diagnostic),
         remediation: Some(bound_text(
-            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0).",
+            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0, UNBOUND=1).",
             MAX_REMEDIATION_BYTES,
         )),
     }
@@ -2161,7 +2171,7 @@ fn contradiction_result_capability(
         missing_evidence: missing,
         diagnostic: Some(diagnostic),
         remediation: Some(bound_text(
-            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0).",
+            "Align the command's exit code with the envelope status (PASS=0, FAIL=1, REVIEW_REQUIRED=2, NOT_APPLICABLE=0, UNBOUND=1).",
             MAX_REMEDIATION_BYTES,
         )),
     }

@@ -165,8 +165,9 @@ The AI report contains recurring failures, current spec violations, possible heu
 
 ## Built-in Gate profile and concern catalog
 
-Driftwatchdog owns the central workspace Gate: 75 workspace
-`.ai-gate/gate.yaml` files name `runtime: driftwatchdog`. The catalog
+Driftwatchdog owns the central workspace Gate: 76 workspace
+`.ai-gate/gate.yaml` files name `runtime: driftwatchdog`, and 70 of
+them declare no `commands:` block at all. The catalog
 below ties each built-in profile to its stable concern IDs, the
 default `required = true` flag, the exit-code authority rule, and
 whether a text-mode fallback applies. Concern IDs and profile names
@@ -182,16 +183,39 @@ corrected.
 | `full` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above | yes |
 | `product` (alias `rust-product`) | `placeholder-threshold`, `product-code-boundary`, `source-file-size` (built-in, no command) | required | envelope wire version `1` for the two project-owned concerns; in-process normalized result for the built-in scanner | yes for the project-owned concerns; n/a for the built-in scanner |
 | `release` | `capability-conformance`, `release-evidence` | required | as above (envelope wire version `1`, shared with the product-quality shape) | **no** (missing coverage must never silently pass) |
-| `deployable` | `ci-contract`, `compose-contract` | required | project-runtime exit status (`0`→`PASS`, non-zero→`FAIL`; missing command→`REVIEW_REQUIRED`) | yes |
+| `deployable` | `ci-contract`, `compose-contract` | required | project-runtime exit status (`0`→`PASS`, non-zero→`FAIL`; a required check with no bound command→`UNBOUND`, which blocks) | yes |
 
 A profile that is not a built-in name selects exactly the concerns
 declared in the manifest (`[profiles.<name>]` in `gate.toml` or
 `checks:` in `.ai-gate/gate.yaml`); a built-in profile keeps its
 default set, adjustable per concern with `required = false` (or the
-`checks:` map `false` / `"optional"` in `.ai-gate/gate.yaml`). When
-the manifest binds a profile default without a `command`, the
-existing required + missing-command aggregate path records
-`REVIEW_REQUIRED`; the catalog does not paper over that case.
+`checks:` map `false` / `"optional"` in `.ai-gate/gate.yaml`).
+
+When a required check binds no `command`, nothing ran, so the result
+is `UNBOUND` with `Error` severity and the gate **fails** — a
+required absence is never `NOT_APPLICABLE`, and it blocks regardless
+of the manifest's `blocking:` list. Two manifest-level declarations
+make that absence explicit instead:
+
+- `not_applicable.<id> = "<reason>"` — a written exemption for a
+  check the project's stack genuinely has no implementation for. The
+  check stays scheduled and is reported as an acknowledged exemption;
+  it does not block. The reason is length-bounded and credential-
+  redacted. Exemptions are **budgeted**: one project may declare at most
+  `min(floor(0.25 × required_checks), 5)` of them, computed from its own
+  manifest, and every declaration spends one — including one on an
+  optional check. At the budget the run records a warning that the
+  headroom is exhausted; over it the run **fails**. `build`, `tests`,
+  `security`, and `repository` are never exempable at any budget, so an
+  exemption naming one of them fails the run outright. The spine is matched
+  by concern, not by spelling: this workspace also spells
+  repository-integrity as `repository_integrity`, and that id is protected
+  exactly as `repository` is. A project that genuinely needs more must bind
+  a command or be reviewed.
+- `binding_policy = "report" | "reject"` — `"report"` (the default)
+  records the result as `UNBOUND`; `"reject"` refuses to resolve at
+  all, naming every offending check in one refusal before any check
+  executes and before any run is persisted.
 
 ## Integration recipe: from no manifest to a first `driftwatch gate` run
 
@@ -695,9 +719,10 @@ contract. The two release-gate concerns inherit the existing
 `[ai] enabled = true` path: when AI evaluation is on, the
 `ai-review` row is appended to the same `gate_runs` snapshot. Like
 the product-quality profile, a project that picks `release` without
-binding `commands.<id>` lands on `REVIEW_REQUIRED` via the existing
-required + missing-command aggregate path; relax an individual
-concern to `required = false` to opt out of one half.
+binding `commands.<id>` has a required unbound check, which fails the
+gate as `UNBOUND`; relax an individual concern to `required = false`,
+declare a `not_applicable` exemption with a reason, or bind the
+command.
 
 ## Project status
 

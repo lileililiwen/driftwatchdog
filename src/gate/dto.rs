@@ -254,6 +254,32 @@ pub fn to_canonical_json(results: &[GateResult]) -> String {
     .expect("GateResult serializes")
 }
 
+/// Persisted gate-run payload: the result list plus the unbound
+/// collection, so one stored run distinguishes a proven
+/// `NOT_APPLICABLE` from a never-attempted `UNBOUND` without
+/// re-executing the gate. `unbound` keeps the aggregate's ordering and
+/// its `optional:` marker, exactly as `pending_reviews` does. Fields
+/// default so documents written by earlier releases still parse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateRunResultsDocument {
+    pub version: u32,
+    #[serde(default)]
+    pub results: Vec<GateResult>,
+    #[serde(default)]
+    pub unbound: Vec<String>,
+}
+
+/// Serialize a gate run's results and unbound collection to the
+/// persisted document shape.
+pub fn to_gate_run_json(results: &[GateResult], unbound: &[String]) -> String {
+    serde_json::to_string(&GateRunResultsDocument {
+        version: GATE_CONTRACT_VERSION,
+        results: results.to_vec(),
+        unbound: unbound.to_vec(),
+    })
+    .expect("GateResult serializes")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

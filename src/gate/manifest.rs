@@ -29,20 +29,48 @@
 //!   ids (`product-code-boundary`, `placeholder-threshold`,
 //!   `source-file-size`). The profile is data only and never invents a
 //!   command; a project that picks either profile without binding
-//!   `commands.<id>` lands on `REVIEW_REQUIRED` via the existing
-//!   required + missing-command path, except for `source-file-size`,
-//!   which runs the in-process scanner and needs no command at all.
+//!   `commands.<id>` has an *unbound* required check, which fails the
+//!   gate as `UNBOUND` rather than being reported as a proven
+//!   exemption, except for `source-file-size`, which runs the
+//!   in-process scanner and needs no command at all.
 //! * `release` — the two release-gate concern ids
 //!   (`capability-conformance`, `release-evidence`). The profile is
 //!   data only; a project that picks `release` without binding
-//!   `commands.<id>` lands on `REVIEW_REQUIRED` via the existing
-//!   required + missing-command path. Driftwatchdog does not become
-//!   a release publisher, signer, SBOM generator, or deployment
-//!   executor.
+//!   `commands.<id>` has an unbound required check and fails on
+//!   `UNBOUND`. Driftwatchdog does not become a release publisher,
+//!   signer, SBOM generator, or deployment executor.
 //!
 //! Projects may enable extra checks or relax a profile default to
 //! `required = false`. Tightening an optional default to required is
 //! allowed; arbitrary override fields are rejected.
+//!
+//! ## Command binding
+//!
+//! A check that asserts coverage but binds no command has *never been
+//! attempted*. Two manifest-level declarations decide how that absence
+//! is treated, and both are recorded rather than inferred:
+//!
+//! * `not_applicable.<id> = "<reason>"` — a written, per-check
+//!   exemption for a check the project's stack genuinely does not
+//!   implement. The reason is length-bounded and credential-redacted
+//!   at parse time. An exemption naming an unselected check, or one
+//!   that also binds a command, is a parse-time error.
+//! * `binding_policy = "report" | "reject"` — what happens to a
+//!   required, non-exempt check that binds no command. `report` (the
+//!   default) records the result as `UNBOUND`, which blocks the gate.
+//!   `reject` refuses to resolve at all, naming every offending check
+//!   in one refusal, before any check executes and before any run is
+//!   persisted.
+//!
+//! Exemptions are budgeted. [`exemption_cap`] gives one project
+//! `min(floor(0.25 x required_checks), 5)` allowances, computed from that
+//! manifest's own required-check count, and every declared
+//! `not_applicable` entry consumes one. The four concerns in
+//! [`NON_EXEMPTABLE_CONCERNS`] are never exempable whatever the budget
+//! says. The budget is a verdict, not a refusal: an over-cap or
+//! spine-violating manifest still parses and still runs, and the outcome
+//! is recorded in the plan (and therefore in `--dry-run`) as
+//! [`ResolvedGatePlan::exemption_budget`].
 //!
 //! ## Triggers
 //!
@@ -55,10 +83,11 @@
 //!
 //! Unknown fields fail with the field name plus a `did you mean`
 //! remediation hint. An enabled check with an empty command, an
-//! unknown profile, or a malformed project command fails plan
-//! resolution **before any check executes**. [`render_plan`] is pure:
-//! it prints the resolved plan and never spawns a child process or
-//! mutates state.
+//! unknown profile, a malformed project command, a malformed
+//! exemption, or a `binding_policy` refusal fails plan resolution
+//! **before any check executes**. [`render_plan`] is pure: it prints
+//! the resolved plan and never spawns a child process or mutates
+//! state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -68,8 +97,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::gate::aggregate::{BlockingPolicy, GatePlan, PlannedCheck};
-use crate::gate::concerns::{DEPLOYABLE_CONCERNS, PRODUCT_QUALITY_CONCERNS, RELEASE_GATE_CONCERNS};
+use crate::gate::concerns::{
+    is_source_file_size_concern, DEPLOYABLE_CONCERNS, PRODUCT_QUALITY_CONCERNS,
+    RELEASE_GATE_CONCERNS,
+};
 use crate::gate::dto::GATE_CONTRACT_VERSION;
+use crate::gate::redact::bound_text;
 
 /// Profile defaults. Kept as functions so the contract stays
 /// language- and specification-system-neutral.
@@ -88,18 +121,17 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
         // Product-quality profiles select the stable product-quality
         // concern ids. Selection is data only and does not invent a
         // command; a project that picks `product` (or `rust-product`)
-        // without binding `commands.<id>` lands on REVIEW_REQUIRED
-        // via the existing required + missing-command path. The
-        // `source-file-size` concern is the exception: it is executed
-        // by the in-process scanner and needs no command binding.
+        // without binding `commands.<id>` has an unbound required
+        // check and fails on UNBOUND. The `source-file-size` concern
+        // is the exception: it is executed by the in-process scanner
+        // and needs no command binding.
         "product" | "rust-product" => Some(PRODUCT_QUALITY_CONCERNS),
         // Release-gate profile selects the two stable release-gate
         // concern ids. The profile is data only and never invents a
         // command; a project that picks `release` without binding
-        // `commands.<id>` lands on REVIEW_REQUIRED via the existing
-        // required + missing-command path. Driftwatchdog does not
-        // become a release publisher, signer, SBOM generator, or
-        // deployment executor.
+        // `commands.<id>` has an unbound required check and fails on
+        // UNBOUND. Driftwatchdog does not become a release publisher,
+        // signer, SBOM generator, or deployment executor.
         "release" => Some(RELEASE_GATE_CONCERNS),
         // Deployable projects must bind both project-owned contract commands;
         // the profile supplies required checks but never invents commands.
@@ -179,6 +211,282 @@ pub struct GateManifest {
     /// so manifests that never set `[source_size]` keep a stable digest.
     #[serde(default, skip_serializing_if = "SourceSizePolicy::is_default")]
     pub source_size: SourceSizePolicy,
+    /// Written per-check exemptions: `not_applicable.<id> = "<reason>"`.
+    /// A reason states *why* the project's stack has no implementation
+    /// for a check the plan asserts. Values are length-bounded and
+    /// credential-redacted at parse time, before they are rendered or
+    /// persisted. Empty maps are not serialized so existing `gate.toml`
+    /// digests stay stable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub not_applicable: BTreeMap<String, String>,
+    /// What to do with a required, non-exempt check that binds no
+    /// command. Not serialized when left at the default so existing
+    /// `gate.toml` digests stay stable.
+    #[serde(
+        default,
+        deserialize_with = "de_binding_policy",
+        skip_serializing_if = "BindingPolicy::is_default"
+    )]
+    pub binding_policy: BindingPolicy,
+}
+
+/// Accepted `binding_policy` values, in diagnostic order.
+pub const BINDING_POLICIES: &[&str] = &["report", "reject"];
+
+/// Upper bound applied to an exemption reason before it is rendered or
+/// persisted. Mirrors the diagnostic/remediation bounds so a reason can
+/// never become an unbounded storage or rendering sink.
+pub const MAX_EXEMPTION_REASON_BYTES: usize = 2048;
+
+/// Gate result id carrying one project's exemption-budget verdict.
+///
+/// It is a plan-level result rather than a per-check one, because the
+/// budget is a property of the manifest as a whole. The id is appended to
+/// the effective plan exactly the way the optional `ai-review` check is,
+/// so the aggregate, the persisted run, and every render carry the verdict
+/// with no new status and no new consumer.
+pub const EXEMPTION_BUDGET_CHECK: &str = "exemption-budget";
+
+/// The concerns that may never be exempted, whatever a project's budget
+/// says.
+///
+/// The floor every other check stands on: without a bound command, a
+/// build, test, security, or repository-integrity gate is the one hole a
+/// project must not be allowed to declare away. Owner decision,
+/// 2026-10-02; see
+/// `openspec/changes/gate-unbound-check-fails/design.md` §3.5.
+///
+/// This is the canonical list, used for diagnostics and the plan render.
+/// It is **not** what the matcher compares against: this workspace spells
+/// the repository-integrity concern two ways, so matching walks
+/// [`NON_EXEMPTABLE_ALIASES`] instead. Do not add a spelling here — add
+/// it to the alias table, where it is visibly attached to a concern.
+pub const NON_EXEMPTABLE_CONCERNS: &[&str] = &["build", "tests", "security", "repository"];
+
+/// Every workspace spelling protected for each non-exempable concern:
+/// the concern, then the ids that name it in a real `.ai-gate/gate.yaml`.
+///
+/// Aliasing is deliberate, not redundancy. The owner's ruling named
+/// `repository`, and that is the spelling 63 of 76 workspace manifests
+/// use — but `repository_integrity` is a distinct, equally real id used
+/// by `labrys` and `openpanel`. A bare comparison against the canonical
+/// list would let those two repos exempt the concern the spine exists to
+/// protect, which is the exact escape the cap was written to close. A
+/// future spelling must be added here, against the concern it names, so
+/// the decision to widen the floor is a visible one.
+pub const NON_EXEMPTABLE_ALIASES: &[(&str, &[&str])] = &[
+    ("build", &["build"]),
+    ("tests", &["tests"]),
+    ("security", &["security"]),
+    ("repository", &["repository", "repository_integrity"]),
+];
+
+/// Absolute ceiling on exemptions, independent of manifest size.
+///
+/// The percentage alone would let a 40-check manifest exempt a quarter of
+/// its gate; this bound is what keeps a large project from buying a wider
+/// hole than a small one.
+pub const MAX_EXEMPTION_CAP: usize = 5;
+
+/// True when `id` names one of the non-exempable concerns under any
+/// workspace spelling. Matches against [`NON_EXEMPTABLE_ALIASES`], so
+/// an alias is protected exactly as the canonical id is.
+pub fn is_non_exempable_concern(id: &str) -> bool {
+    NON_EXEMPTABLE_ALIASES
+        .iter()
+        .any(|(_, spellings)| spellings.contains(&id))
+}
+
+/// Exemption allowance for a project that selects `required_checks`
+/// required checks: `min(floor(0.25 x required_checks), 5)`.
+///
+/// Integer floor division by 4 is exactly `floor(0.25 x n)`; the `min`
+/// binds from 20 required checks upward. A project selecting fewer than
+/// four required checks gets an allowance of zero and may not exempt
+/// anything.
+pub fn exemption_cap(required_checks: usize) -> usize {
+    (required_checks / 4).min(MAX_EXEMPTION_CAP)
+}
+
+/// The exemption verdict for one manifest. `HardFail` wins over `OverCap`
+/// because a non-exempable concern is a categorically different claim: the
+/// budget is about how much absence is tolerable, the spine is about
+/// which absence is never tolerable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExemptionVerdict {
+    /// Below the allowance: nothing is reported.
+    Within,
+    /// Exactly at the allowance: reported, never blocking.
+    Exhausted,
+    /// More exemptions than the allowance: blocking.
+    OverCap,
+    /// At least one non-exempable concern was exempted: blocking whatever
+    /// the counts say.
+    HardFail,
+}
+
+/// One project's exemption budget, computed from its own manifest.
+///
+/// Every declared `not_applicable` entry consumes budget, including one on
+/// an optional check: `required = false` must not be a one-character way
+/// around the ceiling.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExemptionBudget {
+    /// Required checks the manifest selects (profile defaults plus
+    /// explicit declarations; changed-surface triggers do not count, so
+    /// the budget cannot move with the diff being gated).
+    pub required_checks: usize,
+    /// `min(floor(0.25 x required_checks), 5)`.
+    pub cap: usize,
+    /// Declared `not_applicable` entries.
+    pub declared: usize,
+    /// Declared exemptions naming `build`, `tests`, `security`, or
+    /// `repository`, sorted.
+    #[serde(default)]
+    pub non_exempable: Vec<String>,
+}
+
+impl ExemptionBudget {
+    /// Remaining exemptions before the run fails.
+    pub fn headroom(&self) -> usize {
+        self.cap.saturating_sub(self.declared)
+    }
+
+    /// True when at least one non-exempable concern was exempted.
+    pub fn hard_fails(&self) -> bool {
+        !self.non_exempable.is_empty()
+    }
+
+    /// True when more exemptions are declared than the allowance.
+    pub fn over_cap(&self) -> bool {
+        self.declared > self.cap
+    }
+
+    /// Exactly at the allowance with headroom left at zero. A project
+    /// with no exemptions is not "exhausted" merely because its cap is
+    /// also zero, so `declared` must be non-zero.
+    pub fn at_cap(&self) -> bool {
+        self.declared > 0 && self.declared == self.cap
+    }
+
+    pub fn verdict(&self) -> ExemptionVerdict {
+        if self.hard_fails() {
+            ExemptionVerdict::HardFail
+        } else if self.over_cap() {
+            ExemptionVerdict::OverCap
+        } else if self.at_cap() {
+            ExemptionVerdict::Exhausted
+        } else {
+            ExemptionVerdict::Within
+        }
+    }
+
+    /// One-line statement of the arithmetic, so a diagnostic shows how the
+    /// allowance was reached rather than only its result.
+    pub fn formula(&self) -> String {
+        format!(
+            "min(floor(0.25 x {} required checks), {}) = {}",
+            self.required_checks, MAX_EXEMPTION_CAP, self.cap
+        )
+    }
+
+    /// Diagnostic for the recorded budget result.
+    pub fn diagnostic(&self) -> String {
+        match self.verdict() {
+            ExemptionVerdict::Within => format!(
+                "{} of {} exemptions declared; {} headroom left ({})",
+                self.declared,
+                self.cap,
+                self.headroom(),
+                self.formula()
+            ),
+            ExemptionVerdict::Exhausted => format!(
+                "exemption headroom is exhausted: {} of {} allowances used, {} left ({})",
+                self.declared,
+                self.cap,
+                self.headroom(),
+                self.formula()
+            ),
+            ExemptionVerdict::OverCap => format!(
+                "{} exemptions declared but only {} are allowed ({} over; {} headroom left; {})",
+                self.declared,
+                self.cap,
+                self.declared - self.cap,
+                self.headroom(),
+                self.formula()
+            ),
+            ExemptionVerdict::HardFail => format!(
+                "{} may never be exempted: not_applicable names {} ({})",
+                NON_EXEMPTABLE_CONCERNS.join(", "),
+                self.non_exempable.join(", "),
+                self.formula()
+            ),
+        }
+    }
+}
+
+/// Compute one project's exemption budget from its own manifest.
+pub(crate) fn exemption_budget(
+    manifest: &GateManifest,
+    selected: &BTreeMap<String, (bool, String)>,
+) -> ExemptionBudget {
+    let required_checks = selected.values().filter(|(required, _)| *required).count();
+    let non_exempable: Vec<String> = manifest
+        .not_applicable
+        .keys()
+        .filter(|id| is_non_exempable_concern(id))
+        .cloned()
+        .collect();
+    ExemptionBudget {
+        required_checks,
+        cap: exemption_cap(required_checks),
+        declared: manifest.not_applicable.len(),
+        non_exempable,
+    }
+}
+
+/// How a required, non-exempt check that binds no command is treated.
+///
+/// `Report` records the result as `UNBOUND`, which blocks the gate:
+/// the default is fail-closed on coverage, because an unbound required
+/// check is a never-attempted absence, not a proven exemption.
+/// `Reject` refuses to resolve instead, which is a resolution-time
+/// refusal rather than a verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BindingPolicy {
+    #[default]
+    Report,
+    Reject,
+}
+
+impl BindingPolicy {
+    /// True at the default, so the field is omitted from the canonical
+    /// manifest and existing digests stay stable.
+    pub fn is_default(&self) -> bool {
+        *self == BindingPolicy::default()
+    }
+
+    /// Parse an accepted value. Returns `None` for anything else, which
+    /// both manifest forms turn into an error listing [`BINDING_POLICIES`].
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "report" => Some(BindingPolicy::Report),
+            "reject" => Some(BindingPolicy::Reject),
+            _ => None,
+        }
+    }
+}
+
+fn de_binding_policy<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BindingPolicy, D::Error> {
+    use serde::de::Error as _;
+    let raw = String::deserialize(d)?;
+    BindingPolicy::parse(&raw).ok_or_else(|| {
+        D::Error::custom(format!(
+            "unknown binding policy \"{raw}\"; expected {}",
+            BINDING_POLICIES.join(" or ")
+        ))
+    })
 }
 
 /// Default per-file physical-line maximum for `source-file-size`.
@@ -316,6 +624,21 @@ pub struct ResolvedGatePlan {
     /// declares no `[source_size]`). Rendered by `--dry-run` and passed
     /// to the in-process scanner.
     pub source_size: SourceSizePolicy,
+    /// Scheduled required checks that bind no command and declare no
+    /// exemption. Recorded at resolution time so `--dry-run` can name
+    /// the coverage debt before anything executes.
+    #[serde(default)]
+    pub unbound: Vec<String>,
+    /// Exemptions in force for this plan: check id to the bounded,
+    /// redacted reason the manifest gave.
+    #[serde(default)]
+    pub exemptions: BTreeMap<String, String>,
+    /// This project's exemption allowance, computed from this
+    /// manifest's own required-check count. Recorded at resolution time
+    /// so `--dry-run` can show the budget before anything executes and
+    /// the runtime can turn the verdict into one result.
+    #[serde(default)]
+    pub exemption_budget: ExemptionBudget,
 }
 
 /// Manifest-level errors. Every variant carries an actionable message;
@@ -340,6 +663,24 @@ pub enum ManifestError {
     EmptyTrigger { include: String },
     #[error("invalid [source_size] policy: {detail}")]
     InvalidSourceSize { detail: String },
+    #[error(
+        "not_applicable[\"{id}\"] has an empty reason (state why the check does not apply to this project)"
+    )]
+    EmptyExemptionReason { id: String },
+    #[error(
+        "not_applicable[\"{id}\"] names a check the plan does not select (select the check, or drop the exemption)"
+    )]
+    ExemptionNotSelected { id: String },
+    #[error(
+        "not_applicable[\"{id}\"] exempts a check that also binds a command; bind the command and let it report, or drop the command"
+    )]
+    ExemptionConflictsWithCommand { id: String },
+    #[error("unknown binding policy \"{got}\"; expected {expected}")]
+    UnknownBindingPolicy { got: String, expected: String },
+    #[error(
+        "binding_policy = \"reject\" and no command is bound for required check(s): {checks} (bind commands.<id>, add a not_applicable exemption with a reason, or set binding_policy = \"report\")"
+    )]
+    UnboundRequiredCheck { checks: String },
     #[error("manifest parse error: {0}")]
     Parse(String),
 }
@@ -366,6 +707,8 @@ const KNOWN_FIELDS: &[&str] = &[
     "source_size",
     "max_lines",
     "exclude",
+    "not_applicable",
+    "binding_policy",
 ];
 
 pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
@@ -459,10 +802,11 @@ pub fn manifest_digest(text: &str) -> String {
 
 /// Parse and structurally validate manifest text. Fails on unknown
 /// fields, unknown profiles, version mismatch, empty enabled-check
-/// commands, and malformed project commands — always before any
-/// execution.
+/// commands, malformed project commands, malformed exemptions, and a
+/// `binding_policy` refusal — always before any execution.
 pub fn parse(text: &str) -> Result<GateManifest, ManifestError> {
-    let manifest: GateManifest = toml::from_str(text).map_err(map_toml_error)?;
+    let mut manifest: GateManifest = toml::from_str(text).map_err(map_toml_error)?;
+    bound_exemption_reasons(&mut manifest);
     validate(&manifest)?;
     Ok(manifest)
 }
@@ -539,6 +883,106 @@ pub(crate) fn validate(manifest: &GateManifest) -> Result<(), ManifestError> {
         }
     }
     validate_source_size(&manifest.source_size)?;
+    validate_command_binding(manifest)?;
+    Ok(())
+}
+
+/// Checks the manifest selects for execution, ignoring
+/// changed-surface triggers: the profile defaults (built-in or
+/// project-defined) with explicit `[[checks]]` applied as overrides.
+/// [`resolve`] builds on this so the plan and the manifest-level
+/// command-binding rule always agree on what is selected.
+fn selected_without_triggers(manifest: &GateManifest) -> BTreeMap<String, (bool, String)> {
+    let defaults = profile_defaults_for(manifest, &manifest.profile).unwrap_or_default();
+    let mut selected: BTreeMap<String, (bool, String)> = BTreeMap::new();
+    for id in defaults.iter() {
+        selected.insert(id.clone(), (true, "manifest".to_string()));
+    }
+    for check in &manifest.checks {
+        if !check.enabled {
+            selected.remove(&check.id);
+            continue;
+        }
+        let source = check
+            .source
+            .clone()
+            .unwrap_or_else(|| "manifest".to_string());
+        // Explicit declarations override profile defaults (including
+        // relaxing a default to `required = false`).
+        selected.insert(check.id.clone(), (check.required, source));
+    }
+    selected
+}
+
+/// True when `id` binds a project command in the manifest.
+fn binds_command(manifest: &GateManifest, id: &str) -> bool {
+    manifest
+        .checks
+        .iter()
+        .any(|c| c.id == id && c.enabled && c.command.is_some())
+}
+
+/// Required, non-exempt, non-in-process checks with no bound command,
+/// sorted. This is the set `binding_policy = "reject"` refuses on and
+/// the set the runtime records as `UNBOUND`.
+///
+/// The in-process test reuses [`is_source_file_size_concern`], the same
+/// predicate `execute_plan` uses to skip the project-command branch: a
+/// check the runtime executes itself needs no command binding.
+pub(crate) fn unbound_required_checks(
+    manifest: &GateManifest,
+    selected: &BTreeMap<String, (bool, String)>,
+) -> Vec<String> {
+    let mut unbound: Vec<String> = selected
+        .iter()
+        .filter(|(id, (required, _))| {
+            *required
+                && !is_source_file_size_concern(id)
+                && !manifest.not_applicable.contains_key(*id)
+                && !binds_command(manifest, id)
+        })
+        .map(|(id, _)| (*id).to_string())
+        .collect();
+    unbound.sort();
+    unbound.dedup();
+    unbound
+}
+
+/// Normalize every exemption reason in place: redact credential-shaped
+/// tokens, then bound the length. Applied by both manifest forms so a
+/// reason can never reach a digest, a render, or the database unbounded.
+pub(crate) fn bound_exemption_reasons(manifest: &mut GateManifest) {
+    for reason in manifest.not_applicable.values_mut() {
+        *reason = bound_text(reason, MAX_EXEMPTION_REASON_BYTES);
+    }
+}
+
+/// Command-binding rules: exemptions must name a selected check with a
+/// reason and no command, and `binding_policy = "reject"` refuses a
+/// manifest with a required unbound check. The empty-command case is
+/// checked before this (it is a different defect with its own error),
+/// and `reject` is a resolution refusal, not a verdict.
+fn validate_command_binding(manifest: &GateManifest) -> Result<(), ManifestError> {
+    let selected = selected_without_triggers(manifest);
+    for (id, reason) in &manifest.not_applicable {
+        if reason.trim().is_empty() {
+            return Err(ManifestError::EmptyExemptionReason { id: id.clone() });
+        }
+        if !selected.contains_key(id) {
+            return Err(ManifestError::ExemptionNotSelected { id: id.clone() });
+        }
+        if binds_command(manifest, id) {
+            return Err(ManifestError::ExemptionConflictsWithCommand { id: id.clone() });
+        }
+    }
+    if manifest.binding_policy == BindingPolicy::Reject {
+        let unbound = unbound_required_checks(manifest, &selected);
+        if !unbound.is_empty() {
+            return Err(ManifestError::UnboundRequiredCheck {
+                checks: unbound.join(", "),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -603,17 +1047,8 @@ pub fn resolve(
     changed_surfaces: &[String],
 ) -> Result<ResolvedGatePlan, ManifestError> {
     validate(manifest)?;
-    let defaults = profile_defaults_for(manifest, &manifest.profile).unwrap_or_default();
-
-    let mut selected: BTreeMap<String, (bool, String)> = BTreeMap::new();
-    for id in defaults.iter() {
-        selected.insert(id.clone(), (true, "manifest".to_string()));
-    }
+    let mut selected = selected_without_triggers(manifest);
     for check in &manifest.checks {
-        if !check.enabled {
-            selected.remove(&check.id);
-            continue;
-        }
         // Enabled check with an empty command already failed in
         // `validate`; re-check here so direct struct construction
         // cannot bypass the fail-before-execution rule.
@@ -624,13 +1059,6 @@ pub fn resolve(
                 });
             }
         }
-        let source = check
-            .source
-            .clone()
-            .unwrap_or_else(|| "manifest".to_string());
-        // Explicit declarations override profile defaults (including
-        // relaxing a default to `required = false`).
-        selected.insert(check.id.clone(), (check.required, source));
     }
     for trigger in &manifest.triggers {
         let hit = changed_surfaces
@@ -642,16 +1070,32 @@ pub fn resolve(
     }
 
     let mut checks: Vec<PlannedCheck> = selected
-        .into_iter()
+        .iter()
         .map(|(gate_id, (required, source))| PlannedCheck {
-            gate_id,
-            source,
-            required,
+            gate_id: gate_id.clone(),
+            source: source.clone(),
+            required: *required,
+            exempt: manifest.not_applicable.contains_key(gate_id),
         })
         .collect();
     // BTreeMap iteration is already sorted; keep an explicit sort so
     // the determinism guarantee does not depend on map internals.
     checks.sort_by(|a, b| a.gate_id.cmp(&b.gate_id));
+
+    // Command-free required checks are coverage debt, resolved here so
+    // the plan can be rendered before anything executes. Triggers
+    // contribute to the plan but not to this set: a manifest-level
+    // command-binding rule must not depend on observed change surfaces.
+    let unbound = unbound_required_checks(manifest, &selected);
+    let exemptions: BTreeMap<String, String> = manifest
+        .not_applicable
+        .iter()
+        .map(|(id, reason)| (id.clone(), bound_text(reason, MAX_EXEMPTION_REASON_BYTES)))
+        .collect();
+    // The exemption allowance is a manifest-level rule for the same
+    // reason: it is derived from the manifest's own selection, never
+    // from the diff being gated.
+    let exemption_budget = exemption_budget(manifest, &selected_without_triggers(manifest));
 
     // Explicitly record well-known concerns that are *not* scheduled
     // so backend-only plans are self-explanatory.
@@ -689,6 +1133,9 @@ pub fn resolve(
             .collect(),
         not_scheduled,
         source_size: manifest.source_size.clone(),
+        unbound,
+        exemptions,
+        exemption_budget,
     })
 }
 
@@ -725,6 +1172,43 @@ pub fn render_plan(resolved: &ResolvedGatePlan) -> String {
                 c.gate_id,
                 if c.required { "required" } else { "optional" },
                 c.source
+            ));
+        }
+    }
+    if !resolved.exemptions.is_empty() {
+        out.push_str("exempted checks (declared not_applicable; do not block):\n");
+        for (id, reason) in &resolved.exemptions {
+            out.push_str(&format!("  - {id}: {reason}\n"));
+        }
+    }
+    // Always name the allowance, including for a project that has used
+    // none of it: the budget is what an operator edits the manifest
+    // against, and a zero-allowance small manifest is exactly the case
+    // that needs to be visible before anything executes.
+    out.push_str(&format!(
+        "exemption budget: {} of {} allowances used ({} headroom left; {})\n",
+        resolved.exemption_budget.declared,
+        resolved.exemption_budget.cap,
+        resolved.exemption_budget.headroom(),
+        resolved.exemption_budget.formula()
+    ));
+    if resolved.exemption_budget.verdict() != ExemptionVerdict::Within {
+        out.push_str(&format!(
+            "  verdict: {}\n",
+            resolved.exemption_budget.diagnostic()
+        ));
+    }
+    if !resolved.exemption_budget.non_exempable.is_empty() {
+        out.push_str(&format!(
+            "  never exempable: {}\n",
+            NON_EXEMPTABLE_CONCERNS.join(", ")
+        ));
+    }
+    if !resolved.unbound.is_empty() {
+        out.push_str("unbound required checks (no command bound; will fail as UNBOUND):\n");
+        for id in &resolved.unbound {
+            out.push_str(&format!(
+                "  - {id}: bind `command` for this check, or add a not_applicable exemption with a reason\n"
             ));
         }
     }
@@ -836,6 +1320,32 @@ pub fn load_for_runtime(project_root: &Path) -> Result<LoadOutcome, ManifestErro
 mod tests {
     use super::*;
 
+    /// A `minimal` manifest with `required` required checks, each bound to
+    /// a command so nothing is unbound, and the named ones exempted.
+    fn checks_manifest(required: usize, exempt: &[(&str, bool)]) -> String {
+        let mut out = String::from("version = 1\nprofile = \"minimal\"\n");
+        for i in 0..required {
+            out.push_str(&format!(
+                "\n[[checks]]\nid = \"c{i}\"\ncommand = \"true\"\n"
+            ));
+        }
+        for (id, optional) in exempt {
+            out.push_str(&format!("\n[[checks]]\nid = \"{id}\"\n"));
+            if *optional {
+                out.push_str("required = false\n");
+            }
+        }
+        if !exempt.is_empty() {
+            out.push_str("\n[not_applicable]\n");
+            for (id, _) in exempt {
+                out.push_str(&format!(
+                    "{id} = \"no implementation of {id} on this stack\"\n"
+                ));
+            }
+        }
+        out
+    }
+
     const VALID: &str = r#"
 version = 1
 profile = "backend"
@@ -846,6 +1356,592 @@ review_required_blocks = true
 [project_commands]
 test = "cargo test"
 "#;
+
+    /// Task 2.4/2.5: a required check with no `commands.<id>` entry
+    /// resolves under the default `report` policy, is listed as
+    /// unbound, and binds no exemption.
+    #[test]
+    fn required_check_without_command_resolves_as_unbound() {
+        let m = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "ux-review"
+"#,
+        )
+        .unwrap();
+        assert_eq!(m.binding_policy, BindingPolicy::Report);
+        assert!(m.not_applicable.is_empty());
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.unbound, vec!["ux-review".to_string()]);
+        assert!(r.exemptions.is_empty());
+        let check = r
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "ux-review")
+            .unwrap();
+        assert!(check.required);
+        assert!(!check.exempt);
+    }
+
+    /// A profile default counts: it is a required, selected check with
+    /// no command, and it must appear as unbound (this is the shape of
+    /// the 41 product-profile repos in the workspace).
+    #[test]
+    fn product_profile_defaults_are_unbound_when_no_command_is_bound() {
+        let m = parse("version = 1\nprofile = \"product\"\n").unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        // `source-file-size` runs in-process, so it needs no command.
+        assert_eq!(
+            r.unbound,
+            vec![
+                "placeholder-threshold".to_string(),
+                "product-code-boundary".to_string()
+            ]
+        );
+        assert!(!r.unbound.iter().any(|id| id == "source-file-size"));
+    }
+
+    /// A bound command removes the check from the unbound set.
+    #[test]
+    fn bound_command_is_not_unbound() {
+        let m = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "ux-review"
+command = "npm run review"
+"#,
+        )
+        .unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert!(r.unbound.is_empty());
+        assert!(!r.exemptions.contains_key("ux-review"));
+    }
+
+    /// A written exemption clears the check from the unbound set and
+    /// marks the plan entry, while the check stays scheduled.
+    #[test]
+    fn exemption_clears_unbound_and_marks_the_plan() {
+        let m = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "ux-review"
+
+[not_applicable]
+ux-review = "no UI surface in this project"
+"#,
+        )
+        .unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert!(r.unbound.is_empty());
+        assert_eq!(
+            r.exemptions.get("ux-review").map(String::as_str),
+            Some("no UI surface in this project")
+        );
+        let check = r
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "ux-review")
+            .unwrap();
+        assert!(check.required, "an exemption does not deselect the check");
+        assert!(check.exempt);
+    }
+
+    /// A reason is length-bounded and credential-redacted at parse
+    /// time, so it can never reach a digest, a render, or the database
+    /// raw.
+    #[test]
+    fn exemption_reason_is_bounded_and_redacted() {
+        let long = "x".repeat(MAX_EXEMPTION_REASON_BYTES * 2);
+        let m = parse(&format!(
+            "version = 1\nprofile = \"minimal\"\n\n[[checks]]\nid = \"ux-review\"\n\
+             \n[not_applicable]\nux-review = \"api_key=supersecret123 {long}\"\n"
+        ))
+        .unwrap();
+        let reason = m.not_applicable.get("ux-review").unwrap();
+        assert!(
+            !reason.contains("supersecret123"),
+            "credential-shaped token must be redacted: {reason}"
+        );
+        // `bound_text` truncates to the limit and appends the `…`
+        // marker, the same convention as diagnostics and remediation.
+        assert!(
+            reason.len() <= MAX_EXEMPTION_REASON_BYTES + 3,
+            "reason must be bounded, got {} bytes",
+            reason.len()
+        );
+    }
+
+    #[test]
+    fn empty_exemption_reason_is_rejected_naming_the_key() {
+        let err = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "ux-review"
+
+[not_applicable]
+ux-review = "   "
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::EmptyExemptionReason { .. }));
+        assert!(err.to_string().contains("ux-review"));
+    }
+
+    #[test]
+    fn exemption_for_an_unselected_check_is_rejected() {
+        let err = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[not_applicable]
+a11y = "no UI here"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::ExemptionNotSelected { .. }));
+        assert!(err.to_string().contains("a11y"));
+    }
+
+    #[test]
+    fn exemption_that_also_binds_a_command_is_rejected() {
+        let err = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "ux-review"
+command = "npm run review"
+
+[not_applicable]
+ux-review = "we have a command after all"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::ExemptionConflictsWithCommand { .. }
+        ));
+        assert!(err.to_string().contains("ux-review"));
+    }
+
+    /// Task 2.5: an unknown `binding_policy` value fails with the
+    /// offending value and the accepted set.
+    #[test]
+    fn unknown_binding_policy_is_rejected_with_accepted_set() {
+        let err =
+            parse("version = 1\nprofile = \"minimal\"\nbinding_policy = \"MAYBE\"\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("MAYBE"), "{msg}");
+        assert!(msg.contains("report"), "{msg}");
+        assert!(msg.contains("reject"), "{msg}");
+    }
+
+    // ----- Exemption budget (owner decision, 2026-10-02) -----
+
+    /// The cap formula at the numbers the owner named, plus the two
+    /// fleet-relevant ends. `required / 4` is exactly
+    /// `floor(0.25 x required)`; the `min(..., 5)` binds from 20 up.
+    #[test]
+    fn exemption_cap_matches_the_owner_formula_at_the_boundaries() {
+        // 10 required -> floor(2.5) = 2
+        assert_eq!(exemption_cap(10), 2);
+        // 20 required -> exactly the absolute cap
+        assert_eq!(exemption_cap(20), 5);
+        // 24 required -> 6 by percentage, 5 by the absolute cap: the
+        // absolute cap is what binds.
+        assert_eq!(exemption_cap(24), 5);
+        // 40 required -> 10 by percentage, 5 by the absolute cap: a
+        // larger manifest buys no wider hole.
+        assert_eq!(exemption_cap(40), 5);
+        // Small-manifest end: a project under four required checks gets
+        // no allowance at all.
+        assert_eq!(exemption_cap(3), 0);
+        assert_eq!(exemption_cap(0), 0);
+        assert_eq!(exemption_cap(4), 1);
+        assert_eq!(exemption_cap(19), 4);
+    }
+
+    #[test]
+    fn budget_counts_the_manifests_own_required_checks() {
+        let m = parse(&checks_manifest(8, &[])).unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.exemption_budget.required_checks, 8);
+        assert_eq!(r.exemption_budget.cap, 2);
+        assert_eq!(r.exemption_budget.declared, 0);
+        assert_eq!(r.exemption_budget.verdict(), ExemptionVerdict::Within);
+        assert!(r.exemption_budget.diagnostic().contains("2 headroom left"));
+    }
+
+    /// An optional check still spends budget, so `required = false` is
+    /// not a one-character way around the ceiling.
+    #[test]
+    fn budget_counts_optional_exemptions_too() {
+        let m = parse(&checks_manifest(8, &[("opt-one", true), ("opt-two", true)])).unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        // The denominator is the *required* count (8), so the two
+        // optional checks do not widen the allowance...
+        assert_eq!(r.exemption_budget.required_checks, 8);
+        // ...but they do spend it, which puts this manifest at its cap.
+        assert_eq!(r.exemption_budget.cap, 2);
+        assert_eq!(r.exemption_budget.declared, 2);
+        assert_eq!(r.exemption_budget.verdict(), ExemptionVerdict::Exhausted);
+    }
+
+    /// Every canonical concern is protected, and so is every workspace
+    /// alias of one. The alias table is the matcher's only input, so an
+    /// alias missing from it would be silently exempable — which is the
+    /// defect this table exists to prevent.
+    #[test]
+    fn non_exempable_concerns_and_their_aliases_are_never_exemptable() {
+        for id in NON_EXEMPTABLE_CONCERNS {
+            assert!(is_non_exempable_concern(id), "{id} must be in the spine");
+        }
+        // The repository-integrity concern is spelled two ways in this
+        // workspace; both are protected.
+        assert!(is_non_exempable_concern("repository"));
+        assert!(is_non_exempable_concern("repository_integrity"));
+        // A genuine outsider is not swept in by the aliasing.
+        assert!(!is_non_exempable_concern("accessibility"));
+        assert!(!is_non_exempable_concern("repository_hygiene"));
+        assert!(!is_non_exempable_concern("build-cache"));
+    }
+
+    /// The alias table and the canonical list must not drift apart: every
+    /// canonical concern needs an entry, and every entry names a real
+    /// concern. Adding a spelling is therefore a deliberate edit here
+    /// rather than an accidental divergence.
+    #[test]
+    fn the_alias_table_covers_exactly_the_non_exempable_concerns() {
+        for concern in NON_EXEMPTABLE_CONCERNS {
+            let entry = NON_EXEMPTABLE_ALIASES
+                .iter()
+                .find(|(name, _)| name == concern)
+                .unwrap_or_else(|| panic!("{concern} has no alias entry"));
+            assert!(
+                entry.1.contains(concern),
+                "{concern} must be protected under its own spelling"
+            );
+        }
+        for (concern, _) in NON_EXEMPTABLE_ALIASES {
+            assert!(
+                NON_EXEMPTABLE_CONCERNS.contains(concern),
+                "{concern} is aliased but is not a non-exempable concern"
+            );
+        }
+        // The measured workspace spellings, recorded so a future rename
+        // is a visible decision: `repository` in 63 manifests,
+        // `repository_integrity` in 2.
+        assert_eq!(NON_EXEMPTABLE_ALIASES.len(), 4);
+        assert_eq!(
+            NON_EXEMPTABLE_ALIASES
+                .iter()
+                .flat_map(|(_, spellings)| spellings.iter().copied())
+                .count(),
+            5
+        );
+    }
+
+    /// The spine fails the budget whatever the counts say: one
+    /// exemption of a spine check inside the allowance is still a hard
+    /// failure.
+    #[test]
+    fn exempting_a_spine_check_hard_fails_within_the_cap() {
+        let m = parse(&checks_manifest(8, &[("tests", false)])).unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.exemption_budget.cap, 2);
+        assert_eq!(r.exemption_budget.declared, 1);
+        assert!(!r.exemption_budget.over_cap());
+        assert_eq!(r.exemption_budget.non_exempable, vec!["tests".to_string()]);
+        assert_eq!(r.exemption_budget.verdict(), ExemptionVerdict::HardFail);
+        assert!(r
+            .exemption_budget
+            .diagnostic()
+            .contains("may never be exempted"));
+        // The plan an operator reads before executing names the spine.
+        assert!(render_plan(&r).contains("never exempable: build, tests, security, repository"));
+    }
+
+    /// The same hard failure for the *other* spelling of the
+    /// repository-integrity concern. A manifest using
+    /// `repository_integrity` must not be able to exempt the concern the
+    /// spine protects just because it spells the id differently.
+    #[test]
+    fn exempting_the_repository_integrity_alias_hard_fails() {
+        let m = parse(&checks_manifest(8, &[("repository_integrity", false)])).unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.exemption_budget.cap, 2);
+        assert_eq!(r.exemption_budget.declared, 1);
+        assert!(
+            !r.exemption_budget.over_cap(),
+            "the alias is not a cap case"
+        );
+        assert_eq!(
+            r.exemption_budget.non_exempable,
+            vec!["repository_integrity".to_string()],
+            "the alias must be recorded as the offending id, not dropped"
+        );
+        assert_eq!(r.exemption_budget.verdict(), ExemptionVerdict::HardFail);
+    }
+
+    /// The over-cap verdict wins on a large manifest, and the diagnostic
+    /// shows the arithmetic rather than only the outcome.
+    #[test]
+    fn over_cap_reports_the_arithmetic() {
+        let m = parse(&checks_manifest(40, &[])).unwrap();
+        let mut m = m;
+        for id in ["a", "b", "c", "d", "e", "f"] {
+            m.not_applicable
+                .insert(id.to_string(), format!("{id} has no home here"));
+            m.checks.push(ManifestCheck {
+                id: id.to_string(),
+                required: true,
+                enabled: true,
+                command: None,
+                source: None,
+            });
+        }
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.exemption_budget.cap, 5);
+        assert_eq!(r.exemption_budget.declared, 6);
+        assert_eq!(r.exemption_budget.verdict(), ExemptionVerdict::OverCap);
+        let diag = r.exemption_budget.diagnostic();
+        assert!(diag.contains("6 exemptions declared but only 5"), "{diag}");
+        assert!(diag.contains("1 over"), "{diag}");
+        assert!(diag.contains("0 headroom left"), "{diag}");
+        assert!(
+            diag.contains("min(floor(0.25 x 46 required checks), 5)"),
+            "{diag}"
+        );
+    }
+
+    /// A changed-surface trigger must not move the ceiling: the budget
+    /// is a property of the manifest, not of the diff.
+    #[test]
+    fn triggers_do_not_move_the_exemption_cap() {
+        let text = format!(
+            "{}\n[[triggers]]\nwhen_changed = \"frontend/\"\ninclude = \"responsive\"\n",
+            checks_manifest(8, &[])
+        );
+        let m = parse(&text).unwrap();
+        let with_trigger = resolve(
+            &m,
+            &[
+                "frontend/app.tsx".to_string(),
+                "frontend/main.tsx".to_string(),
+            ],
+        )
+        .unwrap();
+        let without = resolve(&m, &[]).unwrap();
+        assert_eq!(
+            with_trigger.exemption_budget.required_checks,
+            without.exemption_budget.required_checks
+        );
+        assert!(with_trigger
+            .plan
+            .checks
+            .iter()
+            .any(|c| c.gate_id == "responsive"));
+    }
+
+    /// A small manifest is a zero allowance, and one exemption is over
+    /// it: the stated consequence of the formula, not an accident.
+    #[test]
+    fn a_small_manifest_gets_a_zero_allowance() {
+        let m = parse(
+            "version = 1\nprofile = \"minimal\"\n\n[[checks]]\nid = \"ux-review\"\n\n\
+             [not_applicable]\nux-review = \"no UI surface in this project\"\n",
+        )
+        .unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.exemption_budget.cap, 0);
+        assert_eq!(r.exemption_budget.verdict(), ExemptionVerdict::OverCap);
+    }
+
+    /// The plan render names the budget even for a project that has used
+    /// none of it, because the allowance is what a manifest is edited
+    /// against.
+    #[test]
+    fn plan_render_names_the_exemption_budget() {
+        let m = parse(&checks_manifest(24, &[])).unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        let out = render_plan(&r);
+        assert!(
+            out.contains("exemption budget: 0 of 5 allowances used"),
+            "{out}"
+        );
+        assert!(
+            out.contains("min(floor(0.25 x 24 required checks), 5)"),
+            "{out}"
+        );
+        // Nothing to report: an unused budget is not a finding.
+        assert!(!out.contains("verdict:"), "{out}");
+    }
+
+    #[test]
+    fn binding_policy_parses_both_accepted_values() {
+        for (raw, want) in [
+            ("report", BindingPolicy::Report),
+            ("reject", BindingPolicy::Reject),
+        ] {
+            let m = parse(&format!(
+                "version = 1\nprofile = \"minimal\"\nbinding_policy = \"{raw}\"\n"
+            ))
+            .unwrap();
+            assert_eq!(m.binding_policy, want);
+        }
+    }
+
+    /// Task 2.6: `reject` refuses to resolve, naming every offending
+    /// check in one refusal, and `resolve` is what the gate command
+    /// calls before opening the database — so nothing runs and no run
+    /// is persisted.
+    #[test]
+    fn reject_policy_refuses_to_resolve_naming_every_unbound_check() {
+        const UNBOUND: &str = r#"
+version = 1
+profile = "minimal"
+binding_policy = "reject"
+
+[[checks]]
+id = "ux-review"
+
+[[checks]]
+id = "api-contract"
+
+[[checks]]
+id = "smoke"
+command = "true"
+"#;
+        // Both entry points refuse: `parse` (used by `load`) validates
+        // before returning a manifest, and `resolve` re-validates so a
+        // directly constructed struct cannot slip past.
+        let err = parse(UNBOUND).unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(err, ManifestError::UnboundRequiredCheck { .. }));
+        assert!(msg.contains("api-contract"), "{msg}");
+        assert!(msg.contains("ux-review"), "{msg}");
+        assert!(
+            !msg.contains("smoke"),
+            "bound checks are not offenders: {msg}"
+        );
+
+        let report = UNBOUND.replace("binding_policy = \"reject\"", "");
+        let mut m = parse(&report).unwrap();
+        m.binding_policy = BindingPolicy::Reject;
+        let err = resolve(&m, &[]).unwrap_err();
+        assert!(matches!(err, ManifestError::UnboundRequiredCheck { .. }));
+    }
+
+    #[test]
+    fn reject_policy_resolves_when_every_required_check_is_bound_or_exempt() {
+        let m = parse(
+            r#"
+version = 1
+profile = "minimal"
+binding_policy = "reject"
+
+[[checks]]
+id = "smoke"
+command = "true"
+
+[[checks]]
+id = "ux-review"
+
+[not_applicable]
+ux-review = "no UI surface in this project"
+"#,
+        )
+        .unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert!(r.unbound.is_empty());
+    }
+
+    /// The default (`report`) policy must not refuse: an unbound
+    /// required check is recorded, not fatal at resolution time.
+    #[test]
+    fn report_policy_never_refuses_resolution() {
+        let m = parse("version = 1\nprofile = \"product\"\n").unwrap();
+        assert!(resolve(&m, &[]).is_ok());
+    }
+
+    /// The absent-command case must not merge with the existing
+    /// empty-command case: `command = ""` keeps its own error.
+    #[test]
+    fn empty_command_and_absent_command_stay_distinct() {
+        let err = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "ux-review"
+command = ""
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::EmptyCheckCommand { .. }));
+    }
+
+    /// Digests must not move for manifests that do not use the new
+    /// fields: both new fields are skipped when empty/default, so every
+    /// pre-existing `gate.toml` keeps the digest it had.
+    #[test]
+    fn new_fields_do_not_change_manifest_digests() {
+        let plain = resolve(&parse(VALID).unwrap(), &[]).unwrap();
+        let explicit = parse(&VALID.replace(
+            "profile = \"backend\"",
+            "profile = \"backend\"\nbinding_policy = \"report\"",
+        ))
+        .unwrap();
+        assert_eq!(
+            resolve(&explicit, &[]).unwrap().manifest_digest,
+            plain.manifest_digest,
+            "the default policy must not change the digest"
+        );
+    }
+
+    /// The dry-run plan render names unbound checks and their
+    /// remediation, separately from the exempted list.
+    #[test]
+    fn plan_render_names_unbound_and_exempted_separately() {
+        let m = parse(
+            r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "ux-review"
+
+[[checks]]
+id = "a11y"
+
+[not_applicable]
+a11y = "no UI surface in this project"
+"#,
+        )
+        .unwrap();
+        let text = render_plan(&resolve(&m, &[]).unwrap());
+        assert!(text.contains("unbound required checks"), "{text}");
+        assert!(text.contains("ux-review"), "{text}");
+        assert!(text.contains("exempted checks"), "{text}");
+        assert!(text.contains("no UI surface in this project"), "{text}");
+    }
 
     #[test]
     fn valid_manifest_resolves_without_execution() {

@@ -584,3 +584,59 @@ command = "cat {cap} ; exit 0"
         assert!(allowed.contains(&name), "leaked field {name}");
     }
 }
+
+/// Task 3.1: the evidence export must keep the new state distinct from
+/// a proven exemption. An unbound check is a blocked field (nothing
+/// ran), never a verified one, and a stored run written before this
+/// change still exports.
+#[test]
+fn unbound_check_blocks_its_fields_and_never_verifies_them() {
+    let tmp = init_dir();
+    write_gate_manifest(
+        &tmp,
+        "profile = \"minimal\"\n[[checks]]\nid = \"ux-review\"\n",
+    );
+    run_gate(&tmp).failure();
+
+    let stdout =
+        String::from_utf8(run_export_json(&tmp).success().get_output().stdout.clone()).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let states: Vec<&str> = parsed["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["state"].as_str().unwrap())
+        .collect();
+    assert!(
+        states.iter().all(|s| *s != "verified"),
+        "a check that never ran cannot verify a field: {states:?}"
+    );
+}
+
+#[test]
+fn stored_run_from_before_the_change_still_exports() {
+    // A legacy bare-array `results_json` row stays readable, so history
+    // written by earlier releases is still exportable.
+    let tmp = init_dir();
+    write_gate_manifest(
+        &tmp,
+        "profile = \"minimal\"\n[[checks]]\nid = \"smoke\"\ncommand = \"true\"\n",
+    );
+    run_gate(&tmp).success();
+    let db_path = tmp.path().join(".driftwatch/state.db");
+    {
+        let mut db = Db::open(&db_path).unwrap();
+        let legacy = r#"[{"gate_id":"smoke","source":"manifest","status":"PASS","severity":"info","findings":[],"evidence":[],"missing_evidence":[]}]"#;
+        db.conn_mut()
+            .execute(
+                "UPDATE gate_runs SET results_json = ?1 WHERE id = (SELECT MAX(id) FROM gate_runs)",
+                [legacy],
+            )
+            .unwrap();
+    }
+    let db = Db::open_read_only(&db_path).unwrap();
+    let run = Gates::new(&db).latest().unwrap().unwrap();
+    assert!(run.results_json.starts_with('['), "legacy shape preserved");
+
+    run_export_json(&tmp).success();
+}

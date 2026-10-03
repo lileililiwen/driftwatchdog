@@ -724,3 +724,37 @@ authorized by the workspace governance queue.
 
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.
+
+The `gate-unbound-check-fails` change is **implemented, still active, and
+must not be archived** (amended 2026-10-02). A required check that binds
+no command now records `UNBOUND`/`Error` and blocks regardless of the
+project's `blocking:` list, and a project may declare a written
+`not_applicable` exemption. The 2026-10-02 owner decision adds the
+per-repository exemption cap: at most
+`min(floor(0.25 × required_checks), 5)` exemptions, computed from the
+project's own manifest; `build`, `tests`, `security`, and `repository` are
+never exempable — matched by concern, so the workspace's other spelling
+`repository_integrity` is protected too — and at the cap the run warns,
+over it the run fails. Measured caveat: the workspace's median manifest
+has 7 required checks, so the allowance is 1 for 60 of 65 parseable repos
+and 0 for 2; the **spine**, not the cap, is what measurably closes the
+escape (all 59 repos with unbound debt carry spine debt). The
+verdict reuses existing statuses (`REVIEW_REQUIRED`/`Warning`,
+`FAIL`/`Error`) on one plan-level `exemption-budget` result, so no new
+status, table, or consumer was added. Rationale and counting rules are in
+`openspec/changes/gate-unbound-check-fails/design.md` §3.5; the normative
+requirement and its scenarios are in that change's `spec.md`.
+
+Verification on 2026-10-02: `cargo fmt --all -- --check` clean,
+`cargo build` ok, `cargo clippy --workspace --all-targets --all-features
+-- -D warnings` clean, `cargo test --workspace --lib` 602 passed,
+`cargo test --workspace --tests` 794 passed / 1 failed — the one failure
+is the pre-existing `packaging` installer test, reproduced identically on a
+pristine `git archive HEAD` tree and unrelated to this change.
+`openspec validate gate-unbound-check-fails --strict` valid;
+`openspec validate --all --strict --no-interactive` 32 passed, 0 failed.
+
+Open before archive: task 4.2's remaining owner decisions (1, 2, 5, 6 in
+`design.md` §8) and the deferred fleet migration (tasks 5.1-5.5). No
+`gate.yaml` in any sibling repository was edited; the measured fleet
+consequence is recorded in that change's `tasks.md` group 7.

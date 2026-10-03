@@ -673,6 +673,28 @@ pub fn validate_output(
             diagnostic: Some(diagnostic),
             remediation: None,
         },
+        // A provider cannot establish that nothing ran; only the
+        // runtime knows which checks have a bound command. An AI
+        // envelope claiming UNBOUND is a claim this path cannot
+        // substantiate, so it degrades to a review instead of
+        // silently passing or self-reporting coverage it never had.
+        GateStatus::Unbound => GateResult {
+            gate_id: truncate_char_boundary(gate_id, 128),
+            source: truncate_char_boundary(&format!("ai:{provider}"), 256),
+            status: GateStatus::ReviewRequired,
+            severity: GateSeverity::Warning,
+            findings: vec![],
+            evidence: evidence_refs,
+            missing_evidence: missing,
+            diagnostic: Some(bound_text(
+                &format!("{diagnostic} | ai envelope claimed UNBOUND; only the runtime may assert that verdict"),
+                MAX_DIAGNOSTIC_BYTES,
+            )),
+            remediation: Some(bound_text(
+                "Report the verdict the evidence supports; an unbound check is decided by the runtime, not by the provider.",
+                MAX_REMEDIATION_BYTES,
+            )),
+        },
     }
 }
 

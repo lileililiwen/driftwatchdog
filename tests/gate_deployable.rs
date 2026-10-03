@@ -38,8 +38,12 @@ fn deployable_profile_requires_both_contract_bindings() {
         .failure();
 
     let (status, blocked, results) = latest_status(&tmp);
-    assert_eq!(status, "REVIEW_REQUIRED");
+    // Both profile-default checks are required and bind no command, so
+    // each is a never-attempted absence: `UNBOUND` and a FAIL, not a
+    // review the project could disable through its blocking list.
+    assert_eq!(status, "FAIL");
     assert!(blocked);
+    assert!(results.contains("\"UNBOUND\""));
     assert!(results.contains("compose-contract:command"));
     assert!(results.contains("ci-contract:command"));
 }

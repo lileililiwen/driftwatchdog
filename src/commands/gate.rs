@@ -41,8 +41,10 @@ use crate::gate::concerns::{
     is_capability_conformance_concern, is_product_quality_concern, is_release_evidence_concern,
     is_source_file_size_concern,
 };
-use crate::gate::manifest::{self, ResolvedGatePlan};
-use crate::gate::types::{GateResult, GateSeverity, GateStatus};
+use crate::gate::dto::{to_gate_run_json, MAX_DIAGNOSTIC_BYTES, MAX_REMEDIATION_BYTES};
+use crate::gate::manifest::{self, ExemptionVerdict, ResolvedGatePlan, MAX_EXEMPTION_REASON_BYTES};
+use crate::gate::redact::bound_text;
+use crate::gate::types::{Finding, GateResult, GateSeverity, GateStatus};
 use crate::project::{git, ProjectRoot};
 use crate::repo::evidence::Artifacts;
 use crate::repo::gates::{Gates, NewGateRun};
@@ -108,7 +110,7 @@ pub fn gate(args: GateArgs, cwd: &Path) -> Result<i32, Error> {
     let taken_at = chrono::Utc::now().to_rfc3339();
     let revision = git_ctx.commit.clone().unwrap_or_else(|| taken_at.clone());
     let change_id = revision.clone();
-    let results_json = bound_results_json(&results);
+    let results_json = bound_results_json(&results, &outcome.unbound);
     Gates::insert(
         &mut db,
         &NewGateRun {
@@ -217,33 +219,175 @@ fn execute_plan(
                         &scheduled_ids,
                     )
                 } else {
-                    crate::gate::adapters::run_adapter(
-                        runtime,
-                        &input,
-                        Some(&check.gate_id),
-                    )
+                    crate::gate::adapters::run_adapter(runtime, &input, Some(&check.gate_id))
                 };
                 results.push(result);
             }
-            None => results.push(GateResult {
-                gate_id: truncate_char_boundary(&check.gate_id, 128),
-                source: truncate_char_boundary(&check.source, 256),
-                status: GateStatus::NotApplicable,
-                severity: GateSeverity::Info,
-                findings: vec![],
-                evidence: vec![],
-                missing_evidence: vec![format!("{}:command", check.gate_id)],
-                diagnostic: Some(
-                    "no command declared for this concern; no execution was attempted".to_string(),
-                ),
-                remediation: Some(
-                    "Declare `command` for this check in gate.toml or accept review for this concern."
-                        .to_string(),
-                ),
-            }),
+            // No project command is bound to this check, so nothing ran.
+            // The four cases are distinct claims and must stay distinct:
+            // a forbidden exemption, an acknowledged exemption, a
+            // required absence that blocks, and an optional absence that
+            // never blocks.
+            None => {
+                let (status, severity, rule, title, remediation) = if check.exempt
+                    && manifest::is_non_exempable_concern(&check.gate_id)
+                {
+                    // The spine is never exempable, so this manifest's
+                    // claim is refused on the record rather than
+                    // acknowledged: no surface may show `NOT_APPLICABLE`
+                    // for a check the owner ruled can never be exempted.
+                    (
+                        GateStatus::Fail,
+                        GateSeverity::Error,
+                        "non-exempable-concern",
+                        format!(
+                            "not_applicable exempts {}, which may never be exempted",
+                            check.gate_id
+                        ),
+                        format!(
+                            "Bind `command` for `{}`, or drop the check. {} are never \
+                             exempable: an exemption there is a reviewed workspace decision, \
+                             not a manifest decision.",
+                            check.gate_id,
+                            manifest::NON_EXEMPTABLE_CONCERNS.join(", ")
+                        ),
+                    )
+                } else if check.exempt {
+                    let reason = manifest
+                        .not_applicable
+                        .get(&check.gate_id)
+                        .map(|r| bound_text(r, MAX_EXEMPTION_REASON_BYTES))
+                        .unwrap_or_default();
+                    (
+                        GateStatus::NotApplicable,
+                        GateSeverity::Info,
+                        "declared-exemption",
+                        format!("check is exempt by manifest declaration: {reason}"),
+                        "Bind `command` for this check when the project's stack grows one."
+                            .to_string(),
+                    )
+                } else if check.required {
+                    (
+                        GateStatus::Unbound,
+                        GateSeverity::Error,
+                        "unbound-required-check",
+                        "required check has no bound command; no coverage exists".to_string(),
+                        "Bind `command` for this check in the gate manifest, or declare a \
+                         `not_applicable` exemption with a reason."
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        GateStatus::Unbound,
+                        GateSeverity::Warning,
+                        "unbound-optional-check",
+                        "optional check has no bound command; it was never attempted".to_string(),
+                        "Bind `command` for this optional check to gain real coverage.".to_string(),
+                    )
+                };
+                results.push(GateResult {
+                    gate_id: truncate_char_boundary(&check.gate_id, 128),
+                    source: truncate_char_boundary(&check.source, 256),
+                    status,
+                    severity,
+                    findings: vec![Finding {
+                        title: bound_text(&title, MAX_DIAGNOSTIC_BYTES),
+                        severity,
+                        location: Some(if check.exempt {
+                            truncate_char_boundary(
+                                &format!("not_applicable.{}", check.gate_id),
+                                256,
+                            )
+                        } else {
+                            truncate_char_boundary(&format!("commands.{}", check.gate_id), 256)
+                        }),
+                        rule: Some(rule.to_string()),
+                    }],
+                    evidence: vec![],
+                    missing_evidence: vec![format!("{}:command", check.gate_id)],
+                    diagnostic: Some(bound_text(
+                        "no command declared for this concern; no execution was attempted",
+                        MAX_DIAGNOSTIC_BYTES,
+                    )),
+                    remediation: Some(bound_text(&remediation, MAX_REMEDIATION_BYTES)),
+                });
+            }
         }
     }
     let mut plan = resolved.plan.clone();
+    // Exemption budget: one plan-level result for the whole manifest,
+    // carrying the owner's per-repo allowance. A failing budget becomes a
+    // required plan check so it blocks the aggregate independently of the
+    // project's `blocking:` list and of whether the exempted concerns were
+    // themselves marked required; an exhausted budget becomes an optional
+    // one so the warning is recorded and never blocks. Existing statuses
+    // are reused deliberately, so no render, persistence, or evidence
+    // consumer needs a new arm.
+    let budget_verdict = resolved.exemption_budget.verdict();
+    if budget_verdict != ExemptionVerdict::Within {
+        // Never collide with a project-declared concern of the same
+        // name: a repo that declares its own `exemption-budget` check
+        // must not be able to hide its budget verdict behind it.
+        let mut budget_id = manifest::EXEMPTION_BUDGET_CHECK.to_string();
+        let mut suffix = 2;
+        while plan.checks.iter().any(|c| c.gate_id == budget_id) {
+            budget_id = format!("{}-{suffix}", manifest::EXEMPTION_BUDGET_CHECK);
+            suffix += 1;
+        }
+        let blocking = matches!(
+            budget_verdict,
+            ExemptionVerdict::OverCap | ExemptionVerdict::HardFail
+        );
+        let (status, severity, rule) = if blocking {
+            (
+                GateStatus::Fail,
+                GateSeverity::Error,
+                "exemption-budget-exceeded",
+            )
+        } else {
+            (
+                GateStatus::ReviewRequired,
+                GateSeverity::Warning,
+                "exemption-budget-exhausted",
+            )
+        };
+        let diagnostic = resolved.exemption_budget.diagnostic();
+        let remediation = if blocking {
+            format!(
+                "Bind a command for the exempted checks, drop the checks, or take the \
+                 exemption through review: a manifest may declare at most {} of its {} \
+                 required checks not applicable.",
+                resolved.exemption_budget.cap, resolved.exemption_budget.required_checks
+            )
+        } else {
+            "No headroom is left for another exemption: bind a command for the next check \
+             that would need one, or review the manifest before widening the hole."
+                .to_string()
+        };
+        results.push(GateResult {
+            gate_id: budget_id.clone(),
+            source: "manifest".to_string(),
+            status,
+            severity,
+            findings: vec![Finding {
+                title: bound_text(&diagnostic, MAX_DIAGNOSTIC_BYTES),
+                severity,
+                location: Some("not_applicable".to_string()),
+                rule: Some(rule.to_string()),
+            }],
+            evidence: vec![],
+            missing_evidence: vec![],
+            diagnostic: Some(bound_text(&diagnostic, MAX_DIAGNOSTIC_BYTES)),
+            remediation: Some(bound_text(&remediation, MAX_REMEDIATION_BYTES)),
+        });
+        plan.checks.push(PlannedCheck {
+            gate_id: budget_id,
+            source: "manifest".to_string(),
+            required: blocking,
+            exempt: false,
+        });
+        plan.checks.sort_by(|a, b| a.gate_id.cmp(&b.gate_id));
+    }
     // Optional AI evaluation: only when `[ai] enabled = true`. The
     // rules are the planned concern ids; evidence resolves against
     // the artifact store so PASS stays evidence-backed.
@@ -280,6 +424,7 @@ fn execute_plan(
                     gate_id: "ai-review".to_string(),
                     source: "ai".to_string(),
                     required: true,
+                    exempt: false,
                 });
                 plan.checks.sort_by(|a, b| a.gate_id.cmp(&b.gate_id));
             }
@@ -288,8 +433,13 @@ fn execute_plan(
     Ok((results, plan))
 }
 
-fn bound_results_json(results: &[GateResult]) -> String {
-    let json = serde_json::to_string(results).unwrap_or_else(|_| "[]".to_string());
+/// Persisted run payload: the versioned result list plus the unbound
+/// collection, so a stored run alone distinguishes a proven
+/// `NOT_APPLICABLE` from a never-attempted `UNBOUND` and coverage debt
+/// is queryable without re-running the gate. No schema change: the
+/// existing `gate_runs.results_json` column carries both.
+fn bound_results_json(results: &[GateResult], unbound: &[String]) -> String {
+    let json = to_gate_run_json(results, unbound);
     truncate_char_boundary(&json, MAX_RESULTS_JSON_BYTES)
 }
 
@@ -332,6 +482,30 @@ fn print_human(outcome: &AggregateOutcome, results: &[GateResult], resolved: &Re
     if !outcome.not_applicable.is_empty() {
         println!("Not applicable: {}", outcome.not_applicable.join(", "));
     }
+    // Unbound is its own line, never merged into the not-applicable
+    // list: these are checks whose coverage was asserted and never
+    // attempted, not proven exemptions.
+    let required_unbound: Vec<&str> = outcome
+        .unbound
+        .iter()
+        .filter(|id| !id.starts_with("optional:"))
+        .map(|id| id.as_str())
+        .collect();
+    if !required_unbound.is_empty() {
+        println!("Unbound required checks: {}", required_unbound.join(", "));
+        println!(
+            "Remediation: bind `command` for each, or declare a `not_applicable` exemption \
+             with a reason. No command ran, so this coverage does not exist."
+        );
+    }
+    let optional_unbound: Vec<&str> = outcome
+        .unbound
+        .iter()
+        .filter_map(|id| id.strip_prefix("optional:"))
+        .collect();
+    if !optional_unbound.is_empty() {
+        println!("Unbound optional checks: {}", optional_unbound.join(", "));
+    }
     if !outcome.blocked {
         println!("Gate passed locally. CI repeats this command; it does not replace it.");
     }
@@ -344,6 +518,8 @@ fn print_json(outcome: &AggregateOutcome, results: &[GateResult], resolved: &Res
         "failures": outcome.failures,
         "pending_reviews": outcome.pending_reviews,
         "not_applicable": outcome.not_applicable,
+        "unbound": outcome.unbound,
+        "exemption_budget": resolved.exemption_budget,
         "manifest_digest": resolved.manifest_digest,
         "rule_pack_version": resolved.rule_pack_version,
         "results": results,
@@ -416,6 +592,7 @@ pub fn gate_history_checks(proj: &ProjectRoot) -> Vec<crate::doctor::check::Chec
 mod tests {
     use super::*;
     use crate::cli::GateArgs;
+    use crate::gate::dto::GateRunResultsDocument;
     use crate::project::root::ProjectRoot;
 
     fn init_project(dir: &Path) {
@@ -493,6 +670,130 @@ mod tests {
         let latest = Gates::new(&db).latest().unwrap().unwrap();
         assert!(latest.blocked);
         assert!(latest.results_json.contains("ux-review:command"));
+    }
+
+    /// Inverts `characterisation_required_unbound_is_not_applicable_info_zero_findings`
+    /// (task 1.2): a required check with no command is now `UNBOUND` +
+    /// `Error` with a named finding, and the gate FAILs.
+    #[test]
+    fn required_unbound_check_fails_with_error_severity_and_a_finding() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        std::fs::write(
+            tmp.path().join("gate.toml"),
+            "profile = \"minimal\"\n[[checks]]\nid = \"ux-review\"\n",
+        )
+        .unwrap();
+        let code = gate(gate_args(false), tmp.path()).unwrap();
+        assert_eq!(code, EXIT_BLOCKED);
+        let db = crate::repo::Db::open_read_only(&tmp.path().join(".driftwatch/state.db")).unwrap();
+        let run = Gates::new(&db).latest().unwrap().unwrap();
+        assert_eq!(run.status, "FAIL");
+        assert!(run.blocked);
+        let doc: GateRunResultsDocument = serde_json::from_str(&run.results_json).unwrap();
+        assert_eq!(doc.unbound, vec!["ux-review".to_string()]);
+        let r = doc
+            .results
+            .iter()
+            .find(|r| r.gate_id == "ux-review")
+            .unwrap();
+        assert_eq!(r.status, GateStatus::Unbound);
+        assert_eq!(r.severity, GateSeverity::Error);
+        assert_eq!(r.findings.len(), 1);
+        assert_eq!(
+            r.findings[0].rule.as_deref(),
+            Some("unbound-required-check")
+        );
+        assert!(r.findings[0].title.contains("no bound command"));
+        assert_eq!(
+            r.findings[0].location.as_deref(),
+            Some("commands.ux-review"),
+            "the finding names the check and the absent command"
+        );
+        assert_eq!(r.evidence.len(), 0);
+        assert_eq!(r.missing_evidence, vec!["ux-review:command".to_string()]);
+    }
+
+    /// An *optional* unbound check is recorded, named, and never blocks.
+    #[test]
+    fn optional_unbound_check_is_recorded_without_blocking() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        std::fs::write(
+            tmp.path().join("gate.toml"),
+            "profile = \"minimal\"\n[[checks]]\nid = \"ux-review\"\nrequired = false\n",
+        )
+        .unwrap();
+        let code = gate(gate_args(false), tmp.path()).unwrap();
+        assert_eq!(code, EXIT_OK);
+        let db = crate::repo::Db::open_read_only(&tmp.path().join(".driftwatch/state.db")).unwrap();
+        let run = Gates::new(&db).latest().unwrap().unwrap();
+        assert_eq!(run.status, "PASS");
+        assert!(!run.blocked);
+        let doc: GateRunResultsDocument = serde_json::from_str(&run.results_json).unwrap();
+        assert_eq!(doc.unbound, vec!["optional:ux-review".to_string()]);
+        let r = doc
+            .results
+            .iter()
+            .find(|r| r.gate_id == "ux-review")
+            .unwrap();
+        assert_eq!(r.status, GateStatus::Unbound);
+        assert_eq!(r.severity, GateSeverity::Warning);
+        assert_eq!(
+            r.findings[0].rule.as_deref(),
+            Some("unbound-optional-check")
+        );
+    }
+
+    /// A declared exemption is acknowledged on the record: reported as
+    /// `NOT_APPLICABLE` with the written reason, never as unbound, and
+    /// it does not block even though the check is required.
+    ///
+    /// The fixture carries eight required checks so the manifest has an
+    /// allowance of two. Before the exemption cap landed, this test ran a
+    /// single-check manifest whose one exemption was unconditionally
+    /// accepted; the same property is now asserted inside a budget rather
+    /// than outside one, and every assertion below is unchanged.
+    #[test]
+    fn declared_exemption_does_not_block_and_carries_its_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        let mut manifest = String::from("profile = \"minimal\"\n");
+        for i in 0..7 {
+            manifest.push_str(&format!("[[checks]]\nid = \"c{i}\"\ncommand = \"true\"\n"));
+        }
+        manifest.push_str(
+            "[[checks]]\nid = \"ux-review\"\n\
+             [not_applicable]\nux-review = \"no UI surface in this project\"\n",
+        );
+        std::fs::write(tmp.path().join("gate.toml"), manifest).unwrap();
+        let code = gate(gate_args(false), tmp.path()).unwrap();
+        assert_eq!(code, EXIT_OK);
+        let db = crate::repo::Db::open_read_only(&tmp.path().join(".driftwatch/state.db")).unwrap();
+        let run = Gates::new(&db).latest().unwrap().unwrap();
+        assert_eq!(run.status, "PASS");
+        let doc: GateRunResultsDocument = serde_json::from_str(&run.results_json).unwrap();
+        assert!(doc.unbound.is_empty());
+        // One exemption inside an allowance of two: no budget verdict.
+        assert!(doc.results.iter().all(|r| r.gate_id != "exemption-budget"));
+        let r = doc
+            .results
+            .iter()
+            .find(|r| r.gate_id == "ux-review")
+            .unwrap();
+        assert_eq!(r.status, GateStatus::NotApplicable);
+        assert_eq!(r.findings[0].rule.as_deref(), Some("declared-exemption"));
+        assert_eq!(
+            r.findings[0].location.as_deref(),
+            Some("not_applicable.ux-review")
+        );
+        assert!(
+            r.findings[0]
+                .title
+                .contains("no UI surface in this project"),
+            "the exemption records its reason: {}",
+            r.findings[0].title
+        );
     }
 
     #[test]

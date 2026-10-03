@@ -3,6 +3,12 @@
 use serde::{Deserialize, Serialize};
 
 /// Result status. Wire strings are `SCREAMING_SNAKE_CASE` and stable.
+///
+/// `UNBOUND` is deliberately distinct from `NOT_APPLICABLE`: a bound
+/// command that reports "not applicable" is a *proven* exemption, while
+/// `UNBOUND` means the check was asserted and no command was ever
+/// bound to it, so nothing ran. The two claims are opposites and must
+/// never share a status, a severity, or a findings list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GateStatus {
@@ -10,6 +16,8 @@ pub enum GateStatus {
     Fail,
     ReviewRequired,
     NotApplicable,
+    /// A required check bound no command and declared no exemption.
+    Unbound,
 }
 
 impl GateStatus {
@@ -19,6 +27,7 @@ impl GateStatus {
             GateStatus::Fail => "FAIL",
             GateStatus::ReviewRequired => "REVIEW_REQUIRED",
             GateStatus::NotApplicable => "NOT_APPLICABLE",
+            GateStatus::Unbound => "UNBOUND",
         }
     }
 
@@ -28,6 +37,7 @@ impl GateStatus {
             "FAIL" => Some(GateStatus::Fail),
             "REVIEW_REQUIRED" => Some(GateStatus::ReviewRequired),
             "NOT_APPLICABLE" => Some(GateStatus::NotApplicable),
+            "UNBOUND" => Some(GateStatus::Unbound),
             _ => None,
         }
     }
@@ -119,10 +129,42 @@ mod tests {
             GateStatus::Fail,
             GateStatus::ReviewRequired,
             GateStatus::NotApplicable,
+            GateStatus::Unbound,
         ] {
             assert_eq!(GateStatus::parse(s.as_str()), Some(s));
         }
         assert_eq!(GateStatus::parse("pass"), None);
+    }
+
+    /// The four pre-existing wire strings are unchanged, so persisted
+    /// and exported payloads from earlier releases keep parsing.
+    #[test]
+    fn existing_status_wire_strings_are_unchanged() {
+        assert_eq!(GateStatus::Pass.as_str(), "PASS");
+        assert_eq!(GateStatus::Fail.as_str(), "FAIL");
+        assert_eq!(GateStatus::ReviewRequired.as_str(), "REVIEW_REQUIRED");
+        assert_eq!(GateStatus::NotApplicable.as_str(), "NOT_APPLICABLE");
+    }
+
+    #[test]
+    fn unbound_is_distinct_from_not_applicable() {
+        assert_eq!(GateStatus::Unbound.as_str(), "UNBOUND");
+        assert_ne!(GateStatus::Unbound, GateStatus::NotApplicable);
+        assert_eq!(GateStatus::parse("UNBOUND"), Some(GateStatus::Unbound));
+        assert_eq!(
+            GateStatus::parse("NOT_APPLICABLE"),
+            Some(GateStatus::NotApplicable)
+        );
+    }
+
+    #[test]
+    fn status_serialises_as_screaming_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&GateStatus::Unbound).unwrap(),
+            "\"UNBOUND\""
+        );
+        let back: GateStatus = serde_json::from_str("\"UNBOUND\"").unwrap();
+        assert_eq!(back, GateStatus::Unbound);
     }
 
     #[test]

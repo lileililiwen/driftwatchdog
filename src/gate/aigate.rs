@@ -21,6 +21,9 @@
 //! commands:                       # optional concern id -> command string
 //!   build: "npm run build"
 //! blocking: [FAIL, REVIEW_REQUIRED]  # optional; REVIEW_REQUIRED toggles fail-closed
+//! not_applicable:                # optional written exemptions: id -> reason
+//!   accessibility: "no UI surface in this project"
+//! binding_policy: report         # optional; report | reject
 //! project_commands:               # optional named project commands
 //!   test: "npm test"
 //! contexts: [git, openspec]       # optional context providers
@@ -29,6 +32,10 @@
 //! Unknown fields fail with a `did you mean` hint. A `profile` that is
 //! not a built-in name becomes a project-defined profile whose selection
 //! is exactly the `true`/`"optional"` entries in `checks`.
+//!
+//! `not_applicable` and `binding_policy` convert to the same
+//! [`GateManifest`] fields the native `gate.toml` uses, so the command
+//! binding rules run once, in `manifest::validate`, for both forms.
 
 use std::collections::BTreeMap;
 
@@ -36,8 +43,8 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 use crate::gate::dto::GATE_CONTRACT_VERSION;
 use crate::gate::manifest::{
-    self, ContextDecl, GateManifest, ManifestBlocking, ManifestCheck, ManifestError,
-    SourceSizePolicy,
+    self, BindingPolicy, ContextDecl, GateManifest, ManifestBlocking, ManifestCheck, ManifestError,
+    SourceSizePolicy, BINDING_POLICIES,
 };
 
 /// The runtime name this binary answers to in a `.ai-gate/gate.yaml`.
@@ -52,6 +59,8 @@ const YAML_FIELDS: &[&str] = &[
     "checks",
     "commands",
     "blocking",
+    "not_applicable",
+    "binding_policy",
     "project_commands",
     "contexts",
 ];
@@ -91,6 +100,8 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
     let mut checks_yaml: Option<&Yaml> = None;
     let mut commands_yaml: Option<&Yaml> = None;
     let mut blocking_yaml: Option<&Yaml> = None;
+    let mut not_applicable_yaml: Option<&Yaml> = None;
+    let mut binding_policy_yaml: Option<&Yaml> = None;
     let mut project_commands_yaml: Option<&Yaml> = None;
     let mut contexts_yaml: Option<&Yaml> = None;
 
@@ -113,6 +124,8 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
             "checks" => checks_yaml = Some(v),
             "commands" => commands_yaml = Some(v),
             "blocking" => blocking_yaml = Some(v),
+            "not_applicable" => not_applicable_yaml = Some(v),
+            "binding_policy" => binding_policy_yaml = Some(v),
             "project_commands" => project_commands_yaml = Some(v),
             "contexts" => contexts_yaml = Some(v),
             other => return Err(manifest::unknown_field_error(other, YAML_FIELDS)),
@@ -198,6 +211,37 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         blocking.review_required_blocks = names.iter().any(|n| n == "REVIEW_REQUIRED");
     }
 
+    // not_applicable: written per-check exemptions. Structural
+    // validation (selected check, non-empty reason, no bound command)
+    // runs in `manifest::validate` so both manifest forms share it.
+    let mut not_applicable: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(n) = not_applicable_yaml {
+        let h = n.as_hash().ok_or_else(|| {
+            ManifestError::Parse("`not_applicable` must be a mapping".to_string())
+        })?;
+        for (k, v) in h {
+            let id = k
+                .as_str()
+                .ok_or_else(|| {
+                    ManifestError::Parse("not_applicable key must be a string".to_string())
+                })?
+                .to_string();
+            not_applicable.insert(id, expect_string(v, "not_applicable reason")?);
+        }
+    }
+
+    // binding_policy: closed value set; an unknown value fails here
+    // with the accepted set rather than silently defaulting.
+    let mut binding_policy = BindingPolicy::default();
+    if let Some(b) = binding_policy_yaml {
+        let raw = expect_string(b, "binding_policy")?;
+        binding_policy =
+            BindingPolicy::parse(&raw).ok_or_else(|| ManifestError::UnknownBindingPolicy {
+                got: raw,
+                expected: BINDING_POLICIES.join(" or "),
+            })?;
+    }
+
     // project_commands: named, validated by the shared structural pass.
     let mut project_commands: BTreeMap<String, String> = BTreeMap::new();
     if let Some(p) = project_commands_yaml {
@@ -255,7 +299,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         profiles.insert(profile.clone(), Vec::new());
     }
 
-    let gate_manifest = GateManifest {
+    let mut gate_manifest = GateManifest {
         version,
         profile,
         checks,
@@ -269,7 +313,10 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         // policy; the native `gate.toml` `[source_size]` table is the
         // configuration surface for a custom boundary.
         source_size: SourceSizePolicy::default(),
+        not_applicable,
+        binding_policy,
     };
+    manifest::bound_exemption_reasons(&mut gate_manifest);
     manifest::validate(&gate_manifest)?;
     Ok(AiGateDoc {
         runtime,
@@ -460,5 +507,173 @@ contexts:
     #[test]
     fn top_level_must_be_mapping() {
         assert!(parse_document("- a\n- b\n").is_err());
+    }
+
+    /// The YAML form exposes the same command-binding vocabulary as
+    /// `gate.toml`: a required check with no `commands.<id>` entry is
+    /// unbound, and a written `not_applicable` reason exempts it.
+    #[test]
+    fn required_check_without_command_is_unbound_in_yaml_form() {
+        let m = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  build: true
+  tests: true
+commands:
+  tests: "npm test"
+"#,
+        )
+        .unwrap();
+        assert_eq!(m.binding_policy, BindingPolicy::Report);
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.unbound, vec!["build".to_string()]);
+        assert!(r.exemptions.is_empty());
+    }
+
+    #[test]
+    fn not_applicable_exemption_clears_unbound_in_yaml_form() {
+        let m = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  build: true
+  accessibility: true
+not_applicable:
+  accessibility: "no UI surface in this project"
+"#,
+        )
+        .unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(r.unbound, vec!["build".to_string()]);
+        assert_eq!(
+            r.exemptions.get("accessibility").map(String::as_str),
+            Some("no UI surface in this project")
+        );
+        let check = r
+            .plan
+            .checks
+            .iter()
+            .find(|c| c.gate_id == "accessibility")
+            .unwrap();
+        assert!(check.exempt);
+    }
+
+    #[test]
+    fn exemption_with_empty_reason_fails_in_yaml_form() {
+        let err = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  a11y: true
+not_applicable:
+  a11y: "  "
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::EmptyExemptionReason { .. }));
+        assert!(err.to_string().contains("a11y"));
+    }
+
+    #[test]
+    fn exemption_for_unselected_check_fails_in_yaml_form() {
+        let err = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  build: true
+not_applicable:
+  a11y: "no UI here"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::ExemptionNotSelected { .. }));
+    }
+
+    #[test]
+    fn exemption_that_binds_a_command_fails_in_yaml_form() {
+        let err = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  build: true
+commands:
+  build: "npm run build"
+not_applicable:
+  build: "we do have a command"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::ExemptionConflictsWithCommand { .. }
+        ));
+    }
+
+    #[test]
+    fn yaml_exemption_reason_is_bounded_and_redacted() {
+        let long = "y".repeat(crate::gate::manifest::MAX_EXEMPTION_REASON_BYTES * 2);
+        let m = parse(&format!(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  a11y: true
+not_applicable:
+  a11y: "api_key=supersecret123 {long}"
+"#
+        ))
+        .unwrap();
+        let reason = m.not_applicable.get("a11y").unwrap();
+        assert!(!reason.contains("supersecret123"), "{reason}");
+        assert!(reason.len() <= crate::gate::manifest::MAX_EXEMPTION_REASON_BYTES + 3);
+    }
+
+    #[test]
+    fn unknown_binding_policy_fails_with_accepted_set_in_yaml_form() {
+        let err = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+binding_policy: "MAYBE"
+"#,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("MAYBE"), "{msg}");
+        assert!(msg.contains("report") && msg.contains("reject"), "{msg}");
+    }
+
+    #[test]
+    fn reject_policy_refuses_to_resolve_in_yaml_form() {
+        let err = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+binding_policy: reject
+checks:
+  build: true
+  tests: true
+commands:
+  tests: "npm test"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::UnboundRequiredCheck { .. }));
+        assert!(err.to_string().contains("build"), "{err}");
+        assert!(!err.to_string().contains("tests"), "{err}");
     }
 }
