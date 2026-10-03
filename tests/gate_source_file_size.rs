@@ -55,13 +55,20 @@ fn write_lines(tmp: &tempfile::TempDir, rel: &str, newlines: usize) {
     std::fs::write(&path, "x\n".repeat(newlines)).unwrap();
 }
 
-/// A `product` manifest that relaxes the two project-owned concerns and
+/// A `product` manifest that relaxes the three project-owned concerns and
 /// appends the caller's extra policy (e.g. a `[source_size]` table).
+///
+/// `governance-quality` is relaxed for the same reason as the other two:
+/// the profile schedules it, no command is bound, and an unbound required
+/// check would block the run, making every fixture here measure the
+/// unbound path instead of the scanner.
 fn source_manifest(extra: &str) -> String {
     format!(
         "version = 1\nprofile = \"product\"\n\
 [[checks]]\nid = \"product-code-boundary\"\nrequired = false\n\
-[[checks]]\nid = \"placeholder-threshold\"\nrequired = false\n{extra}"
+[[checks]]\nid = \"placeholder-threshold\"\nrequired = false\n\
+[[checks]]\nid = \"governance-quality\"\nrequired = false\n\
+{extra}"
     )
 }
 
@@ -106,7 +113,8 @@ fn rust_product_profile_selects_the_built_in_scanner() {
     write_lines(&tmp, "src/feature.rs", 1000);
     let manifest = "version = 1\nprofile = \"rust-product\"\n\
 [[checks]]\nid = \"product-code-boundary\"\nrequired = false\n\
-[[checks]]\nid = \"placeholder-threshold\"\nrequired = false\n";
+[[checks]]\nid = \"placeholder-threshold\"\nrequired = false\n\
+[[checks]]\nid = \"governance-quality\"\nrequired = false\n";
     write_gate_manifest(&tmp, manifest);
 
     let output = gate_output(&tmp, &[]);

@@ -19,6 +19,8 @@
 //!   build: true
 //!   accessibility: optional
 //! commands:                       # optional concern id -> command string
+//! governance_quality:              # optional; narrows the concern's code scope
+//!   codes: [QUALITY_README_CLAIM_CONTRADICTED]
 //!   build: "npm run build"
 //! blocking: [FAIL, REVIEW_REQUIRED]  # optional; REVIEW_REQUIRED toggles fail-closed
 //! not_applicable:                # optional written exemptions: id -> reason
@@ -43,8 +45,8 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 use crate::gate::dto::GATE_CONTRACT_VERSION;
 use crate::gate::manifest::{
-    self, BindingPolicy, ContextDecl, GateManifest, ManifestBlocking, ManifestCheck, ManifestError,
-    SourceSizePolicy, BINDING_POLICIES,
+    self, BindingPolicy, ContextDecl, GateManifest, GovernanceQualityPolicy, ManifestBlocking,
+    ManifestCheck, ManifestError, SourceSizePolicy, BINDING_POLICIES,
 };
 
 /// The runtime name this binary answers to in a `.ai-gate/gate.yaml`.
@@ -63,6 +65,7 @@ const YAML_FIELDS: &[&str] = &[
     "binding_policy",
     "project_commands",
     "contexts",
+    "governance_quality",
 ];
 
 /// A parsed business Gate document: the declared runtime (for the
@@ -104,6 +107,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
     let mut binding_policy_yaml: Option<&Yaml> = None;
     let mut project_commands_yaml: Option<&Yaml> = None;
     let mut contexts_yaml: Option<&Yaml> = None;
+    let mut governance_quality_yaml: Option<&Yaml> = None;
 
     for (k, v) in hash {
         let key = k
@@ -128,6 +132,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
             "binding_policy" => binding_policy_yaml = Some(v),
             "project_commands" => project_commands_yaml = Some(v),
             "contexts" => contexts_yaml = Some(v),
+            "governance_quality" => governance_quality_yaml = Some(v),
             other => return Err(manifest::unknown_field_error(other, YAML_FIELDS)),
         }
     }
@@ -272,6 +277,38 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         }
     }
 
+    // governance_quality: the concern's code scope. The set itself is
+    // enforced by the adapter (a subset only; an empty set is a
+    // configuration error), so parsing here is shape validation only.
+    let mut governance_quality = GovernanceQualityPolicy::default();
+    if let Some(g) = governance_quality_yaml {
+        let h = g.as_hash().ok_or_else(|| {
+            ManifestError::Parse("`governance_quality` must be a mapping".to_string())
+        })?;
+        for (k, v) in h {
+            match k.as_str() {
+                Some("codes") => {
+                    let arr = v.as_vec().ok_or_else(|| {
+                        ManifestError::Parse(
+                            "`governance_quality.codes` must be a list".to_string(),
+                        )
+                    })?;
+                    let mut codes = Vec::with_capacity(arr.len());
+                    for item in arr {
+                        codes.push(expect_string(item, "governance_quality code")?);
+                    }
+                    governance_quality.codes = codes;
+                }
+                other => {
+                    return Err(manifest::unknown_field_error(
+                        other.unwrap_or_default(),
+                        &["codes"],
+                    ))
+                }
+            }
+        }
+    }
+
     let mut checks: Vec<ManifestCheck> = Vec::new();
     for (id, required) in &selected {
         checks.push(ManifestCheck {
@@ -315,6 +352,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         source_size: SourceSizePolicy::default(),
         not_applicable,
         binding_policy,
+        governance_quality,
     };
     manifest::bound_exemption_reasons(&mut gate_manifest);
     manifest::validate(&gate_manifest)?;

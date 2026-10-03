@@ -38,10 +38,11 @@ use crate::gate::adapters::{
 use crate::gate::aggregate::{aggregate, AggregateOutcome, GatePlan, PlannedCheck};
 use crate::gate::ai::{self, AiEvalInput, AiRule};
 use crate::gate::concerns::{
-    is_capability_conformance_concern, is_product_quality_concern, is_release_evidence_concern,
-    is_source_file_size_concern,
+    is_capability_conformance_concern, is_governance_quality_concern, is_product_quality_concern,
+    is_release_evidence_concern, is_source_file_size_concern,
 };
 use crate::gate::dto::{to_gate_run_json, MAX_DIAGNOSTIC_BYTES, MAX_REMEDIATION_BYTES};
+use crate::gate::governance::run_governance_quality_adapter;
 use crate::gate::manifest::{self, ExemptionVerdict, ResolvedGatePlan, MAX_EXEMPTION_REASON_BYTES};
 use crate::gate::redact::bound_text;
 use crate::gate::types::{Finding, GateResult, GateSeverity, GateStatus};
@@ -196,13 +197,26 @@ fn execute_plan(
                     max_output_bytes: CHECK_MAX_OUTPUT_BYTES,
                     evidence: vec![],
                 };
-                // Concern-specific adapters (product-quality,
-                // release-evidence, capability-conformance) parse a
-                // versioned JSON envelope, apply exit-code authority,
-                // and downgrade malformed/missing/contradictory output
-                // to REVIEW_REQUIRED. Every other concern keeps the
+                // Concern-specific adapters (governance-quality,
+                // product-quality, release-evidence,
+                // capability-conformance) parse a versioned report or
+                // envelope, apply their own mapping, and downgrade
+                // malformed/missing/contradictory output to
+                // REVIEW_REQUIRED. Every other concern keeps the
                 // project-runtime text adapter unchanged.
-                let result = if is_product_quality_concern(&check.gate_id) {
+                //
+                // `governance-quality` is matched first: it is a
+                // product-profile concern, but it consumes a governance
+                // report scoped to a code set, not the product-quality
+                // envelope, so it must not fall into that adapter.
+                let result = if is_governance_quality_concern(&check.gate_id) {
+                    run_governance_quality_adapter(
+                        "project-runtime",
+                        Some(&check.gate_id),
+                        &input,
+                        &resolved.governance_quality.codes,
+                    )
+                } else if is_product_quality_concern(&check.gate_id) {
                     run_product_quality_adapter("project-runtime", Some(&check.gate_id), &input)
                 } else if is_release_evidence_concern(&check.gate_id) {
                     run_release_evidence_adapter(

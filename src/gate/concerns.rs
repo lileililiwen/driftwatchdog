@@ -8,7 +8,7 @@
 //! project-runtime adapter, so the same command surface that backs
 //! every other Gate concern is reused here.
 //!
-//! Seven concern IDs are registered today, organised in three vocabularies:
+//! Eight concern IDs are registered today, organised in three vocabularies:
 //!
 //! ## Product-quality vocabulary
 //!
@@ -26,6 +26,19 @@
 //!   included file exceeds the configured (default 1,000) physical-line
 //!   maximum. The scanner lives in [`crate::gate::source_size`] and
 //!   never parses a language.
+//!
+//! ## Governance-quality vocabulary
+//!
+//! * `governance-quality` — a project command runs an external
+//!   governance checker and reports a **code-scoped** slice of it: the
+//!   findings whose code is in the concern's declared code set, never
+//!   the checker's total. The status comes from the matching findings'
+//!   level, not from the checker's exit code, because a checker that
+//!   reports an unrelated portfolio backlog exits nonzero while this
+//!   concern's own codes are clean. The adapter lives in
+//!   [`crate::gate::governance`]; it binds no checker path of its own,
+//!   so a project that has not bound a command is `UNBOUND` rather
+//!   than covered.
 //!
 //! ## Release-gate vocabulary
 //!
@@ -95,6 +108,39 @@ pub fn is_source_file_size_concern(id: &str) -> bool {
     id == SOURCE_FILE_SIZE
 }
 
+/// Stable concern id: report the code-scoped slice of an external
+/// governance checker's findings. Bound to a project-owned command
+/// that emits the governance report; Driftwatchdog keeps only the
+/// findings whose `code` is in the concern's declared code set and
+/// derives the status from those findings' levels. It never binds a
+/// checker path itself: the checker lives outside this repository and
+/// each project binds its own command.
+pub const GOVERNANCE_QUALITY: &str = "governance-quality";
+
+/// Every concern the `product` / `rust-product` built-in profiles
+/// schedule, sorted for deterministic plans.
+///
+/// This is a superset of [`PRODUCT_QUALITY_CONCERNS`], and it is kept
+/// separate on purpose: `is_product_quality_concern` answers "does the
+/// product-quality *envelope* adapter serve this id", and
+/// `governance-quality` is served by its own code-scoped adapter.
+/// Selection is data only and never invents a command, so a project
+/// that picks a product profile without binding
+/// `commands.governance-quality` records `UNBOUND` and fails.
+pub const PRODUCT_PROFILE_CONCERNS: &[&str] = &[
+    GOVERNANCE_QUALITY,
+    PLACEHOLDER_THRESHOLD,
+    PRODUCT_CODE_BOUNDARY,
+    SOURCE_FILE_SIZE,
+];
+
+/// True when `id` is the `governance-quality` concern id. The concern
+/// is served by [`crate::gate::governance`], not by the product-quality
+/// envelope adapter.
+pub fn is_governance_quality_concern(id: &str) -> bool {
+    id == GOVERNANCE_QUALITY
+}
+
 /// Stable concern id: verify a project-owned capability-conformance
 /// report. The project command emits a versioned JSON envelope that
 /// lists declared, configured, verified, and unverified capabilities;
@@ -153,10 +199,34 @@ mod tests {
         assert_eq!(PRODUCT_CODE_BOUNDARY, "product-code-boundary");
         assert_eq!(PLACEHOLDER_THRESHOLD, "placeholder-threshold");
         assert_eq!(SOURCE_FILE_SIZE, "source-file-size");
+        assert_eq!(GOVERNANCE_QUALITY, "governance-quality");
         assert_eq!(CAPABILITY_CONFORMANCE, "capability-conformance");
         assert_eq!(RELEASE_EVIDENCE, "release-evidence");
         assert_eq!(COMPOSE_CONTRACT, "compose-contract");
         assert_eq!(CI_CONTRACT, "ci-contract");
+    }
+
+    /// The product profiles schedule the governance concern, and the
+    /// concern's own adapter claims it. Both facts are load-bearing:
+    /// without the first the concern is unreachable from a built-in
+    /// profile, and without the second the product-quality envelope
+    /// adapter would claim an id whose report shape it cannot parse.
+    #[test]
+    fn product_profile_schedules_the_governance_concern_exactly_once() {
+        let scheduled = PRODUCT_PROFILE_CONCERNS
+            .iter()
+            .filter(|id| **id == GOVERNANCE_QUALITY)
+            .count();
+        assert_eq!(scheduled, 1, "governance-quality must be scheduled once");
+        for id in PRODUCT_QUALITY_CONCERNS {
+            assert!(
+                PRODUCT_PROFILE_CONCERNS.contains(id),
+                "{id} must stay scheduled by the product profiles"
+            );
+        }
+        assert!(is_governance_quality_concern(GOVERNANCE_QUALITY));
+        assert!(!is_product_quality_concern(GOVERNANCE_QUALITY));
+        assert!(!is_release_gate_concern(GOVERNANCE_QUALITY));
     }
 
     #[test]
@@ -194,12 +264,20 @@ mod tests {
         assert!(!is_release_evidence_concern(CAPABILITY_CONFORMANCE));
         assert!(!is_capability_conformance_concern(RELEASE_EVIDENCE));
         assert!(!is_deployable_concern("docker"));
+        // The governance concern is closed-vocabulary too: a near-miss
+        // spelling must not silently select the code-scoped adapter.
+        assert!(!is_governance_quality_concern(""));
+        assert!(!is_governance_quality_concern("governance"));
+        assert!(!is_governance_quality_concern("GOVERNANCE_QUALITY"));
+        assert!(!is_governance_quality_concern("governance-quality "));
+        assert!(!is_governance_quality_concern(PRODUCT_CODE_BOUNDARY));
     }
 
     #[test]
     fn vocabulary_is_sorted_for_deterministic_iteration() {
         for (label, slice) in [
             ("product-quality", PRODUCT_QUALITY_CONCERNS),
+            ("product-profile", PRODUCT_PROFILE_CONCERNS),
             ("release-gate", RELEASE_GATE_CONCERNS),
             ("deployable", DEPLOYABLE_CONCERNS),
         ] {

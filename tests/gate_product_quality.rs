@@ -48,6 +48,25 @@ fn make_envelope_file(tmp: &tempfile::TempDir, name: &str, body: &str) -> std::p
     path
 }
 
+/// The `product` / `rust-product` profiles now also schedule the
+/// code-scoped `governance-quality` concern, which runs a
+/// project-bound command. A fixture whose subject is the
+/// product-quality envelope must bind it, or the profile's unbound set
+/// blocks the run and the assertion would be measuring the unbound
+/// path instead. This binds it to a clean governance report, so the
+/// concern reads `PASS` and the envelope stays the thing under test.
+fn governance_binding(tmp: &tempfile::TempDir) -> String {
+    let report = make_envelope_file(
+        tmp,
+        "governance.json",
+        r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+    );
+    format!(
+        "[[checks]]\nid = \"governance-quality\"\ncommand = \"cat {} ; exit 0\"\n",
+        report.display()
+    )
+}
+
 #[test]
 fn product_profile_passes_with_passing_envelope() {
     let tmp = init_dir();
@@ -67,8 +86,9 @@ command = "cat {envelope} ; exit 0"
 [[checks]]
 id = "placeholder-threshold"
 command = "cat {envelope} ; exit 0"
-"#,
-            envelope = envelope.display()
+{governance}"#,
+            envelope = envelope.display(),
+            governance = governance_binding(&tmp)
         ),
     );
     let assert = run_gate(&tmp);
@@ -151,7 +171,8 @@ fn product_profile_malformed_envelope_with_output_is_text_pass() {
     let tmp = init_dir();
     write_gate_manifest(
         &tmp,
-        r#"
+        &format!(
+            r#"
 profile = "product"
 [[checks]]
 id = "product-code-boundary"
@@ -159,7 +180,9 @@ command = "echo legacy; exit 0"
 [[checks]]
 id = "placeholder-threshold"
 command = "echo legacy-threshold; exit 0"
-"#,
+{governance}"#,
+            governance = governance_binding(&tmp)
+        ),
     );
     let assert = run_gate(&tmp);
     assert.success();
@@ -236,8 +259,9 @@ required = false
 [[checks]]
 id = "product-code-boundary"
 command = "cat {envelope} ; exit 0"
-"#,
-            envelope = envelope.display()
+{governance}"#,
+            envelope = envelope.display(),
+            governance = governance_binding(&tmp)
         ),
     );
     let assert = run_gate(&tmp);
@@ -342,8 +366,9 @@ command = "cat {envelope} ; exit 0"
 [[checks]]
 id = "placeholder-threshold"
 command = "cat {envelope} ; exit 0"
-"#,
-            envelope = envelope.display()
+{governance}"#,
+            envelope = envelope.display(),
+            governance = governance_binding(&tmp)
         ),
     );
     let assert = run_gate(&tmp);
@@ -372,8 +397,9 @@ command = "cat {envelope} ; exit 0"
 [[checks]]
 id = "placeholder-threshold"
 command = "cat {envelope} ; exit 0"
-"#,
-            envelope = envelope.display()
+{governance}"#,
+            envelope = envelope.display(),
+            governance = governance_binding(&tmp)
         ),
     );
     // Unknown status means parse_envelope returns None, so we fall
@@ -405,8 +431,9 @@ command = "cat {envelope} ; exit 0"
 [[checks]]
 id = "placeholder-threshold"
 command = "cat {envelope} ; exit 0"
-"#,
-            envelope = envelope.display()
+{governance}"#,
+            envelope = envelope.display(),
+            governance = governance_binding(&tmp)
         ),
     );
     let assert = run_gate(&tmp);
@@ -472,8 +499,9 @@ command = "cat {envelope} ; exit 2"
 [[checks]]
 id = "placeholder-threshold"
 command = "exit 0"
-"#,
-            envelope = envelope.display()
+{governance}"#,
+            envelope = envelope.display(),
+            governance = governance_binding(&tmp)
         ),
     );
     let assert = run_gate(&tmp);

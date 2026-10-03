@@ -7,6 +7,14 @@ checks:
   build: true
   tests: true
   security: true
+  # Scheduled by the `rust-product` profile. No command is bound here, so
+  # this repository records `UNBOUND` (exit 1) and blocks — the same
+  # state as the checks above. The governance checker lives in the
+  # sibling `workspace-governance` repository, so there is no path this
+  # manifest could default, and binding one would make this repository's
+  # gate depend on a sibling's on-disk layout. The concern's behaviour is
+  # pinned by `tests/gate_governance_quality.rs` instead.
+  governance-quality: true
 blocking:
   - FAIL
   - REVIEW_REQUIRED

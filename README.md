@@ -181,7 +181,7 @@ corrected.
 | `backend` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above (project-runtime text adapter) | yes (project-runtime `exit 0 → PASS`, `nonzero → FAIL`) |
 | `frontend` | `a11y`, `responsive`, `secret-scan` | required | as above | yes |
 | `full` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above | yes |
-| `product` (alias `rust-product`) | `placeholder-threshold`, `product-code-boundary`, `source-file-size` (built-in, no command) | required | envelope wire version `1` for the two project-owned concerns; in-process normalized result for the built-in scanner | yes for the project-owned concerns; n/a for the built-in scanner |
+| `product` (alias `rust-product`) | `governance-quality`, `placeholder-threshold`, `product-code-boundary`, `source-file-size` (built-in, no command) | required | envelope wire version `1` for the two project-owned concerns; in-process normalized result for the built-in scanner; **code-scoped report** for `governance-quality`, whose status comes from the matching findings' levels and not from the checker's exit code | yes for the two project-owned concerns; **no** for `governance-quality` (a report it cannot read must not pass silently); n/a for the built-in scanner |
 | `release` | `capability-conformance`, `release-evidence` | required | as above (envelope wire version `1`, shared with the product-quality shape) | **no** (missing coverage must never silently pass) |
 | `deployable` | `ci-contract`, `compose-contract` | required | project-runtime exit status (`0`→`PASS`, non-zero→`FAIL`; a required check with no bound command→`UNBOUND`, which blocks) | yes |
 
@@ -206,8 +206,9 @@ make that absence explicit instead:
   manifest, and every declaration spends one — including one on an
   optional check. At the budget the run records a warning that the
   headroom is exhausted; over it the run **fails**. `build`, `tests`,
-  `security`, and `repository` are never exempable at any budget, so an
-  exemption naming one of them fails the run outright. The spine is matched
+  `security`, `repository`, and `governance-quality` are never exempable
+  at any budget, so an exemption naming one of them fails the run
+  outright. The spine is matched
   by concern, not by spelling: this workspace also spells
   repository-integrity as `repository_integrity`, and that id is protected
   exactly as `repository` is. A project that genuinely needs more must bind
@@ -510,7 +511,15 @@ commands:                         # bind a selected concern to a command
 blocking: [FAIL, REVIEW_REQUIRED]
 project_commands:
   lint: "npm run lint"
-contexts: [git, openspec]
+contexts: [git, openspec
+governance_quality:               # optional; narrows a code scope, never widens it
+  codes: [RULES_DRIFT_NEW]
+# A product-profile project also schedules `governance-quality`. It has
+# no default command: the governance checker lives in a sibling
+# repository, so each project binds its own under `commands:` --
+#   commands:
+#     governance-quality: "python3 ../workspace-governance/scripts/workspace_check.py --json"
+# Leaving it unbound records `UNBOUND` and fails the run.
 ```
 
 A `profile` that is not a built-in name selects exactly its declared
@@ -519,19 +528,28 @@ A `profile` that is not a built-in name selects exactly its declared
 same domain profiles are available in `gate.toml` via a
 `[profiles.<name>]` table listing the concerns the profile selects.
 
+A check with no entry under `commands:` is `UNBOUND` and fails the run.
+That includes `governance-quality`, which the `product` profile
+schedules but cannot default: its checker lives in a sibling repository,
+so there is no path to bind for it, and binding one is a decision each
+project makes for itself. See
+[Governance-quality Gate concern](#governance-quality-gate-concern).
+
 Local verification comes first: a change that has not passed its local
 Gate must not be represented as complete merely because CI is
 configured. CI templates repeat the same command as a second layer.
 
 ### Product-quality Gate contract
 
-The `product` and `rust-product` built-in profiles schedule three
-concerns: `product-code-boundary`, `placeholder-threshold`, and the
-built-in `source-file-size`. The profiles are aliases: `rust-product`
-exists for projects that want a Rust-flavored name without changing the
-concern set. All three are required by default; relax an individual
-concern to `required = false`, or remove it with `enabled = false`, when
-a project cannot meet it yet.
+The `product` and `rust-product` built-in profiles schedule the
+product-quality concerns — `product-code-boundary`,
+`placeholder-threshold`, the built-in `source-file-size`, and
+`governance-quality` (documented on its own below, because its
+wire shape and status mapping differ). The profiles are aliases:
+`rust-product` exists for projects that want a Rust-flavored name
+without changing the concern set. All four are required by default;
+relax an individual concern to `required = false`, or remove it with
+`enabled = false`, when a project cannot meet it yet.
 
 `product-code-boundary` and `placeholder-threshold` are data only:
 Driftwatchdog never embeds a language scanner, runs a provider SDK, or
@@ -601,6 +619,119 @@ using the same limits the rest of the Gate contract applies
 oversized producer cannot break the Gate's output invariants. The
 `rust-product` profile is a strict alias for `product`; the two names
 select the same concerns with the same default severity model.
+
+### Governance-quality Gate concern
+
+`governance-quality` makes a **code-scoped** slice of an external
+governance check reportable as a Gate concern. The governance checks
+live outside this repository; the concern binds no checker path of its
+own, so a project that does not bind a command for it records
+`UNBOUND` and fails, exactly like any other unbound required check.
+
+The report is project-owned data, not a Gate envelope: a top-level JSON
+object with `findings` and `summary`, where each finding carries a
+`code`, a `level` (`ERROR` or `WARNING`), a `message`, and a
+`project`.
+
+```yaml
+# .ai-gate/gate.yaml
+checks:
+  governance-quality: true
+commands:
+  governance-quality: "python3 ../workspace-governance/scripts/workspace_check.py --json"
+```
+
+```toml
+# gate.toml
+[[checks]]
+id = "governance-quality"
+command = "python3 ../workspace-governance/scripts/workspace_check.py --json"
+```
+
+#### Envelope mapping
+
+The status comes from the **matching** findings' levels, never from the
+checker's exit code: the checker reports the whole portfolio audit, so a
+run that exits `1` on a backlog this concern does not own must still
+read `PASS` here. The checker's exit status is recorded in the
+diagnostic, and `0`/`1` are its two expected values.
+
+| Matching findings | Status | Exit |
+| --- | --- | --- |
+| none | `PASS` | 0 |
+| one or more `WARNING` | `REVIEW_REQUIRED` | 2 |
+| one or more `ERROR` | `FAIL` | 1 |
+
+`ERROR` dominates a mixed run. The reported finding count is the
+**filtered** count; the checker's total is quoted beside it in the
+diagnostic and is never substituted for it.
+
+#### Failure path
+
+No case in which the checker could not produce a trustworthy answer
+reports `PASS`.
+
+| Condition | Status | Exit |
+| --- | --- | --- |
+| the bound command could not start (missing checker, or the shell's not-found status) | `UNBOUND` | 1 |
+| an exit status other than `0`/`1` and the shell's not-found status | `REVIEW_REQUIRED` | 2 |
+| unparseable or truncated report | `REVIEW_REQUIRED` | 2 |
+| timeout | `REVIEW_REQUIRED` | 2 |
+| a matching finding with a level the concern does not define | `REVIEW_REQUIRED` | 2 |
+
+`UNBOUND` is reserved for "nothing ran". A checker that started and
+could not finish is a review condition, and the two are never collapsed
+— collapsing them would let a broken checker present as a missing one.
+
+#### Scope versus exemption
+
+The concern declares which finding codes it owns, and that set is the
+ceiling:
+
+| Code | Meaning |
+| --- | --- |
+| `QUALITY_README_CLAIM_CONTRADICTED` | a README claim is contradicted by the repository |
+| `QUALITY_README_CLAIM_UNSCOPED` | a README claim is not scoped to what it covers |
+| `RULES_DRIFT_NEW` | a new clause gap against the rule baseline |
+| `RULES_DRIFT_BASELINE_STALE` | the rule baseline itself is stale |
+
+A project **may narrow** the set for its run:
+
+```toml
+[governance_quality]
+codes = ["RULES_DRIFT_NEW"]
+```
+
+A project **must not widen** it: a code the concern does not declare is
+refused as `REVIEW_REQUIRED`, naming the code, before any command runs.
+An **empty** set while the concern is enabled is also `REVIEW_REQUIRED`,
+naming the empty scope — never `PASS`, because a scope reporting
+nothing is indistinguishable from a silently disabled check. (The same
+block works in `.ai-gate/gate.yaml` as
+`governance_quality: {codes: [RULES_DRIFT_NEW]}`.)
+
+Scope is not exemption. A scope declares *what the concern looks at*; an
+exemption (`not_applicable.<id>`) *removes the check from the gate*.
+`governance-quality` is never exempable at any budget, because an
+exemption here would remove the report of a contradicted claim and leave
+nothing behind. Narrowing a scope is a recorded decision about the codes
+in force; it cannot be used to silence a code the concern owns.
+
+#### Where this is live
+
+The concern is **wired and live in this repository**, where it is
+`UNBOUND` — this repository binds no commands at all, so all its
+required checks are `UNBOUND` and the run fails. That is the honest
+result, and the concern's behaviour is proved by
+`tests/gate_governance_quality.rs` and the unit tests in
+`src/gate/governance/` rather than by this repository's own run.
+
+The other **70 workspace repositories** gain the concern only when
+`gate-unbound-check-fails` task 5.1 lands (it makes unbound required
+checks fail across the fleet). Until then the concern is live here and
+inert elsewhere. The 76 repositories that select a product profile
+without binding `commands.governance-quality` report `UNBOUND` in the
+meantime — a real result, reported as one.
 
 ### Source-file-size Gate concern
 

@@ -22,7 +22,11 @@
 //! business project's `.ai-gate/gate.yaml` policy into the same native
 //! manifest so the shared pipeline executes it unchanged; [`source_size`]
 //! owns the built-in `source-file-size` scanner (raw `wc -l` counting over
-//! a Git-aware repository boundary, no language parsing).
+//! a Git-aware repository boundary, no language parsing); [`governance`]
+//! owns the `governance-quality` concern's code-scoped adapter (it runs
+//! the project-bound governance checker, keeps only the finding codes
+//! the concern declares, and maps those findings onto the envelope; it
+//! binds no checker path of its own).
 //!
 //! No OpenSpec types appear here. No tool is installed implicitly, no
 //! network call is made, and no LLM is invoked.
@@ -37,6 +41,7 @@ pub mod context;
 pub mod dto;
 pub mod evidence;
 pub mod evidence_export;
+pub mod governance;
 pub mod manifest;
 pub mod redact;
 pub mod source_size;
@@ -52,11 +57,12 @@ pub use ai::{
     MissingProviderPolicy, MAX_AI_PROMPT_BYTES, MAX_AI_RESPONSE_BYTES,
 };
 pub use concerns::{
-    is_capability_conformance_concern, is_deployable_concern, is_product_quality_concern,
-    is_release_evidence_concern, is_release_gate_concern, is_source_file_size_concern,
-    CAPABILITY_CONFORMANCE, CI_CONTRACT, COMPOSE_CONTRACT, DEPLOYABLE_CONCERNS,
-    PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY, PRODUCT_QUALITY_CONCERNS, RELEASE_EVIDENCE,
-    RELEASE_GATE_CONCERNS, SOURCE_FILE_SIZE,
+    is_capability_conformance_concern, is_deployable_concern, is_governance_quality_concern,
+    is_product_quality_concern, is_release_evidence_concern, is_release_gate_concern,
+    is_source_file_size_concern, CAPABILITY_CONFORMANCE, CI_CONTRACT, COMPOSE_CONTRACT,
+    DEPLOYABLE_CONCERNS, GOVERNANCE_QUALITY, PLACEHOLDER_THRESHOLD, PRODUCT_CODE_BOUNDARY,
+    PRODUCT_PROFILE_CONCERNS, PRODUCT_QUALITY_CONCERNS, RELEASE_EVIDENCE, RELEASE_GATE_CONCERNS,
+    SOURCE_FILE_SIZE,
 };
 pub use context::{
     collect_context, context_checks, selection_from_manifest, ContextBundle, ContextDocument,
@@ -80,13 +86,15 @@ pub use evidence_export::{
     render_json as render_evidence_json, EvidenceExport, EvidenceState, ExportError, Field,
     FieldExport, EVIDENCE_EXPORT_SCHEMA_VERSION, GOVERNANCE_FIELDS, GOVERNANCE_STATES,
 };
+pub use governance::{run_governance_quality_adapter, GOVERNANCE_QUALITY_DECLARED_CODES};
 pub use manifest::{
     exemption_cap as gate_exemption_cap, is_non_exempable_concern as is_non_exempable_gate_concern,
     load as load_gate_manifest, load_for_runtime as load_gate_manifest_for_runtime,
     manifest_path as gate_manifest_path, parse as parse_gate_manifest,
     render_plan as render_gate_plan, resolve as resolve_gate_manifest, ExemptionBudget,
-    ExemptionVerdict, LoadOutcome, SourceSizePolicy, DEFAULT_MAX_LINES, EXEMPTION_BUDGET_CHECK,
-    MAX_EXEMPTION_CAP, MAX_MAX_LINES, NON_EXEMPTABLE_ALIASES, NON_EXEMPTABLE_CONCERNS,
+    ExemptionVerdict, GovernanceQualityPolicy, LoadOutcome, SourceSizePolicy, DEFAULT_MAX_LINES,
+    EXEMPTION_BUDGET_CHECK, MAX_EXEMPTION_CAP, MAX_MAX_LINES, NON_EXEMPTABLE_ALIASES,
+    NON_EXEMPTABLE_CONCERNS,
 };
 pub use redact::{
     bound_text_with_extra, bounded_diagnostic, redact_secrets, redact_secrets_with_extra,

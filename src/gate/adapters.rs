@@ -141,7 +141,11 @@ pub struct AdapterInput {
 }
 
 impl AdapterInput {
-    fn checker_spec(&self, name: &str) -> CheckerSpec {
+    /// Build the runner spec for one adapter invocation. Shared with
+    /// [`crate::gate::governance`] so a concern that owns its own
+    /// normalization still executes through the same hardened runner
+    /// (bounded capture, timeout, process-group kill).
+    pub(crate) fn checker_spec(&self, name: &str) -> CheckerSpec {
         CheckerSpec {
             name: name.to_string(),
             program: self.program.clone(),
@@ -287,14 +291,14 @@ fn bound_evidence(evidence: Vec<EvidenceRef>) -> Vec<EvidenceRef> {
     evidence.into_iter().take(MAX_EVIDENCE_REFS).collect()
 }
 
-fn source_for(tool_id: &str) -> String {
+pub(crate) fn source_for(tool_id: &str) -> String {
     bound_text(
         &format!("adapter:{tool_id}"),
         crate::gate::dto::MAX_SOURCE_BYTES,
     )
 }
 
-fn gate_id_for(tool_id: &str, gate_id: Option<&str>) -> String {
+pub(crate) fn gate_id_for(tool_id: &str, gate_id: Option<&str>) -> String {
     bound_text(
         gate_id.unwrap_or(tool_id),
         crate::gate::dto::MAX_GATE_ID_BYTES,
@@ -1135,7 +1139,7 @@ fn parse_envelope(bytes: &[u8]) -> Option<ProductQualityEnvelope> {
     })
 }
 
-fn expected_exit_for_status(status: GateStatus) -> Option<i32> {
+pub(crate) fn expected_exit_for_status(status: GateStatus) -> Option<i32> {
     match status {
         GateStatus::Pass => Some(0),
         GateStatus::Fail => Some(1),
@@ -1150,7 +1154,7 @@ fn expected_exit_for_status(status: GateStatus) -> Option<i32> {
     }
 }
 
-fn default_severity_for_status(status: GateStatus) -> GateSeverity {
+pub(crate) fn default_severity_for_status(status: GateStatus) -> GateSeverity {
     match status {
         GateStatus::Pass => GateSeverity::Info,
         GateStatus::Fail => GateSeverity::Error,

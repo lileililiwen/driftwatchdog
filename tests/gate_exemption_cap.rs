@@ -208,14 +208,18 @@ fn the_cap_does_not_depend_on_the_blocking_list() {
 /// alias `repository_integrity`. A project that spells the
 /// repository-integrity concern differently must not be able to exempt
 /// the concern the spine exists to protect.
+///
+/// Each entry is (id as the manifest writes it, the concern name the
+/// diagnostic must report it under), because those differ for the one
+/// aliased id.
 #[test]
 fn a_spine_check_may_never_be_exempted() {
-    for id in [
-        "build",
-        "tests",
-        "security",
-        "repository",
-        "repository_integrity",
+    for (id, concern) in [
+        ("build", "build"),
+        ("tests", "tests"),
+        ("security", "security"),
+        ("repository", "repository"),
+        ("repository_integrity", "repository"),
     ] {
         let tmp = init_dir();
         // 8 required -> cap 2, and exactly one exemption: inside the
@@ -250,8 +254,17 @@ fn a_spine_check_may_never_be_exempted() {
         // The diagnostic names the offending id as written and the
         // concern it belongs to.
         assert!(diag.contains(id), "the budget names the offending id: {id}");
+        // The diagnostic opens with the closed concern list, so the
+        // concern name must appear as a whole element of that list --
+        // not merely as a substring somewhere in the sentence.
+        let listed = diag
+            .split(" may never be exempted")
+            .next()
+            .unwrap_or_default()
+            .split(", ")
+            .collect::<Vec<_>>();
         assert!(
-            diag.contains("repository may never be exempted"),
+            listed.contains(&concern),
             "{id} is reported under its concern name: {diag}"
         );
     }

@@ -98,7 +98,7 @@ use sha2::{Digest, Sha256};
 
 use crate::gate::aggregate::{BlockingPolicy, GatePlan, PlannedCheck};
 use crate::gate::concerns::{
-    is_source_file_size_concern, DEPLOYABLE_CONCERNS, PRODUCT_QUALITY_CONCERNS,
+    is_source_file_size_concern, DEPLOYABLE_CONCERNS, PRODUCT_PROFILE_CONCERNS,
     RELEASE_GATE_CONCERNS,
 };
 use crate::gate::dto::GATE_CONTRACT_VERSION;
@@ -119,13 +119,17 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
         ]),
         "minimal" => Some(&[]),
         // Product-quality profiles select the stable product-quality
-        // concern ids. Selection is data only and does not invent a
-        // command; a project that picks `product` (or `rust-product`)
-        // without binding `commands.<id>` has an unbound required
-        // check and fails on UNBOUND. The `source-file-size` concern
-        // is the exception: it is executed by the in-process scanner
-        // and needs no command binding.
-        "product" | "rust-product" => Some(PRODUCT_QUALITY_CONCERNS),
+        // concern ids, the built-in scanner, and the code-scoped
+        // `governance-quality` concern. Selection is data only and does
+        // not invent a command; a project that picks `product` (or
+        // `rust-product`) without binding `commands.<id>` has an
+        // unbound required check and fails on UNBOUND. That includes
+        // `governance-quality`: the governance checker lives outside
+        // this repository, so there is no path to default to and no
+        // binding here is ever inferred. The `source-file-size` concern
+        // is the one exception: it is executed by the in-process
+        // scanner and needs no command binding.
+        "product" | "rust-product" => Some(PRODUCT_PROFILE_CONCERNS),
         // Release-gate profile selects the two stable release-gate
         // concern ids. The profile is data only and never invents a
         // command; a project that picks `release` without binding
@@ -228,6 +232,11 @@ pub struct GateManifest {
         skip_serializing_if = "BindingPolicy::is_default"
     )]
     pub binding_policy: BindingPolicy,
+    /// The `governance-quality` concern's code scope (defaults to the
+    /// concern's full declared set). Not serialized when left at the
+    /// default so existing manifest digests stay stable.
+    #[serde(default, skip_serializing_if = "GovernanceQualityPolicy::is_default")]
+    pub governance_quality: GovernanceQualityPolicy,
 }
 
 /// Accepted `binding_policy` values, in diagnostic order.
@@ -261,7 +270,21 @@ pub const EXEMPTION_BUDGET_CHECK: &str = "exemption-budget";
 /// the repository-integrity concern two ways, so matching walks
 /// [`NON_EXEMPTABLE_ALIASES`] instead. Do not add a spelling here — add
 /// it to the alias table, where it is visibly attached to a concern.
-pub const NON_EXEMPTABLE_CONCERNS: &[&str] = &["build", "tests", "security", "repository"];
+///
+/// `governance-quality` is here for a different reason than the spine:
+/// the spine is the floor every other check stands on, while this
+/// concern owns an ERROR-severity finding code whose finding *is* the
+/// defect the gate exists to report. An exemption removes a required
+/// check from the gate; here that would remove the report of a
+/// contradicted claim and leave nothing behind. See
+/// `openspec/changes/bind-governance-quality-checks/design.md` §4.
+pub const NON_EXEMPTABLE_CONCERNS: &[&str] = &[
+    "build",
+    "tests",
+    "security",
+    "repository",
+    "governance-quality",
+];
 
 /// Every workspace spelling protected for each non-exempable concern:
 /// the concern, then the ids that name it in a real `.ai-gate/gate.yaml`.
@@ -279,6 +302,10 @@ pub const NON_EXEMPTABLE_ALIASES: &[(&str, &[&str])] = &[
     ("tests", &["tests"]),
     ("security", &["security"]),
     ("repository", &["repository", "repository_integrity"]),
+    // One spelling, one concern, no alias: the alias table exists for
+    // spellings a real `.ai-gate/gate.yaml` uses, and a concern with a
+    // single id does not need a second name to be protected.
+    ("governance-quality", &["governance-quality"]),
 ];
 
 /// Absolute ceiling on exemptions, independent of manifest size.
@@ -532,6 +559,50 @@ impl SourceSizePolicy {
     }
 }
 
+/// The `governance-quality` concern's code scope: which governance
+/// finding codes this project reports on.
+///
+/// **Scope is not exemption.** A scope declares what the concern looks
+/// at; an exemption removes a required check from the gate. The
+/// effective set may only be a subset of
+/// [`crate::gate::governance::GOVERNANCE_QUALITY_DECLARED_CODES`], and
+/// an empty set while the concern is enabled is a configuration error
+/// the adapter reports as `REVIEW_REQUIRED` — never as a pass. The
+/// enforcement lives in the adapter, which sees the effective set and
+/// the run's findings; this type only carries the declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GovernanceQualityPolicy {
+    /// Finding codes this project reports on. Empty means the project
+    /// declared an empty scope, which the adapter refuses; the default
+    /// is the concern's full declared set.
+    #[serde(default = "default_governance_codes")]
+    pub codes: Vec<String>,
+}
+
+impl Default for GovernanceQualityPolicy {
+    fn default() -> Self {
+        Self {
+            codes: default_governance_codes(),
+        }
+    }
+}
+
+impl GovernanceQualityPolicy {
+    /// True when the policy equals the default, so the field is omitted
+    /// from the canonical manifest and existing digests stay stable.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+fn default_governance_codes() -> Vec<String> {
+    crate::gate::governance::GOVERNANCE_QUALITY_DECLARED_CODES
+        .iter()
+        .map(|c| (*c).to_string())
+        .collect()
+}
+
 fn default_max_lines() -> u32 {
     DEFAULT_MAX_LINES
 }
@@ -624,6 +695,11 @@ pub struct ResolvedGatePlan {
     /// declares no `[source_size]`). Rendered by `--dry-run` and passed
     /// to the in-process scanner.
     pub source_size: SourceSizePolicy,
+    /// Resolved `governance-quality` code scope (defaults when the
+    /// manifest declares no `[governance_quality]`). Rendered by
+    /// `--dry-run` and passed to the code-scoped adapter, which is the
+    /// only place a scope is enforced.
+    pub governance_quality: GovernanceQualityPolicy,
     /// Scheduled required checks that bind no command and declare no
     /// exemption. Recorded at resolution time so `--dry-run` can name
     /// the coverage debt before anything executes.
@@ -709,6 +785,8 @@ const KNOWN_FIELDS: &[&str] = &[
     "exclude",
     "not_applicable",
     "binding_policy",
+    "governance_quality",
+    "codes",
 ];
 
 pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
@@ -1102,7 +1180,7 @@ pub fn resolve(
     let scheduled: BTreeSet<&str> = checks.iter().map(|c| c.gate_id.as_str()).collect();
     let mut not_scheduled: Vec<String> = ["responsive", "browser", "a11y"]
         .into_iter()
-        .chain(PRODUCT_QUALITY_CONCERNS.iter().copied())
+        .chain(PRODUCT_PROFILE_CONCERNS.iter().copied())
         .chain(RELEASE_GATE_CONCERNS.iter().copied())
         .filter(|id| !scheduled.contains(id))
         .map(|s| s.to_string())
@@ -1133,6 +1211,7 @@ pub fn resolve(
             .collect(),
         not_scheduled,
         source_size: manifest.source_size.clone(),
+        governance_quality: manifest.governance_quality.clone(),
         unbound,
         exemptions,
         exemption_budget,
@@ -1161,6 +1240,10 @@ pub fn render_plan(resolved: &ResolvedGatePlan) -> String {
         resolved.source_size.max_lines,
         resolved.source_size.include.join(", "),
         resolved.source_size.exclude.join(", ")
+    ));
+    out.push_str(&format!(
+        "governance_quality: codes=[{}]\n",
+        resolved.governance_quality.codes.join(", ")
     ));
     out.push_str("checks:\n");
     if resolved.plan.checks.is_empty() {
@@ -1390,6 +1473,12 @@ id = "ux-review"
     /// A profile default counts: it is a required, selected check with
     /// no command, and it must appear as unbound (this is the shape of
     /// the 41 product-profile repos in the workspace).
+    ///
+    /// `governance-quality` is in that set on purpose. The governance
+    /// checker lives outside this repository, so the profile cannot
+    /// default a command for it: a project that picks a product profile
+    /// without binding one records `UNBOUND` and fails, which is the
+    /// honest result rather than a silent skip.
     #[test]
     fn product_profile_defaults_are_unbound_when_no_command_is_bound() {
         let m = parse("version = 1\nprofile = \"product\"\n").unwrap();
@@ -1398,6 +1487,7 @@ id = "ux-review"
         assert_eq!(
             r.unbound,
             vec![
+                "governance-quality".to_string(),
                 "placeholder-threshold".to_string(),
                 "product-code-boundary".to_string()
             ]
@@ -1647,13 +1737,13 @@ ux-review = "we have a command after all"
         // The measured workspace spellings, recorded so a future rename
         // is a visible decision: `repository` in 63 manifests,
         // `repository_integrity` in 2.
-        assert_eq!(NON_EXEMPTABLE_ALIASES.len(), 4);
+        assert_eq!(NON_EXEMPTABLE_ALIASES.len(), 5);
         assert_eq!(
             NON_EXEMPTABLE_ALIASES
                 .iter()
                 .flat_map(|(_, spellings)| spellings.iter().copied())
                 .count(),
-            5
+            6
         );
     }
 
@@ -2112,11 +2202,12 @@ profile = "product"
         assert_eq!(
             ids,
             vec![
+                "governance-quality",
                 "placeholder-threshold",
                 "product-code-boundary",
                 "source-file-size"
             ],
-            "product profile selects all product-quality concerns in sorted order"
+            "product profile selects all product-profile concerns in sorted order"
         );
         // All are required by default: the profile does not silently
         // relax the threshold.
