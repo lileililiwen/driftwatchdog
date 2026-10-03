@@ -26,12 +26,13 @@ existing caller, including the four repositories whose own gates invoke it and
 treat a non-zero exit as a plain failure. A shared contract is not a place to
 introduce a second convention.
 
-**Rejected: bind the raw command.** `scripts/workspace_check.py` exits 1 on 215
-current findings, 211 of which are unrelated to these two checks
-(`PUBLICATION_UNVERIFIED` 76, `DISCOVERABILITY_MISSING` 74, `LICENSE_MISSING` 51,
-`HANDOFF_SCAFFOLD` 8, `DEPLOYMENT_PROMOTION_STALE` 7, `DISCOVERED_UNREGISTERED` 4).
-The concern would report a portfolio-wide backlog as if every repository had
-failed it, and the four real findings would be invisible inside the noise.
+**Rejected: bind the raw command.** `scripts/workspace_check.py` exits 1 on the
+current fleet findings, of which all but a handful are unrelated to these two
+checks (`PUBLICATION_UNVERIFIED` 76, `DISCOVERABILITY_MISSING` 74,
+`LICENSE_MISSING` 51, `HANDOFF_SCAFFOLD` 8, `DEPLOYMENT_PROMOTION_STALE` 7,
+`DISCOVERED_UNREGISTERED` 4). The concern would report a portfolio-wide backlog
+as if every repository had failed it, and the real findings would be invisible
+inside the noise.
 
 **Chosen: a code-scoped adapter.** The concern declares which finding codes it
 owns. The adapter runs the checker, keeps only findings whose `code` is in that
@@ -110,19 +111,37 @@ one.
 
 ## 7. Blast radius
 
-The intended default configuration surfaces **4** of the current 215 fleet
-errors, and **1** of the 18 warnings:
+> **Superseded 2026-10-03 by `workspace-governance` `833ca9c`.** The figures
+> below were measured while the claim checker reported 4 contradicted
+> repositories. Those 4 were **false positives** — the READMEs were accurate and
+> the evidence rules were wrong — and `833ca9c` corrected the check. The fleet
+> audit is now `errors=211 warnings=18` with **zero** contradicted findings. The
+> reasoning that follows still holds and is the reason this section exists; only
+> the counts have moved. The corrected table is at the end.
 
-- `QUALITY_README_CLAIM_CONTRADICTED` — 4: `argoset:31`, `care-bridge:17`,
-  `retake-kit:42`, `devloom:9`. All ERROR, so 4 repositories read `FAIL`.
-- `QUALITY_README_CLAIM_UNSCOPED` — 1 aggregate WARNING naming 3 statements.
+The intended default configuration surfaces a small, named slice of the fleet
+audit, and almost none of the rest:
+
+- `QUALITY_README_CLAIM_CONTRADICTED` — was 4: `argoset:31`, `care-bridge:17`,
+  `retake-kit:42`, `devloom:9`. All four were false positives and are gone.
+- `QUALITY_README_CLAIM_UNSCOPED` — 1 aggregate WARNING naming 3 statements
+  (`opendockify`, `platform-contracts`, `chronicleaf`).
 - `RULES_DRIFT_NEW` — 0. All 140 clause-level gaps are baselined.
 - `RULES_DRIFT_BASELINE_STALE` — 0. No baseline entry has become redundant.
 
-The other **211** errors and **17** warnings are out of scope for this concern
-and stay reported by the governance audit alone. The expected fleet outcome is
-therefore 4 failing repositories and 1 review-required repository, against a
-backlog of 215 errors that this change deliberately does not absorb.
+The other **211** errors are out of scope for this concern and stay reported by
+the governance audit alone. That is the whole point: a concern scoped to four
+codes must not absorb a portfolio backlog, and the numbers must keep saying so
+after the codes go quiet. A concern that reports zero because its subject is
+clean, and a concern that reports zero because it is not wired, must be
+distinguishable — which is what the failure path in §5 and `tasks.md` 4.6 are
+for.
+
+**Corrected live measurement (`833ca9c` and later), 0 of 211 errors and 1 of 18
+warnings surfaced.** `driftwatchdog`'s own result is therefore `PASS` (0), which
+is the correct outcome for a repository with no contradicted claim, not a
+weakened check.
+
 
 ## 8. Decision ledger
 

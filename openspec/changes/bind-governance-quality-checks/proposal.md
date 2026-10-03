@@ -8,8 +8,11 @@ nothing at all. A verifier that no gate runs does not gate (ruling D18 in
 so both are currently documentation.
 
 - `QUALITY_README_CLAIM_CONTRADICTED` (ERROR) and `QUALITY_README_CLAIM_UNSCOPED`
-  (WARNING), commit `f8df5ea`. Today: 4 ERROR findings across 4 repositories, and
-  exactly 1 aggregate WARNING naming 3 statements.
+  (WARNING), commit `f8df5ea`. At the time of writing: 4 ERROR findings across 4
+  repositories, and exactly 1 aggregate WARNING naming 3 statements. **Those 4
+  were false positives**, corrected in `workspace-governance` `833ca9c`; the count
+  is now 0, which does not weaken the argument below — the check still gates
+  nothing until it is bound.
 - `RULES_DRIFT_NEW` (ERROR) and `RULES_DRIFT_BASELINE_STALE` (WARNING), commit
   `4a9edfc`, a ratchet over `rules-drift-baseline.json` (140 baselined keys across
   72 repositories). Today: 0 of each.
@@ -25,11 +28,10 @@ entire REVIEW_REQUIRED class would be invisible — which is precisely the
 "checker that reports OK without checking" failure this workspace keeps finding.
 
 **Binding the raw command would redden the fleet.** The live audit is
-`errors=215 warnings=18`, and almost none of it is these two checks:
+`errors=211 warnings=18`, and almost none of it is these two checks:
 `PUBLICATION_UNVERIFIED` 76, `DISCOVERABILITY_MISSING` 74, `LICENSE_MISSING` 51,
 `HANDOFF_SCAFFOLD` 8, `DEPLOYMENT_PROMOTION_STALE` 7, `DISCOVERED_UNREGISTERED` 4.
-Only **4** of the 215 are `QUALITY_README_CLAIM_CONTRADICTED`. A binding scoped to
-the checker's exit code would surface all 215.
+A binding scoped to the checker's exit code would surface all 211.
 
 ## What Changes
 
