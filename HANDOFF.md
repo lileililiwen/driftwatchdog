@@ -14,6 +14,89 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+The `declare-spec-purpose-placeholder-code` change is implemented and
+**deliberately not archived** (it carries an open cross-repo dependency,
+recorded below). One string changed: `"SPEC_PURPOSE_PLACEHOLDER"` joins
+`GOVERNANCE_QUALITY_DECLARED_CODES` in `src/gate/governance/mod.rs`, so the
+`governance-quality` concern can report a finding it previously filtered out
+before the status was ever computed.
+
+**Why it was not documentation.** Measured on a bound fixture — a real
+`product` manifest, a real command, a checker-shaped report whose single
+finding is `SPEC_PURPOSE_PLACEHOLDER` at `ERROR`, checker exit 1 — the
+4-code gate returned:
+
+```
+process exit : 0   aggregate status : PASS   concern status : PASS
+findings     : 0
+diagnostic   : 0 of 1 governance findings matched this concern's scope
+               (0 error, 0 warning, 1 of this concern's codes outside the
+               scope or unrecognised); checker exit 1 is expected for this
+               run and does not set the status, which maps to exit 0
+```
+
+An ERROR finding and a gate reporting `PASS`. The same fixture after the
+change returns `FAIL`, exit 1, `rule: SPEC_PURPOSE_PLACEHOLDER`, `1 of 1`
+matched. That is the D18 failure class, and it is why the sibling repository
+cannot set `SPEC_PURPOSE_AUDIT_ENABLED` yet.
+
+**Answer to "is declaring an unemittable code safe?", measured not argued.** It
+is inert, not red. The declared set becomes 5 while at most 4 codes can ever
+match, and nothing about that changes the verdict: the status is
+`level_status(has_error, has_warning)` over *observed* findings, so a declared
+code with no finding contributes to neither flag, is not named in the
+diagnostic, and does not turn the gate `REVIEW_REQUIRED` or fail CI. Two
+consequences are pinned by test rather than left to a future reader:
+`a_declared_code_the_checker_has_not_emitted_is_inert` and, end to end,
+`a_report_without_the_code_still_passes` (which also keeps the blocking test
+honest — without it a concern that failed on everything would pass it).
+
+**This repository's own gate is a null measurement, and that is expected.**
+`gate --format json` is byte-for-byte identical before and after, digest
+`sha256:61878ee79ab8617b` included: `.ai-gate/gate.yaml` binds no commands, so
+`governance-quality` never reaches the adapter here. The digest is stable
+because `is_default()` omits the scope from the canonical form when it equals
+the default. The gate manifest was **not** edited, and the aggregate stays
+`FAIL` with `governance-quality UNBOUND`.
+
+**Cross-repo dependency C1, open.** No durable guard for the allow-list is
+possible here, and this is the honest answer rather than a deferral. A
+`workspace_check.py` run is a fleet-wide audit emitting findings for every
+code configured anywhere in the workspace, so a "saw an undeclared code →
+`REVIEW_REQUIRED`" rule inside the concern fires on *every* run; and the
+report carries no list of the codes the checker *can* emit, only the ones it
+did. The required contract change, owned by `workspace-governance` against its
+in-flight `spec-purpose-backfill-gate`: `--json` gains a third top-level key
+beside `summary` and `findings` — `emittable_codes` — listing every code
+registered in the checker under its current configuration, **including codes
+with no findings and codes behind a disabled fence**, and **not** derived from
+the findings array (deriving it there reproduces the broken guard, since a
+code with zero findings is exactly the case the guard exists to catch). With
+that key the concern reports a two-sided divergence as `REVIEW_REQUIRED`: a
+code the checker can emit that the concern does not declare, and a code the
+concern declares that the checker can no longer emit. Both directions are
+needed; the second is invisible today. No half-guard was built — see
+`openspec/changes/declare-spec-purpose-placeholder-code/design.md` §5 and
+`tasks.md` 6.1, which is left **unchecked** on purpose.
+
+**No sibling manifest needed widening**, re-verified read-only: 77 `gate.yaml`
+files in the workspace, exactly one naming `governance-quality` (this
+repository's own `true` boolean) and **zero** declaring a `codes:` block, so
+every project inherits the new default and none has a pinned list to update.
+Nothing outside this repository was edited.
+
+Verification: `cargo fmt --check` clean; `cargo clippy --all-targets
+--all-features -- -D warnings` clean; **`cargo test` 874 passed, 0 failed**
+across 28 suites, the 869 baseline plus 5 new (lib 623 → 626,
+`gate_governance_quality` 11 → 13); `openspec validate --changes --strict`
+4 passed, 0 failed; `change_workflow`, `openspec_change_names` and
+`repo_hygiene` packaging tests exit 0; `git diff --check` clean. The one test
+whose expectations the change moved —
+`reported_count_is_the_filtered_count_not_the_total` — now derives its counts
+from `GOVERNANCE_QUALITY_DECLARED_CODES.len()` instead of writing `4` and
+`215`, so the next code cannot leave it pinning a stale number. Nothing was
+weakened, skipped or deleted.
+
 The `installer-stdout-purity` change is implemented and **deliberately not
 archived** (it carries an open dependency recorded elsewhere). The shell
 installer's stdout is a contract: exactly one line on success, the absolute path
@@ -77,11 +160,13 @@ not start is `UNBOUND`/1, and a run that started but could not finish
 (unexpected exit, unparseable report, timeout, a matching finding with an
 undeclared level) is `REVIEW_REQUIRED`/2. The declared codes are
 `QUALITY_README_CLAIM_CONTRADICTED`, `QUALITY_README_CLAIM_UNSCOPED`,
-`RULES_DRIFT_NEW`, `RULES_DRIFT_BASELINE_STALE`; a project may narrow that
-set and may not widen it, an empty set is a `REVIEW_REQUIRED` configuration
-error rather than a pass, and the concern is non-exempable, so a scope
-declaration can never do an exemption's work. The reported count is the
-filtered count, with the checker's total quoted beside it.
+`RULES_DRIFT_NEW`, `RULES_DRIFT_BASELINE_STALE`, and — as of
+`declare-spec-purpose-placeholder-code` — `SPEC_PURPOSE_PLACEHOLDER`; a
+project may narrow that set and may not widen it, an empty set is a
+`REVIEW_REQUIRED` configuration error rather than a pass, and the concern is
+non-exempable, so a scope declaration can never do an exemption's work. The
+reported count is the filtered count, with the checker's total quoted beside
+it.
 
 **Corrected blast radius.** Driftwatchdog embeds no governance scanner
 and binds no checker path, so the concern surfaces only what the
