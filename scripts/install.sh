@@ -270,8 +270,16 @@ fetch() {
 }
 
 # Set up working directory and clean it up on exit.
+#
+# stdout is this script's only machine-readable output: the installed
+# path, on one line, and nothing else. The EXIT trap runs *after* that
+# line is written, so a delete that reports what it removed would append
+# to stdout and corrupt every `$( install.sh ... )` caller. Redirect
+# stdout here, and keep stderr so a genuine cleanup failure is still
+# visible. `|| true` keeps a failing delete from becoming a failed
+# install: in some shells the trap's last status becomes the script's.
 work_dir=$(mktemp -d 2>/dev/null) || die "failed to create temporary directory"
-trap 'rm -rf "$work_dir"' EXIT INT TERM
+trap 'rm -rf "$work_dir" >/dev/null || true' EXIT INT TERM
 
 if ! command -v sha256sum >/dev/null 2>&1; then
     die "sha256sum is required for verification"
@@ -342,7 +350,9 @@ if ! mv "$tmp_binary" "$dest_tmp"; then
 fi
 chmod 0755 "$dest_tmp"
 if ! mv -f "$dest_tmp" "$binary_path"; then
-    rm -f "$dest_tmp" 2>/dev/null || true
+    # Same stdout rule as the EXIT trap above: this delete must not be
+    # able to write to stdout on its way out.
+    rm -f "$dest_tmp" >/dev/null 2>&1 || true
     die "failed to move binary into place at $binary_path"
 fi
 

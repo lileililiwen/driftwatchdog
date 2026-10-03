@@ -13,11 +13,17 @@ test_installer() {
 
     build_fixture_stage "$stage" 9.9.9
 
-    # Happy path.
+    # Happy path. The installer's stdout contract is one line and that
+    # line is the installed path, so assert the line count before the
+    # value: a correct-looking first line with trailing output is
+    # exactly the defect this catches. `test_installer_stdout` covers
+    # the same property deterministically on every host.
     installed=$(DRIFTWATCH_TARGET=linux-x86_64 \
         DRIFTWATCH_RELEASE_BASE="file://$stage" \
         DRIFTWATCH_LIB_DIR="$repo_root/scripts/lib" \
         sh "$repo_root/scripts/install.sh" --version 9.9.9 --dest "$dest")
+    lines=$(printf '%s\n' "$installed" | wc -l | tr -d ' ')
+    [ "$lines" -eq 1 ] || { printf 'installer stdout must be 1 line, got %s:\n%s\n' "$lines" "$installed" >&2; return 1; }
     [ "$installed" = "$dest/driftwatchdog" ] || { printf 'unexpected installed path: %s\n' "$installed" >&2; return 1; }
     [ -x "$dest/driftwatchdog" ] || { printf 'installed binary not executable\n' >&2; return 1; }
     out=$("$dest/driftwatchdog") || return 1

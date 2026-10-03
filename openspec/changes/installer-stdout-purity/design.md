@@ -38,7 +38,17 @@ others.
 | `:274` | `trap 'rm -rf "$work_dir"' EXIT INT TERM` | Fires **after** the final `printf` on the happy path, and after every `die` on a failure path. This is the observed failure. |
 | `:345` | `rm -f "$dest_tmp" 2>/dev/null || true` | Redirects stderr only. Reached when the final `mv` into place fails, immediately before `die`. |
 
-Both become `rm ... >/dev/null 2>&1 || true`.
+Both are now redirected so neither can reach stdout. They are not identical,
+and the difference is deliberate:
+
+- `:274` becomes `rm -rf "$work_dir" >/dev/null || true` — **stdout only**. The
+  trap deliberately has no `2>/dev/null` today, so a genuine "could not remove
+  the work directory" is visible to the operator. Routing both streams to
+  `/dev/null` would discard that for no gain: the observed noise was on stdout,
+  and discarding stderr is not part of the requirement.
+- `:345` becomes `rm -f "$dest_tmp" >/dev/null 2>&1 || true`. This site already
+  silenced stderr, so the change is the added `>/dev/null`; the resulting form
+  is identical to a full redirect only because both halves were already there.
 
 **Why also `|| true` on the trap.** The existing trap has no `|| true`, and with
 coreutils `rm -rf` on an existing directory the status is always 0, so the
@@ -49,12 +59,6 @@ then turn a successful install into a non-zero exit — a real regression, in
 exchange for protecting against a leak that costs nothing. `|| true` keeps
 cleanup failures from becoming install failures, which is the correct behaviour
 for a best-effort cleanup.
-
-**Why not silence stderr as well.** The trap deliberately has no `2>/dev/null`
-today, so a genuine "could not remove the work directory" is visible. Routing
-both streams to `/dev/null` discards that. The alternative — redirect stdout
-only (`>/dev/null`) — preserves the diagnostic and still fixes the leak, because
-the observed noise was on stdout.
 
 **Rejected: reordering the trap so it runs before the final `printf`.** Traps
 run at exit, not at a chosen point; faking it with an explicit cleanup call
