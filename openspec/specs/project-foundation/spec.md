@@ -1,7 +1,8 @@
 # project-foundation Specification
 
 ## Purpose
-TBD - created by archiving change project-foundation. Update Purpose after archive.
+
+Driftwatch needs a stable local project boundary before it can record runs or alerts. The foundation must make initialization repeatable and keep implementation language separate from the languages of monitored projects.
 ## Requirements
 ### Requirement: Initialize local project state
 The CLI MUST provide `driftwatch init`, create `.driftwatch/`, create the SQLite database and required schema, create `driftwatch.toml` when absent, and report the project root. Re-running init MUST preserve existing user files and schema data.

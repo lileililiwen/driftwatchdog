@@ -1,7 +1,8 @@
 # gate-adapter-evaluation Specification
 
 ## Purpose
-TBD - created by archiving change gate-adapter-evaluation. Update Purpose after archive.
+
+Different tools emit JSON, SARIF, text, screenshots, and traces. Driftwatchdog needs stable adapter and evaluator contracts so tools can be replaced without changing Gate Core.
 ## Requirements
 ### Requirement: Isolate and normalize adapters
 

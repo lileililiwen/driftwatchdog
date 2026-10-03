@@ -1,7 +1,8 @@
 # generic-gate-contract Specification
 
 ## Purpose
-TBD - created by archiving change generic-gate-contract. Update Purpose after archive.
+
+Driftwatchdog has a checker protocol for external alerts but no general contract for gate plans, evidence, findings, and `PASS`/`FAIL`/`REVIEW_REQUIRED` results. The contract must be language-agnostic and must not depend on OpenSpec.
 ## Requirements
 ### Requirement: Normalize gate results
 

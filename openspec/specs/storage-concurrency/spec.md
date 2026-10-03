@@ -1,7 +1,8 @@
 # storage-concurrency Specification
 
 ## Purpose
-TBD - created by archiving change storage-concurrency. Update Purpose after archive.
+
+Audit found races and silent data errors: migration tracking-table creation + `MAX(version)` read outside a transaction allows concurrent double-apply, and `ALTER TABLE ADD COLUMN` (`src/storage/schema.rs:100-119`) is not `IF NOT EXISTS` so a crash mid-migration is not rerunnable; `ProjectRoot::discover` (`src/project/root.rs:54`) has check-then-use `is_dir()/is_file` races, no canonicalization (symlink aliasing), and silent fallback when `MAX_WALK_DEPTH` overflows; `GitContext::capture` (`src/project/git.rs`) reports `dirty=Some(false)` when git is missing and spawns 3 sequential gits with no timeout; `doctor` mutates the DB (`Db::open` runs migrations, `doctor/mod.rs:120-147`), its writability probe (`:227-230`) races and can leave files, and `check_one_checker` (`:264,276`) whitespace-splits and runs `program --version` with no timeout; tag filters use unescaped `%"tag"%` LIKE (`src/repo/runs.rs:210`, `src/repo/bugs.rs:392-401`, `top.rs:16`, `report.rs:30`) so `auth` matches `oauth` and `%_,"` act as wildcards; `upsert_for_occurrence` (`src/repo/bugs.rs:267-274`) mis-handles backdated `seen_at`; `report trend_cells` (`src/commands/report.rs:108-117`) swallows DB errors, does N+1 queries, and uses UTC-day string ranges missing non-`Z` offsets; `doctor:322-325` and `check:102-104` swallow correlation/DB errors; `export build.rs:29` silently caps at 100k rows.
 ## Requirements
 ### Requirement: Transactional rerunnable migrations
 Migrations MUST apply atomically and MUST be safe to rerun after a crash or under concurrent process startup.

@@ -1,7 +1,8 @@
 # gate-project-configuration Specification
 
 ## Purpose
-TBD - created by archiving change gate-project-configuration. Update Purpose after archive.
+
+Business projects need to declare profiles, checks, project-runtime commands, blocking policy, and local rule overrides without embedding tool implementations or language-specific logic in Driftwatchdog.
 ## Requirements
 ### Requirement: Validate a project Gate manifest
 

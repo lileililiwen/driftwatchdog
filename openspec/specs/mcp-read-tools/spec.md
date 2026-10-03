@@ -1,7 +1,8 @@
 # mcp-read-tools Specification
 
 ## Purpose
-TBD - created by archiving change mcp-read-tools. Update Purpose after archive.
+
+Coding agents working in a driftwatch-monitored project today must shell out to the CLI and parse human-oriented Markdown. That is fragile: agents re-implement argument handling, misparse output, and have no typed contract for the read surface. The Model Context Protocol (MCP) over stdio gives agents a typed, discoverable interface with zero network exposure. Driftwatch state is already local SQLite plus deterministic report builders, so a read-only tool layer maps directly onto existing library functions (`top`, `show`, `report --ai`, `doctor`) without new storage or services.
 ## Requirements
 ### Requirement: Serve MCP over stdio
 `driftwatch mcp` MUST speak newline-delimited JSON-RPC 2.0 on stdin/stdout and MUST complete the MCP handshake (`initialize` → `tools/list` → `tools/call`).

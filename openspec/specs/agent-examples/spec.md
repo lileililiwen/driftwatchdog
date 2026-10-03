@@ -1,7 +1,8 @@
 # agent-examples Specification
 
 ## Purpose
-TBD - created by archiving change agent-examples. Update Purpose after archive.
+
+v0.6 promises copy-paste integration for the three agent harnesses the README audience actually uses, but today there is no tested example for any of them. Untested docs drift: config keys rename, subcommand names change, and the example silently breaks. Each harness needs two things: how to attach driftwatch as an MCP server (or fall back to `report --ai` Markdown), and the workflow contract (investigate recurrence, review specs, add regression coverage, never edit specs to silence warnings).
 ## Requirements
 ### Requirement: Per-harness MCP examples
 Each of `examples/claude-code/`, `examples/opencode/`, `examples/aider/` MUST contain a valid MCP client-config fragment attaching `driftwatch mcp` over stdio.

@@ -1,7 +1,8 @@
 # runtime-memory Specification
 
 ## Purpose
-TBD - created by archiving change runtime-memory. Update Purpose after archive.
+
+Developers need to run their existing test/build commands without changing language-specific workflows while retaining enough context to recognize repeated failures.
 ## Requirements
 ### Requirement: Run arbitrary commands
 The CLI MUST provide `driftwatch run [--tag <tag>]... <program> [args...]`, execute the supplied program without language-specific assumptions, stream output where possible, persist a run record, and return the child exit code.

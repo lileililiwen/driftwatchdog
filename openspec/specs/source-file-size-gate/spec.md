@@ -1,7 +1,8 @@
 # source-file-size-gate Specification
 
 ## Purpose
-TBD - created by archiving change source-file-size-gate. Update Purpose after archive.
+
+The current product Gate can require project-owned quality commands, but it does not provide a common source-size check. Requiring every monitored project to write and maintain its own line-count script creates inconsistent boundaries and allows oversized source files to pass when no local checker is configured. The Gate should provide one repository-aware, language-independent checker that counts physical lines like `wc -l` and blocks an oversized source file.
 ## Requirements
 ### Requirement: Provide a built-in source-file-size concern
 

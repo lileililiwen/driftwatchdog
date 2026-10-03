@@ -1,7 +1,8 @@
 # bfs-dfs-bfs-change-workflow Specification
 
 ## Purpose
-TBD - created by archiving change bfs-dfs-bfs-change-workflow. Update Purpose after archive.
+
+Future Driftwatchdog changes will span CLI, storage, external tools, evidence, and optional context providers. A one-pass task list can miss callers and boundaries before implementation. The repository needs an explicit breadth-first, depth-first, breadth-first workflow for every change.
 ## Requirements
 ### Requirement: Every change records three execution phases
 

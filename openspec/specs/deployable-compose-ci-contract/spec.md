@@ -1,7 +1,8 @@
 # deployable-compose-ci-contract Specification
 
 ## Purpose
-TBD - created by archiving change deployable-compose-ci-gate. Update Purpose after archive.
+
+Deployable projects can currently configure a DriftWatchdog Gate without declaring a runnable container composition or a repeatable CI entry point. Bootstrap guidance can create those files, but omission or later drift is not detected by the shared Gate.
 ## Requirements
 ### Requirement: Provide a deployable profile
 

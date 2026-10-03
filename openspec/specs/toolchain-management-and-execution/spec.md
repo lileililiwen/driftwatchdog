@@ -1,7 +1,8 @@
 # toolchain-management-and-execution Specification
 
 ## Purpose
-TBD - created by archiving change toolchain-management-and-execution. Update Purpose after archive.
+
+Gate adapters must not assume Semgrep, Gitleaks, OSV, Playwright, or similar tools are already installed. Driftwatchdog needs reproducible managed, container, native, and project-runtime execution with doctor/bootstrap support.
 ## Requirements
 ### Requirement: Resolve verified tool versions
 

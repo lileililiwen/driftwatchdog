@@ -1,7 +1,8 @@
 # generic-context-providers Specification
 
 ## Purpose
-TBD - created by archiving change generic-context-providers. Update Purpose after archive.
+
+Gate evaluation needs change context, but not every project uses OpenSpec. The core should consume generic context documents and providers while allowing OpenSpec, Git, Gherkin, Markdown, or future systems to integrate independently.
 ## Requirements
 ### Requirement: Load generic context
 

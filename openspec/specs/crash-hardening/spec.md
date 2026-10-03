@@ -1,7 +1,8 @@
 # crash-hardening Specification
 
 ## Purpose
-TBD - created by archiving change crash-hardening. Update Purpose after archive.
+
+Audit found deterministic crashes and hangs: byte-slice truncation panics on non-char-boundary checker/diagnostic output (`src/commands/check.rs:296-303`, `src/commands/list.rs:90`, `src/commands/top.rs:33-34`), per-chunk `String::from_utf8_lossy` splitting multi-byte UTF-8 (`src/runtime/runner.rs:179`, `src/checker/runner.rs:194`), signal-killed children misclassified as `StartFailed` (`src/runtime/runner.rs:130-135`, `src/checker/runner.rs:166`, `Status::Unknown` in `src/checker/report.rs:29` never constructed), unbounded `child.wait()` with no runtime timeout, `child.kill()` killing only the direct child (grandchildren leak, 500ms `recv_timeout` returns partial output), and silently swallowed I/O/thread failures (`let _ = sink.write_all`, `Err(_)=>break`, `recv().unwrap_or_default()`, `drain_bounded` swallowing).
 ## Requirements
 ### Requirement: Char-boundary-safe truncation
 The CLI MUST never panic when truncating untrusted text for display. All display truncation MUST cut at a `char` boundary and append an ellipsis only when truncated.

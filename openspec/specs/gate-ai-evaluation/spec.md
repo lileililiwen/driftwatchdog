@@ -1,7 +1,8 @@
 # gate-ai-evaluation Specification
 
 ## Purpose
-TBD - created by archiving change gate-ai-evaluation. Update Purpose after archive.
+
+Some concerns such as UX, architecture, privacy interpretation, and responsive layout cannot be proven mechanically. Driftwatchdog needs an evidence-based AI evaluator contract without making an LLM provider mandatory or embedding one in the core.
 ## Requirements
 ### Requirement: Evaluate evidence through a typed contract
 

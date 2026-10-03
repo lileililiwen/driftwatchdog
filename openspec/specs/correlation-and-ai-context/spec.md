@@ -1,7 +1,8 @@
 # correlation-and-ai-context Specification
 
 ## Purpose
-TBD - created by archiving change correlation-and-ai-context. Update Purpose after archive.
+
+Recurring runtime failures and spec alerts are valuable separately, but the product's distinctive value is showing plausible relationships and giving AI coding agents durable context.
 ## Requirements
 ### Requirement: Calculate heuristic correlations
 The correlator MUST calculate a deterministic score from bug/alert message, symbol, source file, and tag similarity using weights 0.50, 0.20, 0.20, and 0.10 respectively, and MUST expose the component scores and algorithm version.

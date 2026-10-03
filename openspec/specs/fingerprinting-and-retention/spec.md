@@ -1,7 +1,8 @@
 # fingerprinting-and-retention Specification
 
 ## Purpose
-TBD - created by archiving change fingerprinting-and-retention. Update Purpose after archive.
+
+Raw locations, durations, UUIDs, and process details change between executions even when the logical bug is the same. Driftwatch needs stable failure memory without retaining unbounded logs.
 ## Requirements
 ### Requirement: Normalize arbitrary failure text
 The normalizer MUST remove or replace configured unstable tokens including ANSI color, absolute paths, line/column, UUIDs, timestamps, PIDs, ports, random numbers, durations, and temporary directories, while preserving meaningful text and relative paths.

@@ -1,7 +1,8 @@
 # gate-evidence-export Specification
 
 ## Purpose
-TBD - created by archiving change gate-evidence-export. Update Purpose after archive.
+
+The Gate already normalises release evidence (`release-evidence-gate`) and records bounded artifacts (`evidence-and-artifacts`), but nothing exports a completed run in the vocabulary Workspace Governance uses for the `release_evidence` block of `.project.json`. As a result the portfolio's seven deployable projects carry hand-written `configured` states that point at pilot-context placeholders, and the governance audit cannot distinguish an executed gate from a declaration. 73 `.ai-gate/gate.yaml` declarations exist in the workspace and only this repository's own CI runs one.
 ## Requirements
 ### Requirement: Export a completed run in the governance vocabulary
 

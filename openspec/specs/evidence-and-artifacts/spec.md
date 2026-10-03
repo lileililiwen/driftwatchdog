@@ -1,7 +1,8 @@
 # evidence-and-artifacts Specification
 
 ## Purpose
-TBD - created by archiving change evidence-and-artifacts. Update Purpose after archive.
+
+Gate decisions need traceable evidence such as source locations, command output, screenshots, traces, and raw tool artifacts. The current checker path stores bounded output but has no general evidence lifecycle or provenance model.
 ## Requirements
 ### Requirement: Record traceable evidence
 

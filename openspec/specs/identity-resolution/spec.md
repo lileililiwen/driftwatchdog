@@ -1,7 +1,8 @@
 # identity-resolution Specification
 
 ## Purpose
-TBD - created by archiving change identity-resolution. Update Purpose after archive.
+
+Audit found identity bugs: `find_by_hash_prefix` (`src/repo/bugs.rs:184-187`) returns `rows[0]` for `len>=8` even when ambiguous (silent wrong-bug); `link` (`src/commands/link.rs:50-58`) parses all-digit prefixes as numeric `fingerprints.id` first (misresolve); no duplicate-link guard and no `UNIQUE` in `schema.rs:81-88` whose `CHECK` is `OR` not `XOR` despite the doc in `links.rs:89-91`; `Links::create` (`src/repo/links.rs:95-127`) has no existence check beyond FK; `correlate.rs:27-33,50-59` empty-input early return plus survivors-only `replace_for_fingerprint` never clears stale rows; `candidates.rs:42-63` `MAX_PAIRS` truncates oldest-`id` alerts (newest drift dropped) with a no-op second cap branch.
 ## Requirements
 ### Requirement: Unambiguous prefix resolution
 Hash-prefix lookup MUST resolve only when exactly one fingerprint matches; otherwise it MUST error explicitly.

@@ -1,7 +1,8 @@
 # quality-cicd-docs-ux Specification
 
 ## Purpose
-TBD - created by archiving change quality-cicd-docs-ux. Update Purpose after archive.
+
+Audit found maturity gaps across quality/CI/CD/docs/UX: `Cargo.toml` has no `[lints]`, no `rust-version`/MSRV, loose reqs (`toml 0.8`, `rusqlite 0.31`, `thiserror 1`), no `cargo-deny`/`audit` or coverage, and no proptest/fuzz for the arbitrary-input normalizer; `ci.yml:41` runs clippy without `--all-features` (contradicts AGENTS.md/HANDOFF.md gate), single `ubuntu-22.04` job, no macOS/arm64 matrix, no `shellcheck`, no `npm audit`, `scripts/smoke.sh` not in CI; `release.yml` uses aging `macos-13`, `npm-publish` lacks `id-token: write` so `npm publish --provenance` fails, Cargo version stays `0.1.0` while npm pins to tag (drift), `auto-tag.yml` hard-fails without `REPO_PAT` + risks tag spam, `bump.sh` fails cold-start, no Dependabot, no signing/SBOM; docs drift: binary naming triple (`driftwatchdog` cargo bin vs clap `driftwatch` vs npm `driftwatch`) with README quickstart/npm section mismatch, `ROADMAP.md` omits archived `ci-test-gates`, `release-distribution/spec.md:3` still `Purpose: TBD`, HANDOFF 5-step vs AGENTS 6-step close workflow, no `driftwatch.toml.example` (placeholder + git-ignored), installer `skip_verify` dead flag + undocumented `--dry-run` + no `cargo install` fallback on unsupported hosts, npm `os/cpu` permits `darwin+arm64` install-then-fail, CLI `--help` thin with leaked internals and no examples/completions/man, double-wrapped terse errors with no remediation, `doctor` severity misuse (`checker.configured` PASS on "No external checkers", `remediation:` for info), `LICENSE` ok but no CHANGELOG, musl/Windows source-build compat unknown, stray `.driftwatch/` in repo root.
 ## Requirements
 ### Requirement: Lint and supply-chain policy
 The repo MUST declare lints/MSRV and MUST gate advisories, licenses, and coverage.

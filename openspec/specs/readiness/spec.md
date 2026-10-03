@@ -1,7 +1,8 @@
 # readiness Specification
 
 ## Purpose
-TBD - created by archiving change post-mvp-readiness. Update Purpose after archive.
+
+Driftwatchdog v0.1–v0.6 and the v1.1–v1.3 Gate releases are shipped and the packaging suite is green. The README is usable but has three documentation gaps that publication readiness should close: 1. No screenshot or checked-in terminal capture. The README shows fenced command text, but nothing shows an actual `driftwatch run` failure (§"Example"), a detected recurring bug, or a Gate run, so a reader cannot see the product working. 2. Rule catalog depth. The built-in profiles (`product`, `rust-product`, `release`) and stable concern IDs (`product-code-boundary`, `placeholder-threshold`, `release-evidence`, `capability-conformance`) are documented in separate prose sections; there is no single catalog tying each profile to its concerns, blocking default, and text-mode fallback behaviour. 3. Integration recipe. The README explains `.ai-gate/gate.yaml` and `gate.toml` in pieces, but a project owner has no ordered recipe from "no manifest" to a first `driftwatch gate` run. Driftwatchdog owns the central workspace Gate: 75 `.ai-gate/gate.yaml` declarations name `runtime: driftwatchdog`, so this README is a shared reference for the portfolio. The change is documentation-only and does not expand the Gate.
 ## Requirements
 ### Requirement: README embeds a redacted terminal capture
 

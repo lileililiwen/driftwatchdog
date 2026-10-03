@@ -1,7 +1,8 @@
 # github-actions-templates Specification
 
 ## Purpose
-TBD - created by archiving change github-actions-templates. Update Purpose after archive.
+
+Teams that adopt driftwatch in CI today must assemble the workflow from scattered README sections: install the binary, run checkers, keep the AI report, and avoid leaking logs. A wrong assembly either runs checkers without the installer matrix, uploads raw logs as artifacts, or fails closed on `check` exit codes nobody documented. One tested template removes the guesswork and encodes the project's own conventions (pinned installer version, `check` failure isolation, `report --ai` as the shareable artifact).
 ## Requirements
 ### Requirement: Reusable check workflow
 `templates/github-actions/driftwatch-check.yml` MUST be callable via `workflow_call`, install a pinned driftwatch, run checkers, and always publish the AI report.

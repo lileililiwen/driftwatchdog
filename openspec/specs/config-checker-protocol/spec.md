@@ -1,7 +1,8 @@
 # config-checker-protocol Specification
 
 ## Purpose
-TBD - created by archiving change config-checker-protocol. Update Purpose after archive.
+
+Audit found lenient config + brittle protocol: `src/project/config.rs:57-77` accepts unknown fields, duplicate checker names, empty commands, and `timeout_ms==0` (immediate timeout); `working_dir` is copied verbatim and resolved against process cwd, allowing `/etc` / `../../` escapes; checker failures are isolated per run but `doctor check_one_checker` splits on whitespace; `protocol.rs:77-83` rejects documents with unknown top-level fields (breaks forward-compat despite `protocol.rs:1-10` doc) while missing `alerts` defaults to `[]` so `{}` parses as success/Empty; `Status::Unknown` is never constructed in `src/commands/check.rs:119-290` (covered in crash-hardening for the kill path — here for dry-run/parse-failure mapping).
 ## Requirements
 ### Requirement: Validated checker config
 Invalid checker configuration MUST fail fast with an actionable error naming the checker and the fix.

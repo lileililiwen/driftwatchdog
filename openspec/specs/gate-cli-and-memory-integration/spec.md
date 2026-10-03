@@ -1,7 +1,8 @@
 # gate-cli-and-memory-integration Specification
 
 ## Purpose
-TBD - created by archiving change gate-cli-and-memory-integration. Update Purpose after archive.
+
+Gate checks must run locally for every relevant change before archive, not only after a GitHub push. Driftwatchdog should expose a stable CLI, persist Gate history alongside runtime failures, and keep CI as a second verification layer.
 ## Requirements
 ### Requirement: Run Gate locally
 
