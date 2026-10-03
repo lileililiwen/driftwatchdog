@@ -393,3 +393,61 @@ blocking:\n  - FAIL\n  - REVIEW_REQUIRED\n"
     assert_eq!(r.findings.len(), 1);
     assert_eq!(r.findings[0].rule.as_deref(), Some("RULES_DRIFT_NEW"));
 }
+
+/// `SPEC_PURPOSE_PLACEHOLDER` is declared ahead of the producing checker
+/// shipping it, and this is the end-to-end proof that the declaration
+/// took: a bound project, the default scope, a checker that reports the
+/// code at ERROR and exits 1. Before the code was declared the same run
+/// read `PASS` with zero findings and exit 0 — an ERROR finding gating
+/// nothing. It now blocks.
+#[test]
+fn a_spec_purpose_placeholder_finding_blocks_a_bound_project() {
+    let tmp = init_dir();
+    let body = report(&[finding(
+        "SPEC_PURPOSE_PLACEHOLDER",
+        "ERROR",
+        "spec purpose is the placeholder",
+    )]);
+    let cmd = report_command(&tmp, "governance.json", &body, 1);
+    std::fs::write(tmp.path().join("gate.toml"), bound_manifest(&cmd)).unwrap();
+
+    run_gate(&tmp).failure();
+    let run = latest_run(&tmp);
+    assert_eq!(run.status, "FAIL");
+    assert!(run.blocked);
+    let doc = run_doc(&tmp);
+    let r = result_of(&doc, CONCERN);
+    assert_eq!(r.status, GateStatus::Fail);
+    assert_eq!(r.severity, GateSeverity::Error);
+    assert_eq!(r.findings.len(), 1);
+    assert_eq!(
+        r.findings[0].rule.as_deref(),
+        Some("SPEC_PURPOSE_PLACEHOLDER")
+    );
+    let diagnostic = r.diagnostic.as_deref().unwrap();
+    assert!(diagnostic.starts_with("1 of 1"), "{diagnostic}");
+}
+
+/// The same binding against a report that does not carry the code must
+/// still pass. Without this, the test above would be satisfied by a
+/// concern that fails on anything, and the declaration would be
+/// indistinguishable from a blanket failure.
+#[test]
+fn a_report_without_the_code_still_passes() {
+    let tmp = init_dir();
+    let cmd = report_command(&tmp, "governance.json", &report(&[]), 0);
+    std::fs::write(tmp.path().join("gate.toml"), bound_manifest(&cmd)).unwrap();
+
+    run_gate(&tmp).success();
+    let doc = run_doc(&tmp);
+    let r = result_of(&doc, CONCERN);
+    assert_eq!(r.status, GateStatus::Pass);
+    assert!(r.findings.is_empty());
+    // A declared code with no finding earns no mention: the concern
+    // reports observed findings, and an unemitted code is not one.
+    assert!(!r
+        .diagnostic
+        .as_deref()
+        .unwrap()
+        .contains("SPEC_PURPOSE_PLACEHOLDER"));
+}

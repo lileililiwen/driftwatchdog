@@ -70,11 +70,20 @@ use crate::gate::types::{Finding, GateResult, GateSeverity, GateStatus};
 /// A code is declared here once and nowhere else: the effective code
 /// set may only be a subset of this list, and a project that names a
 /// code outside it is refused rather than trusted.
+///
+/// Declaring a code and the checker emitting it are separate facts.
+/// `SPEC_PURPOSE_PLACEHOLDER` is declared ahead of the producing
+/// checker shipping it, so the concern is *able* to see the finding the
+/// moment it exists rather than filtering it out. A declared code the
+/// checker has not emitted contributes no finding and no signal, and is
+/// not named in the result: declaring ahead of emission makes the gate
+/// able to see a code, it does not make the gate report on it.
 pub const GOVERNANCE_QUALITY_DECLARED_CODES: &[&str] = &[
     "QUALITY_README_CLAIM_CONTRADICTED",
     "QUALITY_README_CLAIM_UNSCOPED",
     "RULES_DRIFT_BASELINE_STALE",
     "RULES_DRIFT_NEW",
+    "SPEC_PURPOSE_PLACEHOLDER",
 ];
 
 /// The checker's two expected exit statuses: clean, and has-errors.

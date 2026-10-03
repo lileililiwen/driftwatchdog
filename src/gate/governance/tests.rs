@@ -337,9 +337,10 @@ fn no_cannot_run_case_reports_pass() {
 
 #[test]
 fn reported_count_is_the_filtered_count_not_the_total() {
+    const BACKLOG: usize = 211;
     let tmp = tempfile::tempdir().unwrap();
     let mut findings: Vec<String> = Vec::new();
-    for _ in 0..211 {
+    for _ in 0..BACKLOG {
         findings.push(finding(
             "PUBLICATION_UNVERIFIED",
             "ERROR",
@@ -350,12 +351,22 @@ fn reported_count_is_the_filtered_count_not_the_total() {
     for code in GOVERNANCE_QUALITY_DECLARED_CODES {
         findings.push(finding(code, "ERROR", "in scope", "driftwatchdog"));
     }
+    // Derived from the declared set rather than written out, so adding a
+    // code cannot leave this test pinning a stale count.
+    let in_scope = GOVERNANCE_QUALITY_DECLARED_CODES.len();
     let body = report(&findings);
     let script = report_exit(tmp.path(), &body, 1);
     let result = run(&script, &declared_scope());
     let diagnostic = result.diagnostic.as_deref().unwrap();
-    assert_eq!(result.findings.len(), 4, "the filtered count is reported");
-    assert!(diagnostic.starts_with("4 of 215"), "{diagnostic}");
+    assert_eq!(
+        result.findings.len(),
+        in_scope,
+        "the filtered count is reported"
+    );
+    assert!(
+        diagnostic.starts_with(&format!("{in_scope} of {}", BACKLOG + in_scope)),
+        "{diagnostic}"
+    );
     // The total is quoted, never reported as the result: a 211-
     // finding backlog outside the scope must not be carried into
     // this concern's findings.
@@ -433,4 +444,91 @@ fn a_codeless_finding_is_not_this_concerns_business() {
     let result = run(&script, &declared_scope());
     assert_eq!(result.status, GateStatus::Pass);
     assert!(result.findings.is_empty());
+}
+
+// --- Declaring a code the checker has not emitted yet -------------
+//
+// `SPEC_PURPOSE_PLACEHOLDER` is declared ahead of the producing
+// checker shipping it. These two tests pin both halves of what that
+// means, because only measuring it settles whether declaring ahead is
+// safe: the first says a declared, unemitted code is inert and says so
+// in the result, the second says the moment the checker emits it the
+// gate reports it. The first is not a licence to declare anything; it
+// is the measurement that makes the second trustworthy.
+
+#[test]
+fn a_declared_code_the_checker_has_not_emitted_is_inert() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A report carrying only out-of-scope findings, run against the
+    // full declared set — which contains a code the checker cannot
+    // yet emit.
+    let body = report(&[finding(
+        "LICENSE_MISSING",
+        "ERROR",
+        "an unrelated finding",
+        "argoset",
+    )]);
+    let script = report_exit(tmp.path(), &body, 1);
+    let result = run(&script, &declared_scope());
+    // Declaring an unemittable code is not a verdict and not a
+    // failure: the result is exactly what it was before the code was
+    // declared.
+    assert_eq!(result.status, GateStatus::Pass);
+    assert_eq!(expected_exit_for_status(result.status), Some(0));
+    assert!(result.findings.is_empty());
+    let diagnostic = result.diagnostic.as_deref().unwrap();
+    // And it earns no mention either. A declared code with no finding
+    // is indistinguishable from a code that was never declared, which
+    // is the structural weakness design.md §5 records: this repo
+    // cannot detect a declared/emitted divergence on its own.
+    assert!(
+        !diagnostic.contains("SPEC_PURPOSE_PLACEHOLDER"),
+        "an unemitted code must not appear in the result: {diagnostic}"
+    );
+}
+
+#[test]
+fn spec_purpose_placeholder_is_owed_once_the_checker_emits_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = report(&[finding(
+        "SPEC_PURPOSE_PLACEHOLDER",
+        "ERROR",
+        "spec purpose is the placeholder",
+        "driftwatchdog",
+    )]);
+    let script = report_exit(tmp.path(), &body, 1);
+    let result = run(&script, &declared_scope());
+    // The whole point of declaring the code ahead of emission: an
+    // ERROR finding that is filtered out and reads PASS is the D18
+    // failure class, and this is the assertion that it no longer is.
+    assert_eq!(result.status, GateStatus::Fail);
+    assert_eq!(expected_exit_for_status(result.status), Some(1));
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(result.findings[0].severity, GateSeverity::Error);
+    assert_eq!(
+        result.findings[0].rule.as_deref(),
+        Some("SPEC_PURPOSE_PLACEHOLDER")
+    );
+}
+
+#[test]
+fn a_project_may_narrow_its_scope_to_the_new_code_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = report(&[finding(
+        "SPEC_PURPOSE_PLACEHOLDER",
+        "ERROR",
+        "spec purpose is the placeholder",
+        "driftwatchdog",
+    )]);
+    let script = report_exit(tmp.path(), &body, 1);
+    // Naming the new code in a manifest is no longer a refused
+    // widening: it is the narrowest legal scope there is, and it
+    // reports the finding.
+    let result = run(&script, &["SPEC_PURPOSE_PLACEHOLDER".to_string()]);
+    assert_eq!(result.status, GateStatus::Fail);
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(
+        result.findings[0].rule.as_deref(),
+        Some("SPEC_PURPOSE_PLACEHOLDER")
+    );
 }

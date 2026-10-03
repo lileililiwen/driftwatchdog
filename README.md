@@ -694,6 +694,14 @@ ceiling:
 | `QUALITY_README_CLAIM_UNSCOPED` | a README claim is not scoped to what it covers |
 | `RULES_DRIFT_NEW` | a new clause gap against the rule baseline |
 | `RULES_DRIFT_BASELINE_STALE` | the rule baseline itself is stale |
+| `SPEC_PURPOSE_PLACEHOLDER` | a spec's `## Purpose` section is still the placeholder |
+
+A declared code is a code the concern **owns**, not one it has necessarily
+seen. `SPEC_PURPOSE_PLACEHOLDER` is declared ahead of the producing checker
+shipping it, so the concern can report the finding the moment it exists
+instead of filtering it out. Until the checker emits it, it contributes no
+finding and no mention in the result — the status is derived only from
+findings actually observed.
 
 A project **may narrow** the set for its run:
 
