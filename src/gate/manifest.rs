@@ -237,6 +237,26 @@ pub struct GateManifest {
     /// default so existing manifest digests stay stable.
     #[serde(default, skip_serializing_if = "GovernanceQualityPolicy::is_default")]
     pub governance_quality: GovernanceQualityPolicy,
+    /// Operator annotations: free text that records *why* a value is what
+    /// it is, addressed to the next reader of this file.
+    ///
+    /// An annotation is **not policy**. It selects no check, binds no
+    /// command, and never changes a result. That is the whole point: a
+    /// manifest that must record an operator's reasoning has to be able to
+    /// say so without smuggling the reasoning into a field that *is*
+    /// evaluated, and without the reasoning becoming unrepresentable (which
+    /// is what deleting an unrecognized key amounts to).
+    ///
+    /// Exempting a check is a different intent with a different mechanism —
+    /// `not_applicable`, which changes the plan. A note that observes "this
+    /// check is off until X" must not silently become an exemption.
+    ///
+    /// Entries are non-empty and byte-bounded, and credential-redacted at
+    /// parse time on the same terms as exemption reasons, so a note can
+    /// never become an unbounded storage or rendering sink. Not serialized
+    /// when empty so existing `gate.toml` digests stay stable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Accepted `binding_policy` values, in diagnostic order.
@@ -246,6 +266,14 @@ pub const BINDING_POLICIES: &[&str] = &["report", "reject"];
 /// persisted. Mirrors the diagnostic/remediation bounds so a reason can
 /// never become an unbounded storage or rendering sink.
 pub const MAX_EXEMPTION_REASON_BYTES: usize = 2048;
+
+/// Upper bound applied to a single operator note before it is rendered or
+/// persisted. A note is prose for the next reader, not a payload: bounding it
+/// at the exemption-reason limit keeps a manifest file readable and keeps one
+/// pasted log from becoming a stored artifact. Mirrors the
+/// diagnostic/remediation bounds for the same reason — a free-text field a
+/// human types into a contract must never become an unbounded sink.
+pub const MAX_NOTE_BYTES: usize = 1024;
 
 /// Gate result id carrying one project's exemption-budget verdict.
 ///
@@ -771,6 +799,8 @@ pub enum ManifestError {
     UnboundRequiredCheck { checks: String },
     #[error("manifest parse error: {0}")]
     Parse(String),
+    #[error("notes[{index}] is empty (a note must say something, or drop the entry)")]
+    EmptyNote { index: usize },
 }
 
 const KNOWN_FIELDS: &[&str] = &[
@@ -799,6 +829,7 @@ const KNOWN_FIELDS: &[&str] = &[
     "binding_policy",
     "governance_quality",
     "codes",
+    "notes",
 ];
 
 pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
@@ -974,6 +1005,7 @@ pub(crate) fn validate(manifest: &GateManifest) -> Result<(), ManifestError> {
     }
     validate_source_size(&manifest.source_size)?;
     validate_command_binding(manifest)?;
+    validate_notes(manifest)?;
     Ok(())
 }
 
@@ -1045,6 +1077,21 @@ pub(crate) fn bound_exemption_reasons(manifest: &mut GateManifest) {
     for reason in manifest.not_applicable.values_mut() {
         *reason = bound_text(reason, MAX_EXEMPTION_REASON_BYTES);
     }
+    for note in manifest.notes.iter_mut() {
+        *note = bound_text(note, MAX_NOTE_BYTES);
+    }
+}
+
+/// Reject a note that says nothing. An empty annotation is indistinguishable
+/// from a field that failed to serialize, and a manifest whose optional
+/// prose can silently vanish is not a contract.
+fn validate_notes(manifest: &GateManifest) -> Result<(), ManifestError> {
+    for (i, note) in manifest.notes.iter().enumerate() {
+        if note.trim().is_empty() {
+            return Err(ManifestError::EmptyNote { index: i });
+        }
+    }
+    Ok(())
 }
 
 /// Command-binding rules: exemptions must name a selected check with a

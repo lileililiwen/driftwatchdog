@@ -29,7 +29,17 @@
 //! project_commands:               # optional named project commands
 //!   test: "npm test"
 //! contexts: [git, openspec]       # optional context providers
+//! notes:                          # optional operator annotations; never policy
+//!   - "why this value is what it is"
 //! ```
+//!
+//! `notes` is prose for the next reader and nothing else: it selects no
+//! check, binds no command, and cannot change a result. It exists so an
+//! operator's reasoning has a home in the file that records their decisions.
+//! Recording "this check is off until the quality block lands" as an
+//! exemption (`not_applicable`) would change the plan; deleting the line
+//! loses the reason. A note is the third thing, and it is inert by
+//! construction.
 //!
 //! Unknown fields fail with a `did you mean` hint. A `profile` that is
 //! not a built-in name becomes a project-defined profile whose selection
@@ -66,6 +76,7 @@ const YAML_FIELDS: &[&str] = &[
     "project_commands",
     "contexts",
     "governance_quality",
+    "notes",
 ];
 
 /// A parsed business Gate document: the declared runtime (for the
@@ -108,6 +119,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
     let mut project_commands_yaml: Option<&Yaml> = None;
     let mut contexts_yaml: Option<&Yaml> = None;
     let mut governance_quality_yaml: Option<&Yaml> = None;
+    let mut notes_yaml: Option<&Yaml> = None;
 
     for (k, v) in hash {
         let key = k
@@ -133,6 +145,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
             "project_commands" => project_commands_yaml = Some(v),
             "contexts" => contexts_yaml = Some(v),
             "governance_quality" => governance_quality_yaml = Some(v),
+            "notes" => notes_yaml = Some(v),
             other => return Err(manifest::unknown_field_error(other, YAML_FIELDS)),
         }
     }
@@ -277,6 +290,20 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         }
     }
 
+    // notes: operator annotations. Shape validation only — a note records
+    // reasoning and is never read by the resolver, so there is nothing here
+    // for it to be valid *against*. `manifest::validate` owns the non-empty
+    // rule; `bound_exemption_reasons` owns redaction and the length bound.
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(n) = notes_yaml {
+        let arr = n
+            .as_vec()
+            .ok_or_else(|| ManifestError::Parse("`notes` must be a list".to_string()))?;
+        for item in arr {
+            notes.push(expect_string(item, "note")?);
+        }
+    }
+
     // governance_quality: the concern's code scope. The set itself is
     // enforced by the adapter (a subset only; an empty set is a
     // configuration error), so parsing here is shape validation only.
@@ -353,6 +380,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         not_applicable,
         binding_policy,
         governance_quality,
+        notes,
     };
     manifest::bound_exemption_reasons(&mut gate_manifest);
     manifest::validate(&gate_manifest)?;
@@ -509,6 +537,90 @@ contexts:
         )
         .unwrap_err();
         assert!(matches!(err, ManifestError::EmptyCheckCommand { .. }));
+    }
+
+    /// The field seven fleet manifests already carry: an operator's
+    /// reasoning must parse, and must survive intact.
+    #[test]
+    fn notes_parse_and_are_preserved_verbatim() {
+        let doc = parse_document(
+            "version: 1\nprofile: backend\nnotes:\n  - \"Set product_quality only after a quality block lands.\"\n  - \"The OpenSpec name preflight remains mandatory.\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            doc.manifest.notes,
+            vec![
+                "Set product_quality only after a quality block lands.".to_string(),
+                "The OpenSpec name preflight remains mandatory.".to_string(),
+            ]
+        );
+    }
+
+    /// An annotation is not policy. Two manifests differing only in `notes`
+    /// must resolve to the same plan: if a note could change a selection, a
+    /// command, or a blocking decision, it would be policy wearing a
+    /// comment's clothes. (`manifest_digest` is deliberately not compared
+    /// here: it is a digest of the manifest *text*, so it tracks the note
+    /// that is present — as an identity, not as a decision.)
+    #[test]
+    fn notes_do_not_change_the_resolved_plan() {
+        let base = "version: 1\nprofile: backend\nchecks:\n  build: true\n  tests: true\n";
+        let with_notes = format!("{base}notes:\n  - \"an annotation\"\n");
+        let plain = resolve(&parse_document(base).unwrap().manifest, &[]).unwrap();
+        let noted = resolve(&parse_document(&with_notes).unwrap().manifest, &[]).unwrap();
+        assert_eq!(plain.plan.checks, noted.plan.checks);
+        assert_eq!(plain.not_scheduled, noted.not_scheduled);
+        assert_eq!(
+            plain.plan.policy.review_required_blocks,
+            noted.plan.policy.review_required_blocks
+        );
+    }
+
+    /// `notes` is a *named* field, not a hole in the contract: a near miss
+    /// still fails and still gets the hint.
+    #[test]
+    fn a_near_miss_of_notes_still_fails() {
+        let err = parse_document("version: 1\nprofile: backend\nnote:\n  - \"typo\"\n").unwrap_err();
+        assert!(matches!(err, ManifestError::UnknownField { .. }), "got {err}");
+    }
+
+    #[test]
+    fn an_empty_note_fails_rather_than_vanishing() {
+        let err =
+            parse_document("version: 1\nprofile: backend\nnotes:\n  - \"   \"\n").unwrap_err();
+        assert!(matches!(err, ManifestError::EmptyNote { index: 0 }), "got {err}");
+    }
+
+    /// A note is credential-redacted and length-bounded on the same terms as
+    /// an exemption reason, so pasted prose cannot become a stored secret or
+    /// an unbounded render.
+    #[test]
+    fn notes_are_redacted_and_bounded() {
+        let long = "y".repeat(crate::gate::manifest::MAX_NOTE_BYTES * 2);
+        let secret = "Set api_key=supersecret123 when wiring.".to_string();
+        let doc = parse_document(&format!(
+            "version: 1\nprofile: backend\nnotes:\n  - \"{secret}\"\n  - \"{long}\"\n"
+        ))
+        .unwrap();
+        assert!(
+            !doc.manifest.notes[0].contains("supersecret123"),
+            "a note must not carry a credential into a render"
+        );
+        assert!(doc.manifest.notes[0].contains("[REDACTED]"));
+        assert!(doc.manifest.notes[1].len() <= crate::gate::manifest::MAX_NOTE_BYTES + 3);
+    }
+
+    /// A manifest with no notes must not serialize a `notes` key, so a
+    /// `gate.toml` digest that never mentioned notes still does not.
+    #[test]
+    fn absent_notes_are_not_serialized() {
+        let doc = parse_document("version: 1\nprofile: backend\n").unwrap();
+        assert!(doc.manifest.notes.is_empty());
+        let out = toml::to_string(&doc.manifest).unwrap();
+        assert!(
+            !out.contains("notes"),
+            "an empty notes list must not reach the serialized manifest: {out}"
+        );
     }
 
     #[test]
