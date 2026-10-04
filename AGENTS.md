@@ -65,3 +65,9 @@ change. Still one change at a time; still no confirmation prompts.
 - Keep user-facing command examples in README.md accurate.
 - Record implementation state, blockers, and verification results in HANDOFF.md.
 - Do not silently expand the explicit v1 non-goals.
+
+## Git workflow
+
+- Work on `main`. Do not create a branch or a worktree unless the user explicitly asks.
+- Never push. The user owns publishing.
+- Stage explicit paths; never `git add -A`.
