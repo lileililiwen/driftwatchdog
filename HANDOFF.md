@@ -14,6 +14,87 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`per-check-gate-timeout` is implemented and deliberately not archived**
+(commit `aae4a67`; it carries three open boxes, recorded below).
+
+**The problem, measured rather than assumed.** `driftwatch gate` hardcoded
+one 60s deadline for every check it ran — `CHECK_TIMEOUT_MS` in
+`src/commands/gate.rs`, passed as `AdapterInput::timeout_ms` for the
+`sh -c <command>` run — and **no manifest could reach it**. Warm standalone
+timings across the live fleet on 2026-10-04: `cvunify` 55s (8% headroom) and
+`labrys` 58.5s (2% headroom) pass today only because the machine was warm;
+`fotofy` UnitTests 69s, `openaccounting` 143s, `rust-ecommerce` ~10min and
+`alltools-platform` >15min are killed mid-run and reported unproven. Two
+different defects hide behind one constant: four repositories cannot pass,
+and two more are one slow machine from a false red.
+
+**The field.** `ManifestCheck.timeout_ms: Option<u64>`, mirroring
+`CheckerEntry.timeout_ms` (`src/project/config.rs:81`), its
+`unwrap_or(DEFAULT)` resolution, and its refusal of `timeout_ms = 0`. The
+business YAML form gains a per-check `timeouts:` mapping converting onto the
+same field, so the value rules run **once**, in `manifest::validate`, for
+both forms — the single-owner pattern `aigate.rs`'s own header states for
+`not_applicable` and `binding_policy`. `0` and anything above
+`MAX_CHECK_TIMEOUT_MS` (1h) are refused at parse time, naming the check and
+the cap.
+
+**`Option` is load-bearing, not stylistic.** The canonical TOML omits a
+`None`, so `manifest_digest` stays byte-identical for every manifest that
+never declared the key. A defaulted `u64` would have rewritten the digest of
+all 76 manifests for a field none of them declared. Verified, not assumed:
+`gate --dry-run` was run over every fleet manifest with the pre-change and
+post-change binaries and the two digest lists diffed — **all 77 manifests
+(76 `.ai-gate/gate.yaml` + `devloom`'s native `gate.toml`) are
+byte-identical**, all 77 still parse, and **no manifest needs an edit**.
+
+**The default does not change.** A check that declares nothing resolves to
+the same 60s it had before. Raising the global default would have made the
+two near-miss repositories worse in relative terms without guaranteeing
+either of them margin. A default that changes silently is a default nobody
+reviewed.
+
+**The timeout is now visible, which is the point.** `ResolvedGatePlan`
+carries `check_timeouts` and `--dry-run` renders every scheduled check's
+effective deadline. `alltools-platform` now prints
+`- declared-verification: 60000ms` — the exact check that was being killed,
+with the exact deadline that killed it, readable before anything executes. A
+timeout nobody can see is indistinguishable from a slow test, which is how
+this stayed hidden across 76 manifests.
+
+**Timeout reporting was verified unchanged, and already correct.**
+`run_text_adapter` (`src/gate/adapters.rs:936`) branches on `run.timed_out`
+before the exit-code match and returns `REVIEW_REQUIRED` with
+`{tool_id}:timeout` missing evidence, while a non-zero exit maps to `FAIL`.
+The proposal's claim held; only the deadline moved.
+
+**Negative controls, and proof they are controls.** `timeout_ms = 1000`
+against `sleep 5` really is killed and really reports `REVIEW_REQUIRED` with
+`project-runtime:timeout`. To confirm the control had teeth, the runner's
+per-check lookup was reverted to the hardcoded default: both enforcement
+tests then failed with "Unexpected success", because the gate reported `PASS`
+once `sleep 5` completed under 60s. The wiring was restored and the suite
+re-run green. **Not verified by a real 60s wait** — spending a minute to
+prove a constant equals its own definition buys nothing, so the default path
+is pinned by resolved value plus the enforced `Duration`, and the same code
+path is covered end-to-end by the 1s control. An earlier draft of one test
+re-implemented the runner's lookup inline and therefore passed even under
+sabotage; it was replaced with a real assertion rather than kept as false
+confidence.
+
+### Pre-existing defect this change surfaced and does not own
+
+The two manifest forms label a check's `source` differently — the YAML
+converter stamps `source = "manifest"`, the native form leaves it absent — so
+the two forms have never produced byte-identical canonical manifests and
+their digests differ for identical declarations. This is a digest-stability
+question rather than a timeout question, so it is out of scope here, but it
+is why the single-owner test compares the rendered *timeout* block instead of
+the whole plan, and it should not be rediscovered by the next reader.
+
+---
+
+### Previous change: bind-declared-verification-command
+
 The `bind-declared-verification-command` change is implemented and
 **deliberately not archived** (it carries open owner decisions, recorded
 below). Two things landed here, and the fleet tooling landed in the sibling
@@ -854,6 +935,7 @@ Read these in order:
 | release-evidence-and-capability-gate | archived 2026-09-24 | `release` built-in profile + stable concern IDs `release-evidence` and `capability-conformance`; shared wire shape with the product-quality envelope (`RELEASE_GATE_ENVELOPE_VERSION = 1`, exit-code authority rule, bounded fields, secret redaction); release-evidence required-evidence guard (PASS requires `revision`, `product_version`, at least one `artifacts` entry, and `provenance`; stale revision vs current git rev downgrades to REVIEW_REQUIRED); capability-conformance required-evidence guard (PASS requires non-empty `verified` whose ids are all in the resolved plan; out-of-scope verified ids downgrade to REVIEW_REQUIRED); malformed/missing/wrong-version envelopes downgrade to REVIEW_REQUIRED; no text-mode fallback so missing coverage can never be silently treated as a pass. New `src/gate/concerns.rs` (6 unit tests) + 5 new `src/gate/manifest.rs` unit tests + 18 new `src/gate/adapters.rs` unit tests + 19 new `tests/gate_release_evidence.rs` integration tests. `driftwatch check` and every other Gate concern path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator (no release publisher, signer, SBOM generator, or deployment executor is added). | product-quality-gate-contract |
 | gate-evidence-export | archived 2026-09-27 | Read-only `driftwatch gate evidence-export` subcommand (`--format human|json`, `--dry-run` for documentation) that maps a completed `gate_runs` row into the workspace-governance `release_evidence` vocabulary (closed field set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed state set `verified` / `unverified` / `blocked`); per-field state priority `verified > blocked > unverified` with `verified` reserved for scheduled checks that ran and passed on the current revision; stale-revision rule emits every field `unverified` with a `stale` diagnostic naming both revisions; unknown governance field is an `ExportError::UnknownField` construction error; refuses with a non-zero exit when no run exists. New `src/gate/evidence_export.rs` (23 unit tests) + new `src/commands/evidence_export.rs` (8 unit tests) + new `tests/gate_evidence_export.rs` (11 integration tests covering ran/PASS, ran/FAIL, not-scheduled, could-not-execute, stale revision, schema, and read-only invariants). The bounded-evidence store, the release-evidence / capability-conformance adapters, the release-gate envelope wire version, the `gate_runs` schema, the `driftwatch check` path, and the `gate --format json` path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator. | release-evidence-and-capability-gate |
 | post-mvp-readiness | archived 2026-09-27 | Documentation-only README readiness pass: a checked-in terminal capture under `docs/assets/run-failure.txt` + `docs/assets/gate-run.txt` (synthetic project, no real repo data, no external image host, redacted), a consolidated built-in Gate profile and concern catalog in `README.md` (profile → stable concern IDs → default `required = true` → exit-code authority rule → text-mode fallback behaviour) sourced from `src/gate/concerns.rs` and `src/gate/manifest.rs`, and an ordered integration recipe from no manifest to a first `driftwatch gate` run (init, surface choice, profile + commands, blocking override, context providers, dry-run + run + export). The catalog and the recipe explicitly note Driftwatchdog owns the central workspace Gate (75 workspace `.ai-gate/gate.yaml` files name `runtime: driftwatchdog`). No `src/**`, concern ID, envelope, wire version, CLI surface, profile, rule, or canonical spec was changed; Driftwatchdog remains an executor/aggregator. | gate-evidence-export |
+| per-check-gate-timeout | implemented 2026-10-04, NOT archived (3 open boxes recorded in Current state) | `driftwatch gate` hardcoded one 60s deadline for every check (`CHECK_TIMEOUT_MS` in `src/commands/gate.rs`) that no manifest could reach; four fleet repositories were killed mid-run and reported unproven, and two more had 8% and 2% headroom. `ManifestCheck.timeout_ms: Option<u64>` mirrors the checker config's existing field, its `unwrap_or(DEFAULT)` resolution, and its refusal of `0`; the business YAML form gains a per-check `timeouts:` mapping onto the same field so the value rules run once in `manifest::validate` for both forms. `MAX_CHECK_TIMEOUT_MS = 3_600_000` bounds the value and is named in the error. **The default is unchanged at 60s** and all 77 fleet manifests produce byte-identical `manifest_digest` values before and after, measured by diffing `--dry-run` output from both binaries — no manifest needs an edit. `ResolvedGatePlan.check_timeouts` + `--dry-run` rendering make the effective deadline visible. 9 new `src/gate/manifest.rs` unit tests + 5 in `src/gate/aigate.rs` + 3 in `src/commands/gate.rs` + 5 new `tests/gate_check_timeout.rs` integration tests. Timeout stays distinct from failure (`REVIEW_REQUIRED` + `project-runtime:timeout` vs `FAIL`). No new execution path, dependency, or network call. | gate-cli-and-memory-integration; gate-project-configuration |
 | installer-stdout-purity | implemented 2026-10-03, NOT archived (open dependency recorded elsewhere) | The shell installer's stdout is a contract: exactly one line on success (the installed path) and nothing on failure. Two cleanup deletes could append to it — the `EXIT` trap that removes the work directory (fires *after* the final `printf`) and the staged-binary cleanup further down (redirected stderr but not stdout). On a host whose `rm` is a wrapper that reports what it removed on stdout, `$( install.sh ... )` captured two lines and `test_installer.sh:21` failed. Both sites now redirect stdout; the trap keeps its stderr channel so a real cleanup failure is still visible and gains `|| true` so a failing delete cannot become a failed install. Regression test `tests/packaging/test_installer_stdout.sh` puts a chatty `rm` (and a second-call-failing `mv` for the failure path) on the installer's PATH so the defect reproduces on every host, and asserts one-line/empty stdout plus that each cleanup site was reached. Installer stderr, `--dry-run`, exit codes, checksum verification, and the atomic install are unchanged. | bind-governance-quality-checks (recorded dependency only) |
 | source-file-size-gate | archived 2026-09-28 | Built-in `source-file-size` concern scheduled by the `product`/`rust-product` profiles and executed in-process by a new `src/gate/source_size.rs` scanner (no project command, no language parsing). It resolves a repository-owned source boundary (Git: `git ls-files --cached --others --exclude-standard`; non-Git: symlink-free walk with root `.gitignore`), applies default dependency/build/vendor/state/generated/test exclusions plus conventional source roots, honors repository-relative `include`/`exclude` glob overrides (exclude wins), skips symlinks and binary/invalid-UTF-8 files, and counts raw `0x0A` bytes (`wc -l` semantics) per file. A required concern returns `FAIL` with one bounded finding per file above the default 1,000-line maximum; boundary/read uncertainty returns `REVIEW_REQUIRED`, so incomplete coverage never becomes a pass. A strict `[source_size]` manifest table (`max_lines` positive and <= 1,000,000; `include`/`exclude` repository-relative, non-empty, no absolute/`..` patterns) is validated before execution and participates in the manifest digest; `.ai-gate/gate.yaml` uses the built-in default. `--dry-run` renders `source_size: max_lines=... include=[...] exclude=[...]` without scanning or persisting. New `src/gate/source_size.rs` (18 unit tests) + `tests/gate_source_file_size.rs` (13 integration tests) + `concerns.rs`/`manifest.rs`/`mod.rs`/`aigate.rs`/`commands/gate.rs` updates. `driftwatch check`, every other concern path, the CLI surface, and the SQLite schema are unchanged. | product-quality-gate-contract |
 
@@ -870,7 +952,38 @@ Read these in order:
 
 ## Verification gates (current)
 
-Last run on this change (installer-stdout-purity), 2026-10-03:\n\n    cargo fmt --check                                   # clean, exit 0\n    cargo test                                          # 869 passed, 0 failed across 28 suites, exit 0\n                                                      #   packaging_bash_and_node_suites_pass: 1 passed, 0 failed (was 0 passed, 1 failed)\n                                                      #   lib 623; then 32/12/6/10/7/3/13/14/11/15/19/13/15/7/2/5/6/15; then packaging 1;\n                                                      #   then 3/11/7/7/8/4/0. The 41-test delta from the 828/1 baseline is\n                                                      #   the newly-passing packaging test plus the seven suites cargo had\n                                                      #   skipped by aborting at that binary — no new Rust tests.\n    cargo clippy --all-targets --all-features -- -D warnings   # clean, exit 0\n    openspec validate installer-stdout-purity --strict # "Change 'installer-stdout-purity' is valid"\n    openspec validate --changes --strict --no-interactive  # 3 passed, 0 failed (3 items)\n    sh tests/packaging/run_all.sh                      # 11/11 bash sub-suites ok (was 10/10 with installer failing) + Node 11/11\n    git diff --check                                   # clean, exit 0\n\n    Note: `openspec list --changes --strict` is NOT a valid invocation on the pinned\n    CLI (v1.6.0) — it exits 1 with `unknown option '--strict' (Did you mean --sort?)`.\n    Use `openspec list --changes`, or the strict `openspec validate --changes --strict`.\n\nEarlier run on source-file-size-gate:\n\n    cargo fmt --check\n    cargo test             # lib (557) + integration incl. 13 new tests/gate_source_file_size.rs tests\n    cargo clippy --all-targets --all-features -- -D warnings\n    openspec validate --changes --strict --no-interactive   # no active changes remain (source-file-size-gate archived)\n    sh tests/packaging.sh   # 10/10 pass: target_mapping, artifact_naming, checksum_manifest, deployable_templates, installer, repo_hygiene, agent_examples, gha_templates, openspec_change_names, change_workflow\n    git diff --check        # clean (no whitespace errors, no conflict markers)\n    ./target/debug/driftwatch gate                          # synthetic project, smoke check, PASS (blocked: false)\n    ./target/debug/driftwatch gate --dry-run                # resolved plan: smoke [required] via manifest\n    ./target/debug/driftwatch gate evidence-export         # 9 governance fields in human table\n    ./target/debug/driftwatch gate evidence-export --format json   # versioned EvidenceExport document\n    cat docs/assets/run-failure.txt               # 3-occurrence recurring bug, redacted\n    cat docs/assets/gate-run.txt                  # gate --dry-run + gate + gate evidence-export, redacted
+Last run on this change (per-check-gate-timeout), 2026-10-04:
+
+    cargo fmt --check                                   # clean, exit 0
+    cargo test                                          # 908 passed, 0 failed across 29 suites, exit 0
+                                                      #   baseline 886/0/28 -> +22 tests, +1 suite:
+                                                      #   9 in gate::manifest, 5 in gate::aigate,
+                                                      #   3 in commands::gate, 5 in tests/gate_check_timeout.rs
+    cargo clippy --all-targets --all-features -- -D warnings   # clean, exit 0
+    openspec validate --changes --strict               # 6 passed, 0 failed (6 items)
+    openspec list --changes                            # per-check-gate-timeout 29/32 tasks
+    git diff --check                                   # clean, exit 0
+
+    Fleet compatibility (the claim that needed measuring, not asserting):
+    for each of the 77 fleet Gate manifests, `gate --dry-run` was run with the
+    pre-change binary (built from a stash of the three source edits) and with
+    the post-change binary, and the two manifest-digest lists were diffed:
+        diff digests_before.txt digests_after.txt   # empty
+    All 77 byte-identical, all 77 still parse. 76 .ai-gate/gate.yaml + devloom's
+    native gate.toml. Zero manifests need an edit.
+
+    Negative-control sabotage check (proving the control can fail):
+    reverting the runner's per-check lookup to the hardcoded default turned
+    a_declared_timeout_kills_the_command_before_it_finishes and
+    the_business_yaml_form_honors_a_declared_timeout red with "Unexpected
+    success" (gate reported PASS; `sleep 5` completed under the 60s default).
+    Wiring restored, suite re-run green.
+
+    Note: `openspec list --changes --strict` is NOT a valid invocation on the pinned
+    CLI (v1.6.0) — it exits 1 with `unknown option '--strict' (Did you mean --sort?)`.
+    Use `openspec list --changes`, or the strict `openspec validate --changes --strict`.
+
+Earlier run on installer-stdout-purity, 2026-10-03:\n\n    cargo fmt --check                                   # clean, exit 0\n    cargo test                                          # 869 passed, 0 failed across 28 suites, exit 0\n                                                      #   packaging_bash_and_node_suites_pass: 1 passed, 0 failed (was 0 passed, 1 failed)\n                                                      #   lib 623; then 32/12/6/10/7/3/13/14/11/15/19/13/15/7/2/5/6/15; then packaging 1;\n                                                      #   then 3/11/7/7/8/4/0. The 41-test delta from the 828/1 baseline is\n                                                      #   the newly-passing packaging test plus the seven suites cargo had\n                                                      #   skipped by aborting at that binary — no new Rust tests.\n    cargo clippy --all-targets --all-features -- -D warnings   # clean, exit 0\n    openspec validate installer-stdout-purity --strict # "Change 'installer-stdout-purity' is valid"\n    openspec validate --changes --strict --no-interactive  # 3 passed, 0 failed (3 items)\n    sh tests/packaging/run_all.sh                      # 11/11 bash sub-suites ok (was 10/10 with installer failing) + Node 11/11\n    git diff --check                                   # clean, exit 0\n\n    Note: `openspec list --changes --strict` is NOT a valid invocation on the pinned\n    CLI (v1.6.0) — it exits 1 with `unknown option '--strict' (Did you mean --sort?)`.\n    Use `openspec list --changes`, or the strict `openspec validate --changes --strict`.\n\nEarlier run on source-file-size-gate:\n\n    cargo fmt --check\n    cargo test             # lib (557) + integration incl. 13 new tests/gate_source_file_size.rs tests\n    cargo clippy --all-targets --all-features -- -D warnings\n    openspec validate --changes --strict --no-interactive   # no active changes remain (source-file-size-gate archived)\n    sh tests/packaging.sh   # 10/10 pass: target_mapping, artifact_naming, checksum_manifest, deployable_templates, installer, repo_hygiene, agent_examples, gha_templates, openspec_change_names, change_workflow\n    git diff --check        # clean (no whitespace errors, no conflict markers)\n    ./target/debug/driftwatch gate                          # synthetic project, smoke check, PASS (blocked: false)\n    ./target/debug/driftwatch gate --dry-run                # resolved plan: smoke [required] via manifest\n    ./target/debug/driftwatch gate evidence-export         # 9 governance fields in human table\n    ./target/debug/driftwatch gate evidence-export --format json   # versioned EvidenceExport document\n    cat docs/assets/run-failure.txt               # 3-occurrence recurring bug, redacted\n    cat docs/assets/gate-run.txt                  # gate --dry-run + gate + gate evidence-export, redacted
     ./target/debug/driftwatch run sh -c 'echo boom >&2; exit 1'   # bug attached
     ./target/debug/driftwatch show <hash8>                  # render fingerprint
     ./target/debug/driftwatch report                        # markdown report
@@ -977,6 +1090,25 @@ Last run on this change (installer-stdout-purity), 2026-10-03:\n\n    cargo fmt 
 OpenSpec Codex skill generation initially hit a read-only sandbox directory. The integration was regenerated successfully in the writable host checkout with `openspec init --tools codex --force` and `openspec update --force`. Restart the IDE if slash commands are not visible.
 
 ## Next action
+
+**`per-check-gate-timeout` is implemented and must stay unarchived.** Every
+implementation box in its `tasks.md` is checked and the full suite is green
+(908 passed / 0 failed / 29 suites), but three boxes are open on purpose, so
+`openspec archive` must not be run on it yet. The three open items:
+
+1. **The 76 manifests are not swept to declare their own timeouts.** This
+   change adds the field; which deadline a repository needs is that
+   repository's call, measured on its own machine. The four that cannot pass
+   under 60s — `fotofy`, `openaccounting`, `rust-ecommerce`,
+   `alltools-platform` — stay unproven until their owners declare a value, and
+   `cvunify` / `labrys` keep their 8% and 2% headroom until they do.
+2. **The `source`-label divergence between the two manifest forms** (above) is
+   recorded and not fixed here.
+3. **Not archived** — archiving needs separate authorization.
+
+**The next queue item is a fleet decision, not a code change.** The useful
+follow-up is helping the four affected repositories measure their real warm
+durations and declare them, which is owner work per repository.
 
 **`installer-stdout-purity` is implemented and must stay unarchived.** Every
 box in its `tasks.md` is checked and the full suite is green, but it carries an
