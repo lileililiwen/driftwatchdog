@@ -14,6 +14,154 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+The `bind-declared-verification-command` change is implemented and
+**deliberately not archived** (it carries open owner decisions, recorded
+below). Two things landed here, and the fleet tooling landed in the sibling
+`workspace-governance` repository (`e1ef0af`).
+
+**The problem, measured rather than assumed.** Across the 81 sibling
+repositories on 2026-10-04: **81** declare a non-empty
+`verification.command` in their `.project.json`; **76** carry a
+`.ai-gate/gate.yaml`; **6** bind any `commands:` entry; and **70** therefore
+declare how they should be verified while their gate executes nothing. The
+checkpoint figures of 83 / 7 / 74 are superseded — 81 is the git-repository
+count, the manifest count is 76, and the binding count is 6. The 5
+manifest-less repositories are `chronicleaf`, `devloom`, `kairovia`,
+`lileililiwen.github.io` and `ziban`; `devloom` carries a native `gate.toml`
+instead and the other four carry no Gate manifest in any form.
+
+**The binding is generated, never templated.** A template cannot know a
+sibling repository's verification command, and `profile_defaults`
+(`src/gate/manifest.rs:110`) selects concern ids only and never invents one.
+`workspace-governance/scripts/bind_verification_command.py` reads each
+repository's own declaration and writes that command into that repository's
+own manifest, under **both** `checks:` and `commands:` — a `commands.<id>`
+with no selection is a parse error (`src/gate/aigate.rs:186`), so a binding
+without a selection would be recorded and inert.
+
+**The concern is `declared-verification`, and it is deliberately the plain
+one.** It belongs to no closed concern vocabulary, so `src/commands/gate.rs:212`
+routes it to the existing `project-runtime` text adapter and the exit code is
+the verdict: `0` is `PASS`, non-zero is `FAIL`, a timeout is `REVIEW_REQUIRED`.
+It is **not** `governance-quality`: that concern requires a governance report
+and derives its status from the *levels of matching findings*
+(`src/gate/governance/mod.rs:20-40`), so binding ordinary test output there
+would produce `REVIEW_REQUIRED` about the checker rather than `FAIL` about the
+command. It is non-exemptable (one spelling, no alias, so no repository can
+write itself out of the ruling with a `not_applicable` reason), and no built-in
+profile schedules it, because a profile that did would make every un-generated
+repository `UNBOUND` and say nothing about its verification.
+
+**The ordering constraint was real and is recorded.** The checker exits 1 on
+errors and the concern filters report findings through
+`GOVERNANCE_QUALITY_DECLARED_CODES` *before* the status is computed, so before
+the code was declared, a checker emitting only
+`QUALITY_VERIFICATION_COMMAND_UNBOUND` would exit 1 with nothing in scope and
+the concern would report **PASS while the checker fails** — the D18 failure
+class. The declared code and the emitting rule therefore ship together, code
+first. `the_verification_binding_code_is_outside_the_declared_set_when_undeclared`
+is the negative control that proves the declaration is load-bearing.
+
+**This repository's own gate is no longer a null measurement.** Before, the
+aggregate was `FAIL` with 7 `UNBOUND` checks and nothing ran. After, 6 are
+`UNBOUND`, `source-file-size` is unchanged, and `declared-verification` runs
+632 tests and reports `PASS` with the test output as its diagnostic. This
+repository's `.project.json` declared `cargo test --workspace --all-targets`
+all along; the manifest simply never bound it.
+
+**Idempotence is proven over the real fleet, not a fixture.** A second
+`--apply` pass over all 81 repositories reported 76 `ALREADY_BOUND`, 0 writes
+and **0 changed SHA-256 digests**. The tool's default also refuses to write
+into a repository that is dirty in its manifest, so the second pass's only
+effect on disk was to decline.
+
+### The consequence, measured not hidden
+
+Binding a command means the gate starts running each repository's test suite,
+and repositories whose suites are red go red. **No failing command was
+suppressed, skipped, softened or reinterpreted**, and the classifications are
+reported more finely than the Gate's own because the Gate maps *any* non-zero
+exit to `FAIL` (`src/gate/adapters.rs:981`) and would hide "the toolchain is
+not installed" behind "the tests fail".
+
+MEASUREMENT_PLACEHOLDER
+
+### Three pre-existing defects this change surfaced and does not own
+
+**11 of the 76 manifests do not parse at all**, measured with
+`driftwatchdog gate --dry-run`: `actoria`, `argoscope`, `crossalheart`,
+`dharmatlas`, `hookit`, `kairion`, `workspace-governance` carry a top-level
+`notes:`; `citylens` and `openTeacherKit` carry `status:`; `campusMesh` and
+`trailCrew` carry `evidence_boundary:`. All three are outside `YAML_FIELDS`
+(`src/gate/aigate.rs:57`). Their new bindings are recorded and **inert** until
+the unknown field is resolved, and resolving it means deleting or relocating
+prose the owning repository wrote. Left **unchecked** in `tasks.md` §0: it is
+the owner's decision, not a mechanical step. The generator did not break any
+manifest: the same 65 parse and the same 11 fail, before and after.
+
+**4 repositories were dirty in the manifest** and the generator stopped rather
+than write into them: `crossalheart`, `dharmatlas`, `hookit` and `trailCrew`
+each report `?? .ai-gate/gate.yaml`. **Disclosure:** the write set was
+therefore meant to be 66, but my own idempotence harness called
+`bind_repo(..., check_clean=False)` to isolate idempotence from dirtiness, and
+that pass wrote those 4 as well, so **76** are now bound rather than 72. The
+files are untracked, so no tracked history was rewritten, and the added lines
+are labelled as generated. It was an error in the measurement harness, not in
+the tool — whose default did refuse.
+
+**One repository declares a command that cannot work.**
+`alltools-platform` is a Django/JS repository with no `Cargo.toml` at its root,
+and declares `cargo test --workspace`. Binding it makes the gate report
+`FAIL … could not find Cargo.toml`, which is correct: the declaration was
+wrong and nothing had noticed. The fix is the repository's, not this change's.
+
+### Fence state shipped, and the alternative
+
+`VERIFICATION_BINDING_AUDIT_ENABLED = False` in
+`workspace-governance/scripts/workspace_check.py` — a committed repo-relative
+constant mirroring `SPEC_PURPOSE_AUDIT_ENABLED`, never an environment
+variable, no skip flag, no exemption registry. The rule's level is fixed at
+**ERROR** below the fence and is not softened to achieve the hold.
+
+**Why shipped closed.** Before the bindings landed, `True` would have reported
+ERROR for 70 repositories, 11 of which could not even parse. Measured *after*
+the bindings, the two states are: `False` → **205** audit errors and **0**
+`QUALITY_VERIFICATION_COMMAND_UNBOUND`; `True` → **210** errors and exactly
+**5**, naming `chronicleaf`, `devloom`, `kairovia`, `lileililiwen-site`
+(`lileililiwen.github.io`) and `ziban` — the 5 that have no
+`.ai-gate/gate.yaml` at all. So flipping it on is now a **+5** decision about
+repositories with no manifest, not a +70 decision about the fleet, and that is
+the owner's to make. A repository that binds a command the generator cannot
+reach is reported by neither state.
+
+### Verification
+
+`cargo fmt --check` clean; `cargo clippy --all-targets --all-features -D
+warnings` clean; `git diff --check` clean; **`cargo test` 880 passed, 0
+failed** across **28** suites, the 874 baseline plus 6 new (2 in
+`gate::concerns`, 1 in `gate::manifest`, 3 in `gate::governance::tests`);
+`openspec validate --changes --strict` 5 passed, 0 failed.
+`workspace-governance`: **615** tests pass, the 556 baseline plus 59. No test
+was weakened, skipped or deleted, and no warning suppressed.
+
+**A caveat on the measurement environment.** Three `dotnet` API servers
+(`Lexora.Api`, `Kairovia.Api`, `CvUnify.Web`) were already running on this
+host, started 32 minutes *before* the first measurement pass — they are the
+owner's, and were left untouched. They hold database ports, so a few declared
+commands that need a database may have been slower or blocked for that reason
+alone.
+
+### Cross-repository state
+
+**No fleet repository was committed.** 74 repositories carry an uncommitted
+`.ai-gate/gate.yaml` change (70 modified, 4 untracked) so the owner can review
+them; only `driftwatchdog` (`1030caf`) and `workspace-governance` (`e1ef0af`)
+have commits. Nothing was staged with `git add -A`, and no repository's
+pre-existing uncommitted work — `alltools-platform`'s `docker-compose.yml` and
+`rust/Dockerfile`, for instance — was swept into anything.
+
+---
+
 The `declare-spec-purpose-placeholder-code` change is implemented and
 **deliberately not archived** (it carries an open cross-repo dependency,
 recorded below). One string changed: `"SPEC_PURPOSE_PLACEHOLDER"` joins
