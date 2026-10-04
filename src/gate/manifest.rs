@@ -284,6 +284,15 @@ pub const NON_EXEMPTABLE_CONCERNS: &[&str] = &[
     "security",
     "repository",
     "governance-quality",
+    // A repository's own declared `verification.command` is the ruling
+    // D18 makes binding: a verifier that no gate runs does not gate. If
+    // this id were exempable, any repository could add
+    // `not_applicable: declared-verification: "we prefer npm run check"`
+    // and be green while its declared command still ran nothing — the
+    // exact hole the spine exists to close. One spelling, one concern:
+    // the id is generated from a fixed constant, so there is no second
+    // workspace spelling to alias.
+    "declared-verification",
 ];
 
 /// Every workspace spelling protected for each non-exempable concern:
@@ -306,6 +315,9 @@ pub const NON_EXEMPTABLE_ALIASES: &[(&str, &[&str])] = &[
     // spellings a real `.ai-gate/gate.yaml` uses, and a concern with a
     // single id does not need a second name to be protected.
     ("governance-quality", &["governance-quality"]),
+    // One spelling, one concern, generated from a fixed constant, so no
+    // alias is needed here either.
+    ("declared-verification", &["declared-verification"]),
 ];
 
 /// Absolute ceiling on exemptions, independent of manifest size.
@@ -1736,15 +1748,61 @@ ux-review = "we have a command after all"
         }
         // The measured workspace spellings, recorded so a future rename
         // is a visible decision: `repository` in 63 manifests,
-        // `repository_integrity` in 2.
-        assert_eq!(NON_EXEMPTABLE_ALIASES.len(), 5);
+        // `repository_integrity` in 2. `declared-verification` joins at
+        // 6 entries / 7 spellings with the single spelling its
+        // generating constant produces.
+        assert_eq!(NON_EXEMPTABLE_ALIASES.len(), 6);
         assert_eq!(
             NON_EXEMPTABLE_ALIASES
                 .iter()
                 .flat_map(|(_, spellings)| spellings.iter().copied())
                 .count(),
-            6
+            7
         );
+    }
+
+    /// The ruling this change exists to enforce, pinned at the layer
+    /// that records it. A repository that declares a verification
+    /// command and then writes an exemption for the concern that must
+    /// run it is not acknowledged: the manifest still resolves — the
+    /// refusal is a *verdict*, not a parse failure, exactly as the
+    /// budget is for every other spine check — and the budget names
+    /// `declared-verification` as non-exemptable with a `HardFail`
+    /// verdict, which the executor turns into a blocking `FAIL` with
+    /// the `non-exempable-concern` rule (`src/commands/gate.rs:250`).
+    /// Asserting the verdict rather than an error is what makes this
+    /// test true of the mechanism instead of a guess at it.
+    #[test]
+    fn the_declared_verification_concern_cannot_be_exempted() {
+        assert!(is_non_exempable_concern("declared-verification"));
+        let text = "version: 1\nprofile: minimal\n\
+                    checks:\n  declared-verification: true\n\
+                    not_applicable:\n  declared-verification: we prefer a different command\n";
+        let m = crate::gate::aigate::parse(text).unwrap();
+        let r = resolve(&m, &[]).unwrap();
+        assert_eq!(
+            r.exemption_budget.non_exempable,
+            vec!["declared-verification".to_string()]
+        );
+        assert_eq!(r.exemption_budget.verdict(), ExemptionVerdict::HardFail);
+        // The plan still records the exemption verbatim: the refusal is
+        // on the record, not a silent drop, so the diagnostic can name
+        // what the repository tried to do.
+        assert_eq!(
+            r.exemptions
+                .get("declared-verification")
+                .map(String::as_str),
+            Some("we prefer a different command")
+        );
+        // A manifest that merely selects it is untouched by the spine.
+        let clean = crate::gate::aigate::parse(
+            "version: 1\nprofile: minimal\nchecks:\n  declared-verification: true\n",
+        )
+        .unwrap();
+        let r2 = resolve(&clean, &[]).unwrap();
+        assert!(r2.exemption_budget.non_exempable.is_empty());
+        assert_eq!(r2.plan.checks.len(), 1);
+        assert_eq!(r2.plan.checks[0].gate_id, "declared-verification");
     }
 
     /// The spine fails the budget whatever the counts say: one

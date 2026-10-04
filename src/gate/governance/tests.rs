@@ -532,3 +532,79 @@ fn a_project_may_narrow_its_scope_to_the_new_code_alone() {
         Some("SPEC_PURPOSE_PLACEHOLDER")
     );
 }
+
+// --- The verification-binding code --------------------------------
+//
+// `QUALITY_VERIFICATION_COMMAND_UNBOUND` is the same two-step, and this
+// change is the one that closes it. The ordering is the point: the
+// producing checker exits 1 when it has errors, the filter drops
+// out-of-scope findings *before* the status is computed, and 1 is an
+// expected exit that maps to no status. So without the declaration
+// below, a checker emitting only this code exits 1, has nothing left
+// in scope, and the concern reports PASS — the "checker reports OK
+// without checking" failure. The test is the proof that the rule is a
+// gate result and not a report line.
+
+#[test]
+fn an_unbound_declared_verification_command_is_a_gate_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = report(&[finding(
+        "QUALITY_VERIFICATION_COMMAND_UNBOUND",
+        "ERROR",
+        "declares verification.command but the gate binds no command for it",
+        "alltools-platform",
+    )]);
+    let script = report_exit(tmp.path(), &body, 1);
+    let result = run(&script, &declared_scope());
+    assert_eq!(result.status, GateStatus::Fail);
+    assert_eq!(expected_exit_for_status(result.status), Some(1));
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(result.findings[0].severity, GateSeverity::Error);
+    assert_eq!(
+        result.findings[0].rule.as_deref(),
+        Some("QUALITY_VERIFICATION_COMMAND_UNBOUND")
+    );
+}
+
+#[test]
+fn a_project_may_narrow_its_scope_to_the_verification_binding_code_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = report(&[finding(
+        "QUALITY_VERIFICATION_COMMAND_UNBOUND",
+        "ERROR",
+        "declares verification.command but the gate binds no command for it",
+        "alltools-platform",
+    )]);
+    let script = report_exit(tmp.path(), &body, 1);
+    let result = run(
+        &script,
+        &["QUALITY_VERIFICATION_COMMAND_UNBOUND".to_string()],
+    );
+    assert_eq!(result.status, GateStatus::Fail);
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(
+        result.findings[0].rule.as_deref(),
+        Some("QUALITY_VERIFICATION_COMMAND_UNBOUND")
+    );
+}
+
+#[test]
+fn the_verification_binding_code_is_outside_the_declared_set_when_undeclared() {
+    // The negative control for the two tests above. It is what the
+    // concern does with a code it does not own: the finding is dropped
+    // and the run reads PASS even though the checker exited 1. That is
+    // precisely why the code must be declared, and this assertion is
+    // what makes the declaration load-bearing rather than decorative.
+    assert!(!GOVERNANCE_QUALITY_DECLARED_CODES.contains(&"NOT_A_DECLARED_VERIFICATION_CODE"));
+    let tmp = tempfile::tempdir().unwrap();
+    let body = report(&[finding(
+        "NOT_A_DECLARED_VERIFICATION_CODE",
+        "ERROR",
+        "an undeclared code is not this concern's business",
+        "alltools-platform",
+    )]);
+    let script = report_exit(tmp.path(), &body, 1);
+    let result = run(&script, &declared_scope());
+    assert_eq!(result.status, GateStatus::Pass);
+    assert!(result.findings.is_empty());
+}

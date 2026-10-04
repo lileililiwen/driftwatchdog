@@ -206,8 +206,9 @@ make that absence explicit instead:
   manifest, and every declaration spends one — including one on an
   optional check. At the budget the run records a warning that the
   headroom is exhausted; over it the run **fails**. `build`, `tests`,
-  `security`, `repository`, and `governance-quality` are never exempable
-  at any budget, so an exemption naming one of them fails the run
+  `security`, `repository`, `governance-quality`, and
+  `declared-verification` are never exempable at any budget, so an
+  exemption naming one of them fails the run
   outright. The spine is matched
   by concern, not by spelling: this workspace also spells
   repository-integrity as `repository_integrity`, and that id is protected
@@ -728,11 +729,12 @@ in force; it cannot be used to silence a code the concern owns.
 #### Where this is live
 
 The concern is **wired and live in this repository**, where it is
-`UNBOUND` — this repository binds no commands at all, so all its
-required checks are `UNBOUND` and the run fails. That is the honest
-result, and the concern's behaviour is proved by
+`UNBOUND` — this repository binds no `governance-quality` command, so that
+check is `UNBOUND` and the run fails. That is the honest result, and the
+concern's behaviour is proved by
 `tests/gate_governance_quality.rs` and the unit tests in
-`src/gate/governance/` rather than by this repository's own run.
+`src/gate/governance/` rather than by this repository's own run. The
+`declared-verification` concern, by contrast, **is** bound here and does run.
 
 The other **70 workspace repositories** gain the concern only when
 `gate-unbound-check-fails` task 5.1 lands (it makes unbound required
@@ -740,6 +742,45 @@ checks fail across the fleet). Until then the concern is live here and
 inert elsewhere. The 76 repositories that select a product profile
 without binding `commands.governance-quality` report `UNBOUND` in the
 meantime — a real result, reported as one.
+
+### Declared-verification Gate concern
+
+`declared-verification` runs a repository's **own declared** verification
+command. A repository records how it should be verified in its
+`.project.json`, under `verification.command`; this concern is where that
+record becomes a gate result rather than documentation. Ruling D18 in this
+workspace: *a verifier that no gate runs does not gate.*
+
+```yaml
+checks:
+  declared-verification: true
+commands:
+  declared-verification: 'cargo test --workspace'
+```
+
+Both halves are required. A `commands.<id>` naming a check that is not
+selected is a parse error, so a binding with no selection would never run.
+
+The concern is deliberately in **no** closed concern vocabulary, so the Gate
+routes it to the project-runtime **text** adapter and the exit code is the
+verdict: `0` is `PASS`, a non-zero exit is `FAIL`, and a timeout or a failed
+spawn is `REVIEW_REQUIRED` with missing evidence. It is not the
+`governance-quality` concern and deliberately cannot be: that concern requires
+its command to emit a governance report and derives status from the *levels of
+matching findings*, so binding ordinary test output there would produce
+`REVIEW_REQUIRED` about the checker rather than `FAIL` about the command.
+
+**The binding is never templated.** A profile cannot know a sibling
+repository's verification command, and `profile_defaults` selects concern ids
+only and never invents a command. The value is generated per repository from
+that repository's own declaration by
+`workspace-governance/scripts/bind_verification_command.py`, which refuses
+rather than invents: no `.project.json`, an unparseable one, or no non-empty
+string `command` is a named refusal, and a second run over an already-bound
+repository writes nothing. The concern is **non-exemptable** — a repository
+cannot write itself out of the ruling with a `not_applicable` reason — and no
+built-in profile schedules it, because a profile that did would make every
+un-generated repository `UNBOUND` and say nothing about its verification.
 
 ### Source-file-size Gate concern
 

@@ -15,6 +15,13 @@ checks:
   # gate depend on a sibling's on-disk layout. The concern's behaviour is
   # pinned by `tests/gate_governance_quality.rs` instead.
   governance-quality: true
+  declared-verification: true
 blocking:
   - FAIL
   - REVIEW_REQUIRED
+
+commands:
+  # Generated from .project.json verification.command by workspace-governance/scripts/bind_verification_command.py.
+  # A verifier that no gate runs does not gate (ruling D18). Re-run the
+  # generator to update it; do not hand-edit.
+  declared-verification: 'cargo test --workspace --all-targets'

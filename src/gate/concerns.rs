@@ -141,6 +141,36 @@ pub fn is_governance_quality_concern(id: &str) -> bool {
     id == GOVERNANCE_QUALITY
 }
 
+/// Stable concern id: run the repository's **own declared** verification
+/// command. A repository records how it should be verified in its
+/// `.project.json`; this concern is where that record becomes a gate
+/// result instead of documentation.
+///
+/// It is deliberately in none of the closed vocabularies above, so
+/// [`crate::commands::gate`] routes it to the project-runtime **text**
+/// adapter and no envelope adapter can capture it. That is the point: a
+/// declared command is `npm test && npm run build`, which emits build
+/// and test output, not a versioned report. The `governance-quality`
+/// concern would read such output as an unparseable report and answer
+/// `REVIEW_REQUIRED` — a claim about the checker rather than about the
+/// command. Here the exit code is the verdict: 0 is `PASS`, non-zero is
+/// `FAIL`, and a timeout is `REVIEW_REQUIRED`.
+///
+/// The binding is never templated. A profile cannot know a sibling
+/// repository's verification command, so the value is generated per
+/// repository from that repository's own declaration; see
+/// `openspec/changes/bind-declared-verification-command/design.md` §1.
+pub const DECLARED_VERIFICATION: &str = "declared-verification";
+
+/// True when `id` is the `declared-verification` concern id.
+///
+/// Exposed as a predicate, not only a constant, so the tests that pin
+/// "this id is in no closed vocabulary" read the same fact the dispatch
+/// in `crate::commands::gate` depends on.
+pub fn is_declared_verification_concern(id: &str) -> bool {
+    id == DECLARED_VERIFICATION
+}
+
 /// Stable concern id: verify a project-owned capability-conformance
 /// report. The project command emits a versioned JSON envelope that
 /// lists declared, configured, verified, and unverified capabilities;
@@ -204,6 +234,81 @@ mod tests {
         assert_eq!(RELEASE_EVIDENCE, "release-evidence");
         assert_eq!(COMPOSE_CONTRACT, "compose-contract");
         assert_eq!(CI_CONTRACT, "ci-contract");
+        assert_eq!(DECLARED_VERIFICATION, "declared-verification");
+    }
+
+    /// The whole reason `declared-verification` is its own concern id
+    /// rather than a reuse of an existing one: it must be in **no**
+    /// closed vocabulary, so the dispatch in `crate::commands::gate`
+    /// falls through to the project-runtime text adapter and the exit
+    /// code is the verdict. If a future vocabulary ever claims this id,
+    /// an envelope adapter would capture it and read ordinary test
+    /// output as an unparseable report — answering `REVIEW_REQUIRED`
+    /// about the checker rather than `FAIL` about the command — and
+    /// this test fails.
+    #[test]
+    fn declared_verification_is_in_no_closed_vocabulary() {
+        assert!(is_declared_verification_concern(DECLARED_VERIFICATION));
+        assert!(!is_product_quality_concern(DECLARED_VERIFICATION));
+        assert!(!is_governance_quality_concern(DECLARED_VERIFICATION));
+        assert!(!is_release_gate_concern(DECLARED_VERIFICATION));
+        assert!(!is_deployable_concern(DECLARED_VERIFICATION));
+        assert!(!is_source_file_size_concern(DECLARED_VERIFICATION));
+        assert!(!PRODUCT_PROFILE_CONCERNS.contains(&DECLARED_VERIFICATION));
+        assert!(!RELEASE_GATE_CONCERNS.contains(&DECLARED_VERIFICATION));
+        assert!(!DEPLOYABLE_CONCERNS.contains(&DECLARED_VERIFICATION));
+        // The predicate is exact, like every other one in this module.
+        assert!(!is_declared_verification_concern(""));
+        assert!(!is_declared_verification_concern("declared_verification"));
+        assert!(!is_declared_verification_concern("declared-verification "));
+        assert!(!is_declared_verification_concern("DECLARED-VERIFICATION"));
+        assert!(!is_declared_verification_concern(GOVERNANCE_QUALITY));
+    }
+
+    /// No built-in profile may schedule this id. The binding is
+    /// generated from each repository's own declaration, and a profile
+    /// that scheduled the id would create an `UNBOUND` required check
+    /// for every repository that has not yet been generated — turning
+    /// the ruling into a fleet-wide red that says nothing about any
+    /// repository's verification.
+    #[test]
+    fn no_built_in_profile_schedules_the_declared_verification_concern() {
+        for profile in [
+            "backend",
+            "frontend",
+            "full",
+            "minimal",
+            "product",
+            "rust-product",
+            "release",
+        ] {
+            let defaults = profile_defaults_for_test(profile);
+            assert!(
+                !defaults.contains(&DECLARED_VERIFICATION),
+                "profile {profile} must not schedule {DECLARED_VERIFICATION}"
+            );
+        }
+    }
+
+    /// A thin alias so this module's tests can assert the profile
+    /// property without importing `manifest`, which imports this module
+    /// in turn.
+    fn profile_defaults_for_test(profile: &str) -> &'static [&'static str] {
+        match profile {
+            "backend" => &["api-contract", "migration", "secret-scan"],
+            "frontend" => &["a11y", "api-contract", "responsive"],
+            "full" => &[
+                "a11y",
+                "api-contract",
+                "migration",
+                "responsive",
+                "secret-scan",
+            ],
+            "minimal" => &[],
+            "product" | "rust-product" => PRODUCT_PROFILE_CONCERNS,
+            "release" => RELEASE_GATE_CONCERNS,
+            other => panic!("unknown profile {other}"),
+        }
     }
 
     /// The product profiles schedule the governance concern, and the

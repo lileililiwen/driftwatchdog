@@ -78,9 +78,20 @@ use crate::gate::types::{Finding, GateResult, GateSeverity, GateStatus};
 /// checker has not emitted contributes no finding and no signal, and is
 /// not named in the result: declaring ahead of emission makes the gate
 /// able to see a code, it does not make the gate report on it.
+///
+/// `QUALITY_VERIFICATION_COMMAND_UNBOUND` is the same two-step for the
+/// ruling that a declared `verification.command` must be bound into a
+/// blocking gate. The ordering is load-bearing rather than formal: the
+/// producing checker exits 1 when it has errors and the filter drops
+/// out-of-scope findings *before* the status is computed, so a checker
+/// emitting only this code would exit 1 with nothing left in scope and
+/// the concern would report PASS while the checker fails. Declaring the
+/// code is what makes the failure visible; without it the rule is a
+/// report line no gate reads.
 pub const GOVERNANCE_QUALITY_DECLARED_CODES: &[&str] = &[
     "QUALITY_README_CLAIM_CONTRADICTED",
     "QUALITY_README_CLAIM_UNSCOPED",
+    "QUALITY_VERIFICATION_COMMAND_UNBOUND",
     "RULES_DRIFT_BASELINE_STALE",
     "RULES_DRIFT_NEW",
     "SPEC_PURPOSE_PLACEHOLDER",
