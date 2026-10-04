@@ -655,6 +655,20 @@ fn default_rule_pack_version() -> String {
     "local".to_string()
 }
 
+/// Default per-check execution timeout when a check declares none.
+/// Deliberately unchanged: a manifest that says nothing keeps the
+/// deadline the fleet has already measured against. Mirrors
+/// `CHECK_TIMEOUT_MS` in `src/commands/gate.rs`, which applies this
+/// value at execution.
+pub const DEFAULT_CHECK_TIMEOUT_MS: u64 = 60_000;
+/// Upper bound accepted for a check's `timeout_ms`. One hour is longer
+/// than any gate check in this workspace needs (the slowest measured is
+/// over 15 minutes) and short enough that a hung command cannot hold a
+/// work session open. Without a bound, "raise it to 24h" becomes the
+/// next footgun and the value stops meaning anything. Mirrors
+/// `MAX_MAX_LINES`: named, bounded, and named again in the error.
+pub const MAX_CHECK_TIMEOUT_MS: u64 = 3_600_000;
+
 /// One explicit check declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -673,6 +687,17 @@ pub struct ManifestCheck {
     /// resolution fails before execution.
     #[serde(default)]
     pub command: Option<String>,
+    /// Optional per-check execution deadline in milliseconds. Absent
+    /// resolves to [`DEFAULT_CHECK_TIMEOUT_MS`]; `0` and anything above
+    /// [`MAX_CHECK_TIMEOUT_MS`] are refused at parse time.
+    ///
+    /// `Option` rather than a defaulted `u64` on purpose: the canonical
+    /// TOML omits a `None`, so `manifest_digest` is byte-identical for
+    /// every manifest that never declared the key. A defaulted `u64`
+    /// would rewrite the digest of all 76 existing manifests for a field
+    /// none of them declared.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
     /// Optional source label. Defaults to `manifest`.
     #[serde(default)]
     pub source: Option<String>,
@@ -740,6 +765,17 @@ pub struct ResolvedGatePlan {
     /// `--dry-run` and passed to the code-scoped adapter, which is the
     /// only place a scope is enforced.
     pub governance_quality: GovernanceQualityPolicy,
+    /// Effective per-check execution deadline in milliseconds, resolved
+    /// for every scheduled check: the declared `timeout_ms` where the
+    /// manifest gave one, else [`DEFAULT_CHECK_TIMEOUT_MS`].
+    ///
+    /// Carried on the plan and rendered by `--dry-run` because a
+    /// deadline nobody can see is indistinguishable from a slow test —
+    /// which is how one hardcoded constant stayed invisible across 76
+    /// manifests. `#[serde(default)]` so a plan serialized by an older
+    /// build still deserializes.
+    #[serde(default)]
+    pub check_timeouts: BTreeMap<String, u64>,
     /// Scheduled required checks that bind no command and declare no
     /// exemption. Recorded at resolution time so `--dry-run` can name
     /// the coverage debt before anything executes.
@@ -779,6 +815,8 @@ pub enum ManifestError {
     EmptyTrigger { include: String },
     #[error("invalid [source_size] policy: {detail}")]
     InvalidSourceSize { detail: String },
+    #[error("check \"{id}\" sets an unusable `timeout_ms`: {detail}")]
+    InvalidCheckTimeout { id: String, detail: String },
     #[error(
         "not_applicable[\"{id}\"] has an empty reason (state why the check does not apply to this project)"
     )]
@@ -816,6 +854,7 @@ const KNOWN_FIELDS: &[&str] = &[
     "required",
     "enabled",
     "command",
+    "timeout_ms",
     "source",
     "review_required_blocks",
     "provider",
@@ -978,6 +1017,11 @@ pub(crate) fn validate(manifest: &GateManifest) -> Result<(), ManifestError> {
                 "check with an empty id (set `id = \"...\"`)".to_string(),
             ));
         }
+        // Validated whether or not the check is enabled: a bad deadline
+        // in a disabled check is a typo that surfaces the day somebody
+        // re-enables it, and refusing it now is cheaper than debugging
+        // it then.
+        validate_check_timeout(&check.id, check.timeout_ms)?;
     }
     for (name, cmd) in &manifest.project_commands {
         if name.trim().is_empty() || cmd.trim().is_empty() {
@@ -1123,6 +1167,37 @@ fn validate_command_binding(manifest: &GateManifest) -> Result<(), ManifestError
     Ok(())
 }
 
+/// Validate one check's declared `timeout_ms` before any execution:
+/// either absent (which resolves to [`DEFAULT_CHECK_TIMEOUT_MS`]), or a
+/// positive value no greater than [`MAX_CHECK_TIMEOUT_MS`].
+///
+/// `0` is refused rather than read as "no deadline", because the gap
+/// between "0 ms" and "60s" is the gap between a check that can never
+/// pass and one that does, and nobody should have to guess which a
+/// manifest meant. The wording mirrors the checker's own refusal
+/// (`src/project/config.rs:239`) so the two surfaces read the same.
+fn validate_check_timeout(id: &str, timeout_ms: Option<u64>) -> Result<(), ManifestError> {
+    let Some(ms) = timeout_ms else {
+        return Ok(());
+    };
+    if ms == 0 {
+        return Err(ManifestError::InvalidCheckTimeout {
+            id: id.to_string(),
+            detail: format!(
+                "`timeout_ms = 0` (use a positive value, or omit the key for the \
+                 {DEFAULT_CHECK_TIMEOUT_MS}ms default)"
+            ),
+        });
+    }
+    if ms > MAX_CHECK_TIMEOUT_MS {
+        return Err(ManifestError::InvalidCheckTimeout {
+            id: id.to_string(),
+            detail: format!("`timeout_ms = {ms}` exceeds the cap of {MAX_CHECK_TIMEOUT_MS}ms (1h)"),
+        });
+    }
+    Ok(())
+}
+
 /// Validate the `[source_size]` policy before any execution: a positive
 /// maximum within range, and repository-relative glob patterns that are
 /// non-empty and free of absolute or `..` traversal components.
@@ -1247,6 +1322,27 @@ pub fn resolve(
     not_scheduled.sort();
     not_scheduled.dedup();
 
+    // The effective deadline for every scheduled check, declared or
+    // default. Resolved here, once, so `--dry-run` and execution read
+    // the same value and cannot disagree about a check's deadline.
+    // A trigger contributes a check the manifest never declared, so it
+    // takes the default like any other undeclared check.
+    let declared_timeouts: BTreeMap<&str, u64> = manifest
+        .checks
+        .iter()
+        .filter_map(|c| c.timeout_ms.map(|ms| (c.id.as_str(), ms)))
+        .collect();
+    let check_timeouts: BTreeMap<String, u64> = checks
+        .iter()
+        .map(|c| {
+            let ms = declared_timeouts
+                .get(c.gate_id.as_str())
+                .copied()
+                .unwrap_or(DEFAULT_CHECK_TIMEOUT_MS);
+            (c.gate_id.clone(), ms)
+        })
+        .collect();
+
     let canonical = toml::to_string_pretty(manifest)
         .unwrap_or_else(|_| format!("profile={}", manifest.profile));
     let plan = GatePlan {
@@ -1271,6 +1367,7 @@ pub fn resolve(
         not_scheduled,
         source_size: manifest.source_size.clone(),
         governance_quality: manifest.governance_quality.clone(),
+        check_timeouts,
         unbound,
         exemptions,
         exemption_budget,
@@ -1321,6 +1418,21 @@ pub fn render_plan(resolved: &ResolvedGatePlan) -> String {
         out.push_str("exempted checks (declared not_applicable; do not block):\n");
         for (id, reason) in &resolved.exemptions {
             out.push_str(&format!("  - {id}: {reason}\n"));
+        }
+    }
+    // Every scheduled check's effective deadline, default included. The
+    // default is rendered even when nothing declared one precisely so
+    // it is visible: the whole defect was a deadline that no manifest
+    // could name and no surface showed.
+    out.push_str(&format!(
+        "check timeouts (default {}ms):\n",
+        DEFAULT_CHECK_TIMEOUT_MS
+    ));
+    if resolved.check_timeouts.is_empty() {
+        out.push_str("  (none)\n");
+    } else {
+        for (id, ms) in &resolved.check_timeouts {
+            out.push_str(&format!("  - {id}: {ms}ms\n"));
         }
     }
     // Always name the allowance, including for a project that has used
@@ -1908,6 +2020,7 @@ ux-review = "we have a command after all"
                 required: true,
                 enabled: true,
                 command: None,
+                timeout_ms: None,
                 source: None,
             });
         }
@@ -2663,5 +2776,181 @@ exclude = ["src/generated/**"]
             .iter()
             .any(|c| c.gate_id == "source-file-size"));
         assert!(plan.not_scheduled.contains(&"source-file-size".to_string()));
+    }
+
+    // --- per-check timeout -------------------------------------------------
+
+    const TIMEOUT_MANIFEST: &str = r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "quick"
+command = "true"
+
+[[checks]]
+id = "slow"
+command = "sleep 5"
+timeout_ms = 900000
+"#;
+
+    /// An absent `timeout_ms` resolves to the documented default. This
+    /// is the negative control for "the field was invented and nothing
+    /// changed": it is the assertion that every manifest already on disk
+    /// keeps the deadline it had before the field existed.
+    #[test]
+    fn absent_check_timeout_resolves_to_the_sixty_second_default() {
+        let plan = resolve(&parse(TIMEOUT_MANIFEST).unwrap(), &[]).unwrap();
+        assert_eq!(plan.check_timeouts.get("quick"), Some(&60_000));
+        assert_eq!(DEFAULT_CHECK_TIMEOUT_MS, 60_000);
+        // The manifest itself carries no declared value, so what
+        // resolved 60s was the default, not a stored number.
+        let declared = parse(TIMEOUT_MANIFEST).unwrap();
+        let quick = declared
+            .checks
+            .iter()
+            .find(|c| c.id == "quick")
+            .expect("quick is selected");
+        assert_eq!(quick.timeout_ms, None);
+    }
+
+    /// A declared value is carried onto the plan for that check only.
+    /// One check's timeout must not decide another check's deadline —
+    /// that was the entire defect.
+    #[test]
+    fn declared_check_timeout_is_carried_on_the_plan_per_check() {
+        let plan = resolve(&parse(TIMEOUT_MANIFEST).unwrap(), &[]).unwrap();
+        assert_eq!(plan.check_timeouts.get("slow"), Some(&900_000));
+        // The undeclared sibling is untouched by its neighbour's value.
+        assert_eq!(plan.check_timeouts.get("quick"), Some(&60_000));
+    }
+
+    #[test]
+    fn zero_check_timeout_is_refused_with_an_actionable_message() {
+        let err = parse(
+            "version = 1\nprofile = \"minimal\"\n[[checks]]\nid = \"instant\"\ncommand = \"true\"\ntimeout_ms = 0\n",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, ManifestError::InvalidCheckTimeout { id, .. } if id == "instant"),
+            "{err}"
+        );
+        let msg = err.to_string();
+        // Names the check, the offending value, and what to do instead.
+        assert!(msg.contains("instant"), "{msg}");
+        assert!(msg.contains('0'), "{msg}");
+        assert!(msg.contains("omit the key"), "{msg}");
+    }
+
+    #[test]
+    fn check_timeout_above_the_cap_is_refused_naming_the_cap() {
+        let over = MAX_CHECK_TIMEOUT_MS + 1;
+        let err = parse(&format!(
+            "version = 1\nprofile = \"minimal\"\n[[checks]]\nid = \"forever\"\ncommand = \"true\"\ntimeout_ms = {over}\n"
+        ))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("forever"), "{msg}");
+        // The cap is named as a number, so the fix is a number the
+        // operator can read rather than a hunt for a constant.
+        assert!(msg.contains(&MAX_CHECK_TIMEOUT_MS.to_string()), "{msg}");
+    }
+
+    /// The cap is itself accepted, so the refusal is a bound and not an
+    /// off-by-one that rejects the documented maximum.
+    #[test]
+    fn the_cap_itself_is_accepted() {
+        let m = parse(&format!(
+            "version = 1\nprofile = \"minimal\"\n[[checks]]\nid = \"edge\"\ncommand = \"true\"\ntimeout_ms = {MAX_CHECK_TIMEOUT_MS}\n"
+        ))
+        .unwrap();
+        let plan = resolve(&m, &[]).unwrap();
+        assert_eq!(plan.check_timeouts.get("edge"), Some(&MAX_CHECK_TIMEOUT_MS));
+    }
+
+    /// The default is the default: a manifest that never mentions
+    /// `timeout_ms` must not have the field's existence rewrite its
+    /// canonical form, because `manifest_digest` is computed over that
+    /// form. A silent digest change across every existing manifest would
+    /// be precisely the invisible consequence this change argues against.
+    #[test]
+    fn a_manifest_without_a_timeout_keeps_its_existing_digest() {
+        const NO_TIMEOUT: &str = r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "quick"
+command = "true"
+"#;
+        let without = resolve(&parse(NO_TIMEOUT).unwrap(), &[]).unwrap();
+        // Serializing the manifest must not mention the new key at all.
+        let canonical = toml::to_string_pretty(&parse(NO_TIMEOUT).unwrap()).unwrap();
+        assert!(
+            !canonical.contains("timeout_ms"),
+            "canonical form gained a key: {canonical}"
+        );
+        // And the same declarations with an explicit equal-to-default
+        // value is a *different* manifest, which is the point of Option:
+        // "declared nothing" and "declared 60000" stay distinguishable.
+        let explicit = resolve(
+            &parse(
+                "version = 1\nprofile = \"minimal\"\n[[checks]]\nid = \"quick\"\ncommand = \"true\"\ntimeout_ms = 60000\n",
+            )
+            .unwrap(),
+            &[],
+        )
+        .unwrap();
+        assert_ne!(without.manifest_digest, explicit.manifest_digest);
+        // ...while both still resolve to the same effective deadline.
+        assert_eq!(
+            without.check_timeouts.get("quick"),
+            explicit.check_timeouts.get("quick")
+        );
+    }
+
+    /// The resolved deadline is on the dry-run surface, because a
+    /// timeout nobody can see is indistinguishable from a slow test.
+    #[test]
+    fn dry_run_renders_the_effective_timeout_of_every_check() {
+        let plan = resolve(&parse(TIMEOUT_MANIFEST).unwrap(), &[]).unwrap();
+        let text = render_plan(&plan);
+        assert!(text.contains("check timeouts"), "{text}");
+        assert!(text.contains("slow: 900000ms"), "{text}");
+        // The default is rendered too, so a check nobody configured is
+        // still visibly bounded.
+        assert!(text.contains("quick: 60000ms"), "{text}");
+        assert!(text.contains("default 60000ms"), "{text}");
+    }
+
+    /// A check that declares no timeout is bounded, not unbounded: the
+    /// negative control for "the field defaulted to no deadline".
+    #[test]
+    fn every_scheduled_check_gets_a_finite_timeout() {
+        let plan = resolve(&parse(TIMEOUT_MANIFEST).unwrap(), &[]).unwrap();
+        assert_eq!(plan.check_timeouts.len(), plan.plan.checks.len());
+        for id in plan.check_timeouts.keys() {
+            assert!(
+                plan.plan.checks.iter().any(|c| &c.gate_id == id),
+                "{id} has a timeout but is not scheduled"
+            );
+        }
+        assert!(plan
+            .check_timeouts
+            .values()
+            .all(|ms| *ms > 0 && *ms <= MAX_CHECK_TIMEOUT_MS));
+    }
+
+    /// An unknown per-check key still gets a hint, so a typo in the
+    /// native form is a named error rather than a silently ignored
+    /// deadline the author believed they had set.
+    #[test]
+    fn a_misspelled_timeout_key_is_refused_with_a_hint() {
+        let err = parse(
+            "version = 1\nprofile = \"minimal\"\n[[checks]]\nid = \"quick\"\ncommand = \"true\"\ntimeout = 1000\n",
+        )
+        .unwrap_err();
+        assert!(matches!(&err, ManifestError::UnknownField { .. }), "{err}");
+        assert!(err.to_string().contains("timeout_ms"), "{err}");
     }
 }

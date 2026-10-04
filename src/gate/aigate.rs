@@ -19,6 +19,8 @@
 //!   build: true
 //!   accessibility: optional
 //! commands:                       # optional concern id -> command string
+//! timeouts:                       # optional concern id -> deadline in ms
+//!   build: 600000
 //! governance_quality:              # optional; narrows the concern's code scope
 //!   codes: [QUALITY_README_CLAIM_CONTRADICTED]
 //!   build: "npm run build"
@@ -45,9 +47,10 @@
 //! not a built-in name becomes a project-defined profile whose selection
 //! is exactly the `true`/`"optional"` entries in `checks`.
 //!
-//! `not_applicable` and `binding_policy` convert to the same
+//! `not_applicable`, `binding_policy` and `timeouts` convert to the same
 //! [`GateManifest`] fields the native `gate.toml` uses, so the command
-//! binding rules run once, in `manifest::validate`, for both forms.
+//! binding and timeout rules run once, in `manifest::validate`, for both
+//! forms.
 
 use std::collections::BTreeMap;
 
@@ -70,6 +73,7 @@ const YAML_FIELDS: &[&str] = &[
     "rule_pack",
     "checks",
     "commands",
+    "timeouts",
     "blocking",
     "not_applicable",
     "binding_policy",
@@ -113,6 +117,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
     let mut rule_pack: Option<String> = None;
     let mut checks_yaml: Option<&Yaml> = None;
     let mut commands_yaml: Option<&Yaml> = None;
+    let mut timeouts_yaml: Option<&Yaml> = None;
     let mut blocking_yaml: Option<&Yaml> = None;
     let mut not_applicable_yaml: Option<&Yaml> = None;
     let mut binding_policy_yaml: Option<&Yaml> = None;
@@ -139,6 +144,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
             "rule_pack" => rule_pack = Some(expect_string(v, "rule_pack")?),
             "checks" => checks_yaml = Some(v),
             "commands" => commands_yaml = Some(v),
+            "timeouts" => timeouts_yaml = Some(v),
             "blocking" => blocking_yaml = Some(v),
             "not_applicable" => not_applicable_yaml = Some(v),
             "binding_policy" => binding_policy_yaml = Some(v),
@@ -205,6 +211,40 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
         if !selected.iter().any(|(s, _)| s == id) {
             return Err(ManifestError::Parse(format!(
                 "commands.{id} references a check that is not selected"
+            )));
+        }
+    }
+
+    // timeouts: concern id -> deadline in milliseconds. Converted
+    // straight onto `ManifestCheck.timeout_ms`; the value rules (zero,
+    // above cap) belong to `manifest::validate` so both manifest forms
+    // run them once. A non-integer here is a shape error, so it is
+    // caught in this parser, but the *value* is never judged here.
+    let mut timeouts: BTreeMap<String, u64> = BTreeMap::new();
+    if let Some(t) = timeouts_yaml {
+        let h = t
+            .as_hash()
+            .ok_or_else(|| ManifestError::Parse("`timeouts` must be a mapping".to_string()))?;
+        for (k, v) in h {
+            let id = k
+                .as_str()
+                .ok_or_else(|| ManifestError::Parse("timeouts key must be a string".to_string()))?
+                .to_string();
+            let ms = v
+                .as_i64()
+                .and_then(|i| u64::try_from(i).ok())
+                .ok_or_else(|| {
+                    ManifestError::Parse(format!(
+                        "timeouts.{id} must be a positive integer number of milliseconds"
+                    ))
+                })?;
+            timeouts.insert(id, ms);
+        }
+    }
+    for id in timeouts.keys() {
+        if !selected.iter().any(|(s, _)| s == id) {
+            return Err(ManifestError::Parse(format!(
+                "timeouts.{id} references a check that is not selected"
             )));
         }
     }
@@ -343,6 +383,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
             required: *required,
             enabled: true,
             command: commands.get(id).cloned(),
+            timeout_ms: timeouts.get(id).copied(),
             source: Some("manifest".to_string()),
         });
     }
@@ -352,6 +393,7 @@ pub fn parse_document(text: &str) -> Result<AiGateDoc, ManifestError> {
             required: true,
             enabled: false,
             command: None,
+            timeout_ms: None,
             source: Some("manifest".to_string()),
         });
     }
@@ -580,15 +622,22 @@ contexts:
     /// still fails and still gets the hint.
     #[test]
     fn a_near_miss_of_notes_still_fails() {
-        let err = parse_document("version: 1\nprofile: backend\nnote:\n  - \"typo\"\n").unwrap_err();
-        assert!(matches!(err, ManifestError::UnknownField { .. }), "got {err}");
+        let err =
+            parse_document("version: 1\nprofile: backend\nnote:\n  - \"typo\"\n").unwrap_err();
+        assert!(
+            matches!(err, ManifestError::UnknownField { .. }),
+            "got {err}"
+        );
     }
 
     #[test]
     fn an_empty_note_fails_rather_than_vanishing() {
         let err =
             parse_document("version: 1\nprofile: backend\nnotes:\n  - \"   \"\n").unwrap_err();
-        assert!(matches!(err, ManifestError::EmptyNote { index: 0 }), "got {err}");
+        assert!(
+            matches!(err, ManifestError::EmptyNote { index: 0 }),
+            "got {err}"
+        );
     }
 
     /// A note is credential-redacted and length-bounded on the same terms as
@@ -825,5 +874,163 @@ commands:
         assert!(matches!(err, ManifestError::UnboundRequiredCheck { .. }));
         assert!(err.to_string().contains("build"), "{err}");
         assert!(!err.to_string().contains("tests"), "{err}");
+    }
+
+    // --- per-check timeout -------------------------------------------------
+
+    const YAML_TIMEOUTS: &str = r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  quick: true
+  slow: true
+commands:
+  quick: "true"
+  slow: "sleep 5"
+timeouts:
+  slow: 900000
+"#;
+
+    /// The single-owner invariant: a YAML manifest and the equivalent
+    /// native `gate.toml` must produce the *same* `ManifestCheck`. If
+    /// they diverged, the value rules would have to exist twice and one
+    /// of the copies would eventually be wrong.
+    #[test]
+    fn yaml_and_native_forms_resolve_to_the_same_check_timeout() {
+        const NATIVE_EQUIVALENT: &str = r#"
+version = 1
+profile = "minimal"
+
+[[checks]]
+id = "quick"
+command = "true"
+
+[[checks]]
+id = "slow"
+command = "sleep 5"
+timeout_ms = 900000
+"#;
+        let from_yaml = parse(YAML_TIMEOUTS).unwrap();
+        let from_toml = crate::gate::manifest::parse(NATIVE_EQUIVALENT).unwrap();
+
+        // Same field on the check, per check.
+        for id in ["quick", "slow"] {
+            let y = from_yaml.checks.iter().find(|c| c.id == id).unwrap();
+            let t = from_toml.checks.iter().find(|c| c.id == id).unwrap();
+            assert_eq!(y.timeout_ms, t.timeout_ms, "{id} disagrees across forms");
+            assert_eq!(y.command, t.command, "{id} command disagrees");
+        }
+        assert_eq!(
+            from_yaml
+                .checks
+                .iter()
+                .find(|c| c.id == "slow")
+                .unwrap()
+                .timeout_ms,
+            Some(900_000)
+        );
+        // ...and the same resolved timeout, which is what execution
+        // reads. Compared on the timeout block rather than the whole
+        // rendering: the two forms label a check's `source` differently
+        // (the YAML converter stamps `manifest`, the native form leaves
+        // it absent), so full-plan text was never equal and asserting it
+        // would be asserting a difference that has nothing to do with
+        // timeouts.
+        let ry = resolve(&from_yaml, &[]).unwrap();
+        let rt = resolve(&from_toml, &[]).unwrap();
+        assert_eq!(ry.check_timeouts, rt.check_timeouts);
+        assert_eq!(
+            timeout_lines(&crate::gate::manifest::render_plan(&ry)),
+            timeout_lines(&crate::gate::manifest::render_plan(&rt))
+        );
+    }
+
+    /// The rendered `check timeouts:` block, lines only, so two
+    /// renderings can be compared on deadlines without dragging in
+    /// unrelated fields.
+    fn timeout_lines(rendered: &str) -> Vec<&str> {
+        rendered
+            .lines()
+            .skip_while(|l| !l.starts_with("check timeouts"))
+            .take_while(|l| l.starts_with("  - ") || l.starts_with("check timeouts"))
+            .collect()
+    }
+
+    /// The value rules are the shared validator's, not a second copy in
+    /// this parser. Both refusals must surface from the same variant a
+    /// native manifest produces.
+    #[test]
+    fn yaml_form_reports_the_same_timeout_refusals() {
+        for (ms, must_name) in [("0", "omit the key"), ("3600001", "3600000")] {
+            let doc = format!(
+                "version: 1\nruntime: driftwatchdog\nprofile: minimal\nchecks:\n  slow: true\ncommands:\n  slow: \"sleep 5\"\ntimeouts:\n  slow: {ms}\n"
+            );
+            let err = parse(&doc).unwrap_err();
+            assert!(
+                matches!(&err, ManifestError::InvalidCheckTimeout { id, .. } if id == "slow"),
+                "ms={ms} produced {err}"
+            );
+            let msg = err.to_string();
+            assert!(msg.contains("slow"), "{msg}");
+            assert!(msg.contains(must_name), "{msg}");
+        }
+    }
+
+    /// A deadline bound to no scheduled check is a value that can never
+    /// take effect, so it is refused rather than stored.
+    #[test]
+    fn a_timeout_for_an_unselected_check_is_refused() {
+        let err = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  quick: true
+timeouts:
+  ghost: 900000
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("ghost"), "{err}");
+        assert!(err.to_string().contains("not selected"), "{err}");
+    }
+
+    /// A YAML manifest that says nothing about timeouts resolves to the
+    /// default, so all 76 existing manifests keep their behaviour.
+    #[test]
+    fn yaml_manifest_without_timeouts_resolves_to_the_default() {
+        const PLAIN: &str = r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  quick: true
+commands:
+  quick: "true"
+"#;
+        let m = parse(PLAIN).unwrap();
+        assert!(m.checks.iter().all(|c| c.timeout_ms.is_none()));
+        let plan = resolve(&m, &[]).unwrap();
+        assert_eq!(plan.check_timeouts.get("quick"), Some(&60_000));
+        assert!(crate::gate::manifest::render_plan(&plan).contains("quick: 60000ms"));
+    }
+
+    #[test]
+    fn a_non_integer_yaml_timeout_is_a_parse_error() {
+        let err = parse(
+            r#"
+version: 1
+runtime: driftwatchdog
+profile: minimal
+checks:
+  quick: true
+timeouts:
+  quick: "soon"
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("milliseconds"), "{err}");
     }
 }

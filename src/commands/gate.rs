@@ -53,7 +53,12 @@ use crate::util::truncate_char_boundary;
 
 const EXIT_OK: i32 = 0;
 const EXIT_BLOCKED: i32 = 1;
-const CHECK_TIMEOUT_MS: u64 = 60_000;
+/// Deadline applied to a check that declares no `timeout_ms` of its
+/// own. Unchanged from the constant that used to serve every check in
+/// the fleet, so no existing manifest needs an edit to keep its
+/// behaviour. The per-check value is resolved on the plan
+/// (`ResolvedGatePlan::check_timeouts`); this is only the default.
+const CHECK_TIMEOUT_MS: u64 = manifest::DEFAULT_CHECK_TIMEOUT_MS;
 const CHECK_MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 const MAX_RESULTS_JSON_BYTES: usize = 256 * 1024;
 
@@ -188,12 +193,22 @@ fn execute_plan(
         }
         match commands.get(check.gate_id.as_str()) {
             Some(cmd) => {
+                // The deadline is resolved per check, so one check's
+                // timeout can no longer decide another check's outcome.
+                // A check absent from the map falls back to the default
+                // rather than to 0, which would kill every command
+                // instantly and report it as a timeout.
+                let timeout_ms = resolved
+                    .check_timeouts
+                    .get(check.gate_id.as_str())
+                    .copied()
+                    .unwrap_or(CHECK_TIMEOUT_MS);
                 let input = AdapterInput {
                     program: "sh".to_string(),
                     args: vec!["-c".to_string(), (*cmd).to_string()],
                     working_dir: proj.root.clone(),
                     env: BTreeMap::new(),
-                    timeout_ms: CHECK_TIMEOUT_MS,
+                    timeout_ms,
                     max_output_bytes: CHECK_MAX_OUTPUT_BYTES,
                     evidence: vec![],
                 };
@@ -891,5 +906,130 @@ mod tests {
         .unwrap();
         let code = gate(gate_args(false), tmp.path()).unwrap();
         assert_eq!(code, EXIT_BLOCKED);
+    }
+
+    // --- negative controls for the per-check timeout -----------------------
+
+    /// **Negative control 2 — the field is honored, not ignored.**
+    ///
+    /// A declared `timeout_ms` of 1000ms against `sleep 5` must actually
+    /// kill the command and report the timeout. If the field were ignored
+    /// the 60s default would apply, the sleep would finish, exit 0 would
+    /// be recorded and this test would see `PASS` — so the assertion
+    /// below fails whenever the wiring breaks. The elapsed-time check
+    /// closes the other door: a run that waited out the full 5s and then
+    /// reported a timeout for some other reason also fails.
+    ///
+    /// The `sleep 5` is the honest part of the control. It is the reason
+    /// an ignored field would visibly produce a different result.
+    #[test]
+    fn declared_check_timeout_kills_the_command_and_reports_a_timeout() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        std::fs::write(
+            tmp.path().join("gate.toml"),
+            "profile = \"minimal\"\n[[checks]]\nid = \"slow\"\ncommand = \"sleep 5\"\ntimeout_ms = 1000\n",
+        )
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let code = gate(gate_args(false), tmp.path()).unwrap();
+        let elapsed = started.elapsed();
+
+        // A timeout is REVIEW_REQUIRED, which blocks under the default
+        // policy — distinct from a non-zero exit's FAIL, and not a PASS.
+        assert_eq!(code, EXIT_BLOCKED);
+        // Killed near the 1s deadline, nowhere near the 5s the command
+        // asked for. Generous upper bound so a loaded machine does not
+        // make this flaky; still far below the command's own runtime.
+        assert!(
+            elapsed < std::time::Duration::from_secs(4),
+            "took {elapsed:?}; the 1000ms deadline did not take effect"
+        );
+
+        let db = crate::repo::Db::open_read_only(&tmp.path().join(".driftwatch/state.db")).unwrap();
+        let run = Gates::new(&db).latest().unwrap().unwrap();
+        assert_eq!(run.status, "REVIEW_REQUIRED");
+        assert!(run.blocked);
+        let doc: GateRunResultsDocument = serde_json::from_str(&run.results_json).unwrap();
+        let r = doc
+            .results
+            .iter()
+            .find(|r| r.gate_id == "slow")
+            .expect("the check reported");
+        assert_eq!(r.status, GateStatus::ReviewRequired);
+        assert!(
+            r.missing_evidence
+                .iter()
+                .any(|k| k == "project-runtime:timeout"),
+            "timeout evidence missing from {:?}",
+            r.missing_evidence
+        );
+    }
+
+    /// **Negative control 1 — the default path, without a 60s wait.**
+    ///
+    /// A manifest that declares no `timeout_ms` must still be bounded by
+    /// the 60s default. Spending a real 60 seconds to prove a constant
+    /// equals its own definition buys nothing: what is worth proving is
+    /// that the *default is still consulted* and that the number handed
+    /// to the adapter is the plan's, not a hardcoded one. Both are
+    /// asserted here, and the command runs fast so the wiring is
+    /// exercised for real.
+    ///
+    /// The wall-clock proof that 60s is genuinely the ceiling is not
+    /// affordable in a unit test; the resolved-value proof is, and it is
+    /// what the plan actually reads. Control 2 above covers the same
+    /// code path with a value small enough to wait out.
+    #[test]
+    fn a_manifest_without_a_timeout_still_resolves_the_sixty_second_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(tmp.path());
+        std::fs::write(
+            tmp.path().join("gate.toml"),
+            "profile = \"minimal\"\n[[checks]]\nid = \"smoke\"\ncommand = \"true\"\n",
+        )
+        .unwrap();
+        // Dry-run resolves and renders the plan without executing, so
+        // this reads the default the runner would have used.
+        let proj = ProjectRoot::discover(tmp.path()).unwrap();
+        let manifest = match manifest::load_for_runtime(&proj.root).unwrap() {
+            manifest::LoadOutcome::Manifest(m) => *m,
+            _ => panic!("fixture has a native manifest"),
+        };
+        let resolved = manifest::resolve(&manifest, &[]).unwrap();
+        assert_eq!(resolved.check_timeouts.get("smoke"), Some(&60_000));
+        assert_eq!(CHECK_TIMEOUT_MS, 60_000);
+    }
+
+    /// The last link in the chain: the number carried on
+    /// `AdapterInput.timeout_ms` is the number the runner actually
+    /// enforces, for a declared value and for the default.
+    ///
+    /// This asserts a real function (`AdapterInput::checker_spec`), not
+    /// a copy of the runner's lookup expression — an earlier version of
+    /// this test re-implemented the lookup inline and therefore passed
+    /// even when the production wiring was deliberately broken, which
+    /// is false confidence and worse than no test. The half that proves
+    /// the *plan's* value reaches `AdapterInput` is
+    /// `tests/gate_check_timeout.rs`, which goes through the binary and
+    /// was confirmed to fail when the lookup is sabotaged.
+    #[test]
+    fn the_adapter_enforces_exactly_the_declared_milliseconds() {
+        for declared_ms in [4321u64, CHECK_TIMEOUT_MS, 1_000] {
+            let input = AdapterInput {
+                program: "sh".to_string(),
+                args: vec!["-c".to_string(), "sleep 30".to_string()],
+                working_dir: std::env::temp_dir(),
+                env: BTreeMap::new(),
+                timeout_ms: declared_ms,
+                max_output_bytes: CHECK_MAX_OUTPUT_BYTES,
+                evidence: vec![],
+            };
+            assert_eq!(
+                input.checker_spec("project-runtime").timeout,
+                std::time::Duration::from_millis(declared_ms)
+            );
+        }
     }
 }

@@ -509,6 +509,8 @@ checks:                           # true | false | "optional"
 commands:                         # bind a selected concern to a command
   build: "npm run build"
   tests: "npm test"
+timeouts:                         # optional; per-check deadline in ms
+  tests: 600000                   # a suite that needs longer than 60s
 blocking: [FAIL, REVIEW_REQUIRED]
 project_commands:
   lint: "npm run lint"
@@ -528,6 +530,18 @@ A `profile` that is not a built-in name selects exactly its declared
 `checks` (`false` removes, `"optional"` schedules non-blocking). The
 same domain profiles are available in `gate.toml` via a
 `[profiles.<name>]` table listing the concerns the profile selects.
+
+A check declares its own execution deadline with `timeout_ms` — `timeouts:`
+in the YAML form, `timeout_ms = <ms>` on the `[[checks]]` entry in
+`gate.toml`. A check that declares nothing runs under the 60s default,
+so existing manifests keep their current behaviour untouched. The value
+must be positive and at most 3600000 (1h); both bounds are refused at
+parse time, before any check runs, and the error names the offending
+check. `driftwatch gate --dry-run` prints the effective deadline of
+every scheduled check so the bound is readable before anything runs. A
+check killed by its deadline reports `REVIEW_REQUIRED` with
+`project-runtime:timeout` missing evidence — distinct from the `FAIL` a
+non-zero exit produces, so "ran out of time" never reads as "failed".
 
 A check with no entry under `commands:` is `UNBOUND` and fails the run.
 That includes `governance-quality`, which the `product` profile
