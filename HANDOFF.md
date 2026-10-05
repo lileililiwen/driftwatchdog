@@ -41,9 +41,10 @@ rewritten here.
 
 The new active OpenSpec package is
 `openspec/changes/mandatory-governance-quality-all-profiles/`. It is not
-archived. The change's two commit IDs will be added here in the handoff-only
-commit. Next, re-run the workspace-governance binder after this change lands so
-the 35 newly governed repositories receive their project-owned commands.
+archived. Commit 1 is `9426fed` (`feat(gate): require governance quality for
+every profile`). This handoff-only update is commit 2. Next, re-run the
+workspace-governance binder after this change lands so the 35 newly governed
+repositories receive their project-owned commands.
 
 **A blocking rule that no gate could read is now declared.**
 `workspace-governance` `0611298` added a rule that stops a repository carrying
