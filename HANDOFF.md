@@ -1267,3 +1267,36 @@ Open before archive: task 4.2's remaining owner decisions (1, 2, 5, 6 in
 `design.md` §8) and the deferred fleet migration (tasks 5.1-5.5). No
 `gate.yaml` in any sibling repository was edited; the measured fleet
 consequence is recorded in that change's `tasks.md` group 7.
+
+## The product-quality gate checks now run here, and they fail
+
+`placeholder-threshold` and `product-code-boundary` were `UNBOUND` in
+`.ai-gate/gate.yaml`, so the gate was failing on two checks that executed
+nothing. Both are answered by `workspace-governance/scripts/product_code_quality.py`,
+which is fail-closed: with no `quality` block in `.project.json` it exits 2 and
+never scans. This repository now carries one, derived by
+`workspace-governance/scripts/bind_gate_commands.py` from the files on disk.
+
+| Field | Value | Where it came from |
+|---|---|---|
+| `product_roots` | `["src"]` | `Cargo.toml` at the root, the `src/` beside it |
+| `languages` | `["rust"]` | that same `Cargo.toml` |
+| `placeholder_threshold` | `0` | deliberate strict default, relaxable by hand |
+
+A real `driftwatchdog gate` now runs both and reports:
+`FAIL: placeholder marker count 30 exceeds threshold 0`, plus 24
+`product-test-code` findings in `src/gate/governance/tests.rs`.
+
+Two things a reader should know before acting on those numbers:
+
+- The 24 `product-test-code` findings are **checker false positives**.
+  `src/gate/governance/tests.rs` is declared as `#[cfg(test)] mod tests;` from
+  `src/gate/governance/mod.rs:627`, and the scanner in
+  `product_code_quality.py` is lexical and single-file, so it cannot see a
+  `cfg(test)` guard that lives in the parent file. Reported, not fixed: the
+  fix belongs to whoever owns the checker.
+- 28 of the 30 placeholder findings are the ordinary English words
+  `placeholder` and `TODO` used in prose and identifiers, not unfinished work.
+
+Neither is a reason to add an `exclude`. The findings are correct as findings;
+the vocabulary they match on is the thing to settle.
