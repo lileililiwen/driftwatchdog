@@ -14,6 +14,43 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`governance-quality` now runs here.** This repository recorded the concern
+as `UNBOUND` and blocked on it, on the reasoning that the checker lives in
+the sibling `workspace-governance` repository and no path could be defaulted.
+The constraint was real — the concern binds no checker path of its own — and
+the conclusion stopped one short of it. The path has to be **written down**,
+not left absent.
+
+| Measurement | Before | After |
+|---|---|---|
+| `governance-quality` here | `UNBOUND` (exit 1) | **`PASS`** |
+| Fleet repositories with it unbound | 41 | **0** |
+| `cargo test` | 655 lib + integration | **unchanged, 0 failed** |
+
+The bound command is
+`python3 ../workspace-governance/scripts/workspace_check.py --root .. --project driftwatchdog --json`,
+and **both flags are load-bearing**:
+
+* without `--root ..`, the checker defaults to the directory holding
+  `projects.json` — the governance repository — and run from here reports 81
+  false `PROJECT_MISSING` findings against this repository's own
+  subdirectories;
+* without `--project driftwatchdog`, the checker audits the whole workspace,
+  and this concern filters findings by **code and not by project**
+  (`src/gate/governance/mod.rs`). Measured on the fleet: that charges
+  `bargora` 12 in-scope findings of which **0** are its own — 4 from
+  `chronicleaf`, 3 from `metiscope`, 3 from `openlearning`, 1 from
+  `dotnet-platform-libs`. Scoped, the same repository reads PASS.
+
+`bind-governance-quality-checks` task 3.3's recorded decision — *enable the
+concern and bind nothing*, because binding the sibling checker "would make
+this repository's gate depend on a sibling repository's on-disk layout" — is
+**superseded by measurement**. The dependency was always there; what changed
+is that the path is now declared rather than absent, and the gate reports a
+real verdict instead of `UNBOUND`. The concern's mapping stays pinned by
+`tests/gate_governance_quality.rs`; that fixture is unaffected because it
+binds its own command.
+
 **`per-check-gate-timeout` is implemented and deliberately not archived**
 (commit `aae4a67`; it carries three open boxes, recorded below).
 
