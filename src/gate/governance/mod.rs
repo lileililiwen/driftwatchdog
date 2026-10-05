@@ -88,7 +88,14 @@ use crate::gate::types::{Finding, GateResult, GateSeverity, GateStatus};
 /// the concern would report PASS while the checker fails. Declaring the
 /// code is what makes the failure visible; without it the rule is a
 /// report line no gate reads.
+///
+/// `QUALITY_NEW_CHANGE_WITH_GATE_DEBT` is that same hazard found on a
+/// rule that blocks new work on a repository carrying unresolved gate
+/// debt. It is declared here for the same reason: a legacy fleet emits
+/// it, and an undeclared code would leave this concern reading PASS
+/// while the checker exits 1.
 pub const GOVERNANCE_QUALITY_DECLARED_CODES: &[&str] = &[
+    "QUALITY_NEW_CHANGE_WITH_GATE_DEBT",
     "QUALITY_README_CLAIM_CONTRADICTED",
     "QUALITY_README_CLAIM_UNSCOPED",
     "QUALITY_VERIFICATION_COMMAND_UNBOUND",

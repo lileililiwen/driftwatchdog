@@ -546,6 +546,33 @@ fn a_project_may_narrow_its_scope_to_the_new_code_alone() {
 // gate result and not a report line.
 
 #[test]
+fn a_new_change_on_a_repository_carrying_gate_debt_is_a_gate_failure() {
+    // The same hazard on a rule that blocks new work on a repository with
+    // unresolved gate debt. It is measured rather than reasoned: the
+    // producing checker emitted this code 91 times' worth of run behind
+    // it and exited 1, and with the code absent from the declared set
+    // this concern reported PASS — "0 of 93 governance findings matched
+    // this concern's scope". The declaration is what stops that.
+    let tmp = tempfile::tempdir().unwrap();
+    let body = report(&[finding(
+        "QUALITY_NEW_CHANGE_WITH_GATE_DEBT",
+        "ERROR",
+        "opens change 'new-feature' while required check(s) accessibility, privacy are unbound",
+        "actoria",
+    )]);
+    let script = report_exit(tmp.path(), &body, 1);
+    let result = run(&script, &declared_scope());
+    assert_eq!(result.status, GateStatus::Fail);
+    assert_eq!(expected_exit_for_status(result.status), Some(1));
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(result.findings[0].severity, GateSeverity::Error);
+    assert_eq!(
+        result.findings[0].rule.as_deref(),
+        Some("QUALITY_NEW_CHANGE_WITH_GATE_DEBT")
+    );
+}
+
+#[test]
 fn an_unbound_declared_verification_command_is_a_gate_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let body = report(&[finding(
