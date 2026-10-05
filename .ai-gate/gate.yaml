@@ -34,3 +34,4 @@ commands:
   build: 'cargo build'
   tests: 'cargo test'
   security: 'cargo audit'
+  governance-quality: 'python3 ../workspace-governance/scripts/workspace_check.py --root .. --project driftwatchdog --json'
