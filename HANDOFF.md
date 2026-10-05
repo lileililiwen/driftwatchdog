@@ -14,6 +14,43 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**A blocking rule that no gate could read is now declared.**
+`workspace-governance` `0611298` added a rule that stops a repository carrying
+unresolved gate debt from opening a new OpenSpec change. It emits
+`QUALITY_NEW_CHANGE_WITH_GATE_DEBT` at ERROR and exits 1. This concern filters
+the producing checker's findings to the codes it declares, so an undeclared code
+is dropped before the verdict is formed.
+
+The false green was reproduced before anything was changed, on a fixture where
+the checker emitted the code and exited 1:
+
+| | concern status | evidence line | exit |
+|---|---|---|---|
+| code undeclared | `PASS` | "0 of 93 governance findings matched this concern's scope" | 0 |
+| code declared | `FAIL` | "1 of 93", rule named | 1 |
+
+What made this worth doing rather than leaving to a later pass is the blast
+radius. The codes already in the set fire on a handful of repositories. This one
+fires on every legacy repository that opens a change while carrying debt — **22
+repositories** at the time of writing. Undeclared, that is a fleet-wide false
+green: a blocking rule in the workspace that reports clean.
+
+| Measurement | Before | After |
+|---|---|---|
+| `QUALITY_NEW_CHANGE_WITH_GATE_DEBT` in the declared set | no | **yes** |
+| That code seen by the gate | never | **every run** |
+| `cargo test` | 908 passed, 0 failed, 29 suites | **909 passed, 0 failed, 29 suites** |
+
+The negative control is the point of the whole change: deleting the constant
+from `GOVERNANCE_QUALITY_DECLARED_CODES` turns the new test red with
+`left: Pass, right: Fail`, and restoring it turns it green. A test that cannot
+fail when the declaration is removed would not be testing the declaration.
+
+`openspec/changes/declare-new-change-with-gate-debt-code/` holds the spec. It
+MODIFIES the code-ownership requirement with the two scenarios above and ADDs a
+requirement that every declared code states the failure its absence would
+cause, so a future addition cannot be made quietly. Not archived.
+
 **`governance-quality` now runs here.** This repository recorded the concern
 as `UNBOUND` and blocked on it, on the reasoning that the checker lives in
 the sibling `workspace-governance` repository and no path could be defaulted.
