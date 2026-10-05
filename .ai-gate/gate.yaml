@@ -7,13 +7,16 @@ checks:
   build: true
   tests: true
   security: true
-  # Scheduled by the `rust-product` profile. No command is bound here, so
-  # this repository records `UNBOUND` (exit 1) and blocks — the same
-  # state as the checks above. The governance checker lives in the
-  # sibling `workspace-governance` repository, so there is no path this
-  # manifest could default, and binding one would make this repository's
-  # gate depend on a sibling's on-disk layout. The concern's behaviour is
-  # pinned by `tests/gate_governance_quality.rs` instead.
+  # Scheduled by the `rust-product` profile. This repository used to record
+  # `UNBOUND` (exit 1) and block on it, on the reasoning that the governance
+  # checker lives in a sibling and no path could be defaulted. That reasoning
+  # described a real constraint and then stopped one short of the answer: the
+  # constraint is that the path must be written down, not that none may be.
+  # The concern is declared here and bound in `commands:` below, scoped to
+  # `--project driftwatchdog` because the concern filters findings by code
+  # and not by project — an unscoped workspace audit would fail this
+  # repository on other repositories' findings. The concern's behaviour is
+  # pinned by `tests/gate_governance_quality.rs` as well as now being run.
   governance-quality: true
   declared-verification: true
 blocking:
