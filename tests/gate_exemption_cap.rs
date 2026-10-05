@@ -32,7 +32,17 @@ fn init_dir() -> TempDir {
 }
 
 fn write_manifest(tmp: &TempDir, body: &str) {
-    std::fs::write(tmp.path().join("gate.toml"), body).unwrap();
+    let report = tmp.path().join("governance.json");
+    std::fs::write(
+        &report,
+        r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+    )
+    .unwrap();
+    let manifest = format!(
+        "{body}\n[[checks]]\nid = \"governance-quality\"\nrequired = false\ncommand = \"cat {}\"\n",
+        report.display()
+    );
+    std::fs::write(tmp.path().join("gate.toml"), manifest).unwrap();
 }
 
 fn latest_run(tmp: &TempDir) -> driftwatchdog::repo::gates::GateRunRow {
@@ -413,7 +423,7 @@ fn a_repo_with_no_exemptions_is_unchanged() {
     let doc = run_doc(&tmp);
     assert!(doc.unbound.is_empty());
     assert!(doc.results.iter().all(|r| r.gate_id != "exemption-budget"));
-    assert_eq!(doc.results.len(), 20, "one result per bound check, no more");
+    assert_eq!(doc.results.len(), 21, "20 budget checks plus governance");
 }
 
 /// A project that declares its own concern named `exemption-budget`
@@ -506,10 +516,14 @@ fn dry_run_names_the_budget_without_executing() {
 #[test]
 fn yaml_manifests_honour_the_same_budget() {
     let tmp = init_dir();
+    let report = tmp.path().join("governance.json");
+    std::fs::write(
+        &report,
+        r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+    )
+    .unwrap();
     std::fs::create_dir_all(tmp.path().join(".ai-gate")).unwrap();
-    let mut body = String::from(
-        "version: 1\nruntime: driftwatchdog\nprofile: minimal\nchecks:\n  c0: true\n  c1: true\n  c2: true\n  c3: true\n  c4: true\n  c5: true\n  c6: true\n  c7: true\n  e1: true\ncommands:\n  c0: \"true\"\n  c1: \"true\"\n  c2: \"true\"\n  c3: \"true\"\n  c4: \"true\"\n  c5: \"true\"\n  c6: \"true\"\n  c7: \"true\"\n",
-    );
+    let mut body = format!("version: 1\nruntime: driftwatchdog\nprofile: minimal\nchecks:\n  c0: true\n  c1: true\n  c2: true\n  c3: true\n  c4: true\n  c5: true\n  c6: true\n  c7: true\n  e1: true\n  governance-quality: optional\ncommands:\n  c0: \"true\"\n  c1: \"true\"\n  c2: \"true\"\n  c3: \"true\"\n  c4: \"true\"\n  c5: \"true\"\n  c6: \"true\"\n  c7: \"true\"\n  governance-quality: \"cat {}\"\n", report.display());
     // 9 required -> cap 2. One exemption is below it; two is on it.
     body.push_str("not_applicable:\n  e1: \"no e1 on this stack\"\n");
     std::fs::write(tmp.path().join(".ai-gate/gate.yaml"), body).unwrap();

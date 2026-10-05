@@ -496,7 +496,16 @@ contexts:
             .iter()
             .map(|c| c.gate_id.as_str())
             .collect();
-        assert_eq!(ids, vec!["accessibility", "build", "security", "tests"]);
+        assert_eq!(
+            ids,
+            vec![
+                "accessibility",
+                "build",
+                "governance-quality",
+                "security",
+                "tests"
+            ]
+        );
         let acc = plan
             .plan
             .checks
@@ -682,7 +691,7 @@ contexts:
     }
 
     #[test]
-    fn domain_profile_selects_only_declared_checks() {
+    fn domain_profile_preserves_declared_checks_and_adds_mandatory_governance() {
         let doc =
             parse_document("version: 1\nprofile: my-domain\nchecks:\n  alpha: true\n").unwrap();
         let plan = resolve(&doc.manifest, &[]).unwrap();
@@ -692,7 +701,7 @@ contexts:
             .iter()
             .map(|c| c.gate_id.as_str())
             .collect();
-        assert_eq!(ids, vec!["alpha"]);
+        assert_eq!(ids, vec!["alpha", "governance-quality"]);
     }
 
     #[test]
@@ -728,7 +737,10 @@ commands:
         .unwrap();
         assert_eq!(m.binding_policy, BindingPolicy::Report);
         let r = resolve(&m, &[]).unwrap();
-        assert_eq!(r.unbound, vec!["build".to_string()]);
+        assert_eq!(
+            r.unbound,
+            vec!["build".to_string(), "governance-quality".to_string()]
+        );
         assert!(r.exemptions.is_empty());
     }
 
@@ -748,7 +760,10 @@ not_applicable:
         )
         .unwrap();
         let r = resolve(&m, &[]).unwrap();
-        assert_eq!(r.unbound, vec!["build".to_string()]);
+        assert_eq!(
+            r.unbound,
+            vec!["build".to_string(), "governance-quality".to_string()]
+        );
         assert_eq!(
             r.exemptions.get("accessibility").map(String::as_str),
             Some("no UI surface in this project")

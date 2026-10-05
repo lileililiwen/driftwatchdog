@@ -31,6 +31,16 @@ fn init_dir() -> TempDir {
     tmp
 }
 
+fn governance_command(tmp: &TempDir) -> String {
+    let path = tmp.path().join("governance.json");
+    std::fs::write(
+        &path,
+        r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+    )
+    .unwrap();
+    format!("cat {}", path.display())
+}
+
 fn open_db(tmp: &TempDir) -> Db {
     Db::open_read_only(&tmp.path().join(".driftwatch/state.db")).expect("open db")
 }
@@ -73,9 +83,10 @@ fn dry_run_prints_the_effective_timeout_of_every_check() {
 #[test]
 fn a_declared_timeout_kills_the_command_before_it_finishes() {
     let tmp = init_dir();
+    let governance = governance_command(&tmp);
     std::fs::write(
         tmp.path().join("gate.toml"),
-        "profile = \"minimal\"\n[[checks]]\nid = \"slow\"\ncommand = \"sleep 5\"\ntimeout_ms = 1000\n",
+        format!("profile = \"minimal\"\n[[checks]]\nid = \"governance-quality\"\ncommand = \"{governance}\"\n[[checks]]\nid = \"slow\"\ncommand = \"sleep 5\"\ntimeout_ms = 1000\n"),
     )
     .unwrap();
 
@@ -122,9 +133,10 @@ fn a_declared_timeout_kills_the_command_before_it_finishes() {
 #[test]
 fn a_quick_check_under_the_default_still_passes() {
     let tmp = init_dir();
+    let governance = governance_command(&tmp);
     std::fs::write(
         tmp.path().join("gate.toml"),
-        "profile = \"minimal\"\n[[checks]]\nid = \"smoke\"\ncommand = \"true\"\n",
+        format!("profile = \"minimal\"\n[[checks]]\nid = \"governance-quality\"\ncommand = \"{governance}\"\n[[checks]]\nid = \"smoke\"\ncommand = \"true\"\n"),
     )
     .unwrap();
     driftwatch()
@@ -144,12 +156,11 @@ fn a_quick_check_under_the_default_still_passes() {
 #[test]
 fn the_business_yaml_form_honors_a_declared_timeout() {
     let tmp = init_dir();
+    let governance = governance_command(&tmp);
     std::fs::create_dir_all(tmp.path().join(".ai-gate")).unwrap();
     std::fs::write(
         tmp.path().join(".ai-gate/gate.yaml"),
-        "version: 1\nruntime: driftwatchdog\nprofile: minimal\n\
-         checks:\n  slow: true\ncommands:\n  slow: \"sleep 5\"\n\
-         timeouts:\n  slow: 1000\n",
+        format!("version: 1\nruntime: driftwatchdog\nprofile: minimal\nchecks:\n  slow: true\n  governance-quality: true\ncommands:\n  slow: \"sleep 5\"\n  governance-quality: \"{governance}\"\ntimeouts:\n  slow: 1000\n"),
     )
     .unwrap();
 
@@ -177,10 +188,11 @@ fn the_business_yaml_form_honors_a_declared_timeout() {
 fn an_unusable_timeout_is_refused_before_anything_executes() {
     for (declared, must_name) in [("0", "omit the key"), ("3600001", "3600000")] {
         let tmp = init_dir();
+        let governance = governance_command(&tmp);
         std::fs::write(
             tmp.path().join("gate.toml"),
             format!(
-                "profile = \"minimal\"\n[[checks]]\nid = \"bad\"\ncommand = \"true\"\ntimeout_ms = {declared}\n"
+                "profile = \"minimal\"\n[[checks]]\nid = \"governance-quality\"\ncommand = \"{governance}\"\n[[checks]]\nid = \"bad\"\ncommand = \"true\"\ntimeout_ms = {declared}\n"
             ),
         )
         .unwrap();

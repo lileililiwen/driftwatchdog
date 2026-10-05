@@ -14,6 +14,37 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`mandatory-governance-quality-all-profiles` is implemented, verified, and
+not archived.** `profile_defaults_for` now adds required `governance-quality`
+exactly once across all supported built-in profiles, ten named workspace
+profiles, and project-defined profiles while preserving their other concerns.
+Unknown profile typos still fail validation. No fleet manifest was edited.
+
+Verification on 2026-10-05: `cargo fmt --all -- --check` passed; the complete
+`cargo test --quiet` suite passed **912 tests across 29 groups**; release build
+and `cargo clippy --all-targets --all-features -- -D warnings` passed; strict
+OpenSpec validation passed **8/8**. The tests required loopback permission for
+the npm launcher fixtures. Actoria's rebuilt release-binary dry run schedules
+required `governance-quality` for its project-defined `mobile-product` profile
+and reports it `UNBOUND` until the workspace binder writes its command.
+
+The Driftwatchdog self Gate ran with its advisory database available and passed
+build, declared verification, governance quality, repository, security, and
+tests. It remains `FAIL` on three findings already present in this checkout:
+`placeholder-threshold` and `product-code-boundary` both report the checker's
+own `TODO`/`FIXME` rule-name literals at `src/gate/concerns.rs:20`; the
+`source-file-size` Gate reports eight existing source files over 1,000 lines
+(`src/commands/gate.rs`, `src/gate/{adapters,ai,aigate,context,manifest,source_size,toolchain}.rs`).
+Before this change, `src/commands/gate.rs` was already 1,035 lines and
+`src/gate/manifest.rs` 2,956 lines. These findings were not silenced or
+rewritten here.
+
+The new active OpenSpec package is
+`openspec/changes/mandatory-governance-quality-all-profiles/`. It is not
+archived. The change's two commit IDs will be added here in the handoff-only
+commit. Next, re-run the workspace-governance binder after this change lands so
+the 35 newly governed repositories receive their project-owned commands.
+
 **A blocking rule that no gate could read is now declared.**
 `workspace-governance` `0611298` added a rule that stops a repository carrying
 unresolved gate debt from opening a new OpenSpec change. It emits

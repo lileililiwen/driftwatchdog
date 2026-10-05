@@ -29,11 +29,49 @@ fn init_dir() -> TempDir {
 }
 
 fn write_manifest(tmp: &TempDir, body: &str) {
+    let body = if body.contains("id = \"governance-quality\"") {
+        body.to_string()
+    } else {
+        let report = tmp.path().join("governance.json");
+        std::fs::write(
+            &report,
+            r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+        )
+        .unwrap();
+        format!(
+            "{body}\n[[checks]]\nid = \"governance-quality\"\ncommand = \"cat {}\"\n",
+            report.display()
+        )
+    };
     std::fs::write(tmp.path().join("gate.toml"), body).unwrap();
 }
 
 fn write_yaml_manifest(tmp: &TempDir, body: &str) {
     std::fs::create_dir_all(tmp.path().join(".ai-gate")).unwrap();
+    let body = if body.contains("governance-quality") {
+        body.to_string()
+    } else {
+        let report = tmp.path().join("governance.json");
+        std::fs::write(
+            &report,
+            r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+        )
+        .unwrap();
+        let mut body = body.replace("checks:\n", "checks:\n  governance-quality: true\n");
+        let command = format!("cat {}", report.display());
+        if body.contains("commands:\n") {
+            body = body.replace(
+                "commands:\n",
+                &format!("commands:\n  governance-quality: {:?}\n", command),
+            );
+        } else {
+            body.push_str(&format!(
+                "\ncommands:\n  governance-quality: {:?}\n",
+                command
+            ));
+        }
+        body
+    };
     std::fs::write(tmp.path().join(".ai-gate/gate.yaml"), body).unwrap();
 }
 
@@ -67,6 +105,14 @@ fn result_of<'a>(
 /// longer demonstrate any exemption behaviour at all.
 fn with_bound_checks(bound: usize) -> String {
     let mut out = String::from("profile = \"minimal\"\n");
+    out.push_str(
+        r#"
+[[checks]]
+id = "governance-quality"
+required = false
+command = "echo '{\"findings\":[],\"summary\":{\"errors\":0,\"warnings\":0}}'"
+"#,
+    );
     for i in 0..bound {
         out.push_str(&format!(
             "\n[[checks]]\nid = \"c{i}\"\ncommand = \"true\"\n"

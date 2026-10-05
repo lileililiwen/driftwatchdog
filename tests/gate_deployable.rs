@@ -26,6 +26,16 @@ fn latest_status(tmp: &tempfile::TempDir) -> (String, bool, String) {
     (run.status, run.blocked, run.results_json)
 }
 
+fn bind_governance(tmp: &tempfile::TempDir) -> String {
+    let report = tmp.path().join("governance.json");
+    std::fs::write(
+        &report,
+        r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+    )
+    .unwrap();
+    format!("cat {}", report.display())
+}
+
 #[test]
 fn deployable_profile_requires_both_contract_bindings() {
     let tmp = init_dir();
@@ -38,7 +48,8 @@ fn deployable_profile_requires_both_contract_bindings() {
         .failure();
 
     let (status, blocked, results) = latest_status(&tmp);
-    // Both profile-default checks are required and bind no command, so
+    // The two deployable checks and the mandatory governance check are
+    // required and bind no command, so
     // each is a never-attempted absence: `UNBOUND` and a FAIL, not a
     // review the project could disable through its blocking list.
     assert_eq!(status, "FAIL");
@@ -46,21 +57,28 @@ fn deployable_profile_requires_both_contract_bindings() {
     assert!(results.contains("\"UNBOUND\""));
     assert!(results.contains("compose-contract:command"));
     assert!(results.contains("ci-contract:command"));
+    assert!(results.contains("governance-quality:command"));
 }
 
 #[test]
 fn deployable_profile_passes_when_both_project_commands_pass() {
     let tmp = init_dir();
+    let governance = bind_governance(&tmp);
     std::fs::write(
         tmp.path().join("gate.toml"),
-        r#"profile = "deployable"
+        format!(
+            r#"profile = "deployable"
 [[checks]]
 id = "compose-contract"
 command = "true"
 [[checks]]
 id = "ci-contract"
 command = "true"
-"#,
+[[checks]]
+id = "governance-quality"
+command = "{governance}"
+"#
+        ),
     )
     .unwrap();
 
@@ -78,16 +96,22 @@ command = "true"
 #[test]
 fn deployable_profile_blocks_when_a_contract_command_fails() {
     let tmp = init_dir();
+    let governance = bind_governance(&tmp);
     std::fs::write(
         tmp.path().join("gate.toml"),
-        r#"profile = "deployable"
+        format!(
+            r#"profile = "deployable"
 [[checks]]
 id = "compose-contract"
 command = "false"
 [[checks]]
 id = "ci-contract"
 command = "true"
-"#,
+[[checks]]
+id = "governance-quality"
+command = "{governance}"
+"#
+        ),
     )
     .unwrap();
 

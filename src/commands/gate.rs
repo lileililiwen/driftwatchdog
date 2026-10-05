@@ -655,7 +655,7 @@ mod tests {
         init_project(tmp.path());
         std::fs::write(
             tmp.path().join("gate.toml"),
-            "profile = \"minimal\"\n[[checks]]\nid = \"smoke\"\ncommand = \"true\"\n",
+            "profile = \"minimal\"\n[[checks]]\nid = \"governance-quality\"\ncommand = \"echo '{\\\"findings\\\":[],\\\"summary\\\":{\\\"errors\\\":0,\\\"warnings\\\":0}}'\"\n[[checks]]\nid = \"smoke\"\ncommand = \"true\"\n",
         )
         .unwrap();
         let code = gate(gate_args(false), tmp.path()).unwrap();
@@ -720,7 +720,10 @@ mod tests {
         assert_eq!(run.status, "FAIL");
         assert!(run.blocked);
         let doc: GateRunResultsDocument = serde_json::from_str(&run.results_json).unwrap();
-        assert_eq!(doc.unbound, vec!["ux-review".to_string()]);
+        assert_eq!(
+            doc.unbound,
+            vec!["governance-quality".to_string(), "ux-review".to_string()]
+        );
         let r = doc
             .results
             .iter()
@@ -750,7 +753,7 @@ mod tests {
         init_project(tmp.path());
         std::fs::write(
             tmp.path().join("gate.toml"),
-            "profile = \"minimal\"\n[[checks]]\nid = \"ux-review\"\nrequired = false\n",
+            "profile = \"minimal\"\n[[checks]]\nid = \"governance-quality\"\ncommand = \"echo '{\\\"findings\\\":[],\\\"summary\\\":{\\\"errors\\\":0,\\\"warnings\\\":0}}'\"\n[[checks]]\nid = \"ux-review\"\nrequired = false\n",
         )
         .unwrap();
         let code = gate(gate_args(false), tmp.path()).unwrap();
@@ -792,7 +795,8 @@ mod tests {
             manifest.push_str(&format!("[[checks]]\nid = \"c{i}\"\ncommand = \"true\"\n"));
         }
         manifest.push_str(
-            "[[checks]]\nid = \"ux-review\"\n\
+            "[[checks]]\nid = \"governance-quality\"\ncommand = \"echo '{\\\"findings\\\":[],\\\"summary\\\":{\\\"errors\\\":0,\\\"warnings\\\":0}}'\"\n\
+             [[checks]]\nid = \"ux-review\"\n\
              [not_applicable]\nux-review = \"no UI surface in this project\"\n",
         );
         std::fs::write(tmp.path().join("gate.toml"), manifest).unwrap();
@@ -861,7 +865,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join(".ai-gate")).unwrap();
         std::fs::write(
             tmp.path().join(".ai-gate/gate.yaml"),
-            "version: 1\nruntime: driftwatchdog\nprofile: browser-extension\nrule_pack: browser-extension@0.1.0\nchecks:\n  smoke: true\ncommands:\n  smoke: \"true\"\n",
+            "version: 1\nruntime: driftwatchdog\nprofile: browser-extension\nrule_pack: browser-extension@0.1.0\nchecks:\n  smoke: true\n  governance-quality: true\ncommands:\n  smoke: \"true\"\n  governance-quality: \"echo '{\\\"findings\\\":[],\\\"summary\\\":{\\\"errors\\\":0,\\\"warnings\\\":0}}'\"\n",
         )
         .unwrap();
         let code = gate(gate_args(false), tmp.path()).unwrap();
@@ -928,7 +932,7 @@ mod tests {
         init_project(tmp.path());
         std::fs::write(
             tmp.path().join("gate.toml"),
-            "profile = \"minimal\"\n[[checks]]\nid = \"slow\"\ncommand = \"sleep 5\"\ntimeout_ms = 1000\n",
+            "profile = \"minimal\"\n[[checks]]\nid = \"governance-quality\"\ncommand = \"echo '{\\\"findings\\\":[],\\\"summary\\\":{\\\"errors\\\":0,\\\"warnings\\\":0}}'\"\n[[checks]]\nid = \"slow\"\ncommand = \"sleep 5\"\ntimeout_ms = 1000\n",
         )
         .unwrap();
 

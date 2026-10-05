@@ -175,21 +175,22 @@ match `src/gate/concerns.rs`; the code is authoritative — if a name
 here ever disagrees with the code, the code wins and the doc is
 corrected.
 
-| Built-in profile | Stable concern IDs scheduled | Default | Exit-code authority | Text-mode fallback |
+| Built-in or workspace profile | Stable concern IDs scheduled | Default | Exit-code authority | Text-mode fallback |
 | --- | --- | --- | --- | --- |
-| `minimal` | (none) | — | `PASS`→0, `FAIL`→1, `REVIEW_REQUIRED`→2, `NOT_APPLICABLE`→0 (mismatches and malformed envelopes downgrade to `REVIEW_REQUIRED`) | n/a (no envelope-backed checks) |
-| `backend` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above (project-runtime text adapter) | yes (project-runtime `exit 0 → PASS`, `nonzero → FAIL`) |
-| `frontend` | `a11y`, `responsive`, `secret-scan` | required | as above | yes |
-| `full` | `a11y`, `api-contract`, `migration`, `responsive`, `secret-scan` | required | as above | yes |
+| `minimal` | `governance-quality` | required | code-scoped governance report | **no** (a report it cannot read must not pass silently) |
+| `backend` | `a11y`, `api-contract`, `governance-quality`, `migration`, `responsive`, `secret-scan` | required | governance report for `governance-quality`; as above for project-runtime checks | yes for project-runtime checks; no for governance quality |
+| `frontend` | `a11y`, `governance-quality`, `responsive`, `secret-scan` | required | governance report for `governance-quality`; as above for project-runtime checks | yes for project-runtime checks; no for governance quality |
+| `full` | `a11y`, `api-contract`, `governance-quality`, `migration`, `responsive`, `secret-scan` | required | governance report for `governance-quality`; as above for project-runtime checks | yes for project-runtime checks; no for governance quality |
 | `product` (alias `rust-product`) | `governance-quality`, `placeholder-threshold`, `product-code-boundary`, `source-file-size` (built-in, no command) | required | envelope wire version `1` for the two project-owned concerns; in-process normalized result for the built-in scanner; **code-scoped report** for `governance-quality`, whose status comes from the matching findings' levels and not from the checker's exit code | yes for the two project-owned concerns; **no** for `governance-quality` (a report it cannot read must not pass silently); n/a for the built-in scanner |
-| `release` | `capability-conformance`, `release-evidence` | required | as above (envelope wire version `1`, shared with the product-quality shape) | **no** (missing coverage must never silently pass) |
-| `deployable` | `ci-contract`, `compose-contract` | required | project-runtime exit status (`0`→`PASS`, non-zero→`FAIL`; a required check with no bound command→`UNBOUND`, which blocks) | yes |
+| `release` | `capability-conformance`, `governance-quality`, `release-evidence` | required | governance report for `governance-quality`; as above for release envelopes | no for governance quality; no for release envelopes |
+| `deployable` | `ci-contract`, `compose-contract`, `governance-quality` | required | governance report for `governance-quality`; project-runtime exit status for the two project checks | no for governance quality; yes for project checks |
+| Workspace profiles `typescript-product`, `python-product`, `dotnet-product`, `dotnet-library`, `typescript-monorepo`, `rust-platform`, `tooling`, `deployment`, `inventory`, `governance` | `governance-quality` | required | code-scoped governance report | **no** (a report it cannot read must not pass silently) |
 
-A profile that is not a built-in name selects exactly the concerns
-declared in the manifest (`[profiles.<name>]` in `gate.toml` or
-`checks:` in `.ai-gate/gate.yaml`); a built-in profile keeps its
-default set, adjustable per concern with `required = false` (or the
-`checks:` map `false` / `"optional"` in `.ai-gate/gate.yaml`).
+Every built-in and supported workspace profile schedules `governance-quality`
+as a required check. Project-defined profiles keep their declared concerns
+and also receive that required check. Unknown profile names remain errors.
+Other built-in concerns can be adjusted per concern with `required = false`
+(or the `checks:` map `false` / `"optional"` in `.ai-gate/gate.yaml`).
 
 When a required check binds no `command`, nothing ran, so the result
 is `UNBOUND` with `Error` severity and the gate **fails** — a

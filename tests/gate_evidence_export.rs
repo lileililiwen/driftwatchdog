@@ -45,7 +45,17 @@ fn run_export_human(tmp: &tempfile::TempDir) -> assert_cmd::assert::Assert {
 }
 
 fn write_gate_manifest(tmp: &tempfile::TempDir, body: &str) {
-    std::fs::write(tmp.path().join("gate.toml"), body).unwrap();
+    let report = tmp.path().join("governance.json");
+    std::fs::write(
+        &report,
+        r#"{"findings":[],"summary":{"errors":0,"warnings":0}}"#,
+    )
+    .unwrap();
+    let manifest = format!(
+        "{body}\n[[checks]]\nid = \"governance-quality\"\ncommand = \"cat {}\"\n",
+        report.display()
+    );
+    std::fs::write(tmp.path().join("gate.toml"), manifest).unwrap();
 }
 
 fn make_envelope_file(tmp: &tempfile::TempDir, name: &str, body: &str) -> std::path::PathBuf {

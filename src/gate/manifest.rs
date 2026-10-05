@@ -98,7 +98,7 @@ use sha2::{Digest, Sha256};
 
 use crate::gate::aggregate::{BlockingPolicy, GatePlan, PlannedCheck};
 use crate::gate::concerns::{
-    is_source_file_size_concern, DEPLOYABLE_CONCERNS, PRODUCT_PROFILE_CONCERNS,
+    is_source_file_size_concern, DEPLOYABLE_CONCERNS, GOVERNANCE_QUALITY, PRODUCT_PROFILE_CONCERNS,
     RELEASE_GATE_CONCERNS,
 };
 use crate::gate::dto::GATE_CONTRACT_VERSION;
@@ -140,6 +140,21 @@ pub fn profile_defaults(profile: &str) -> Option<&'static [&'static str]> {
         // Deployable projects must bind both project-owned contract commands;
         // the profile supplies required checks but never invents commands.
         "deployable" => Some(DEPLOYABLE_CONCERNS),
+        // These workspace profile names are accepted policy profiles even
+        // though their concern sets are owned outside Driftwatchdog. They all
+        // receive the mandatory governance check. Keep this list explicit so
+        // a typo still fails manifest validation and declared project profiles
+        // continue to resolve through `profile_defaults_for`.
+        "typescript-product"
+        | "python-product"
+        | "dotnet-product"
+        | "dotnet-library"
+        | "typescript-monorepo"
+        | "rust-platform"
+        | "tooling"
+        | "deployment"
+        | "inventory"
+        | "governance" => Some(&[GOVERNANCE_QUALITY]),
         _ => None,
     }
 }
@@ -154,6 +169,16 @@ pub const SUPPORTED_PROFILES: &[&str] = &[
     "rust-product",
     "release",
     "deployable",
+    "typescript-product",
+    "python-product",
+    "dotnet-product",
+    "dotnet-library",
+    "typescript-monorepo",
+    "rust-platform",
+    "tooling",
+    "deployment",
+    "inventory",
+    "governance",
 ];
 
 /// Resolve the default concern set for `profile` in the context of a
@@ -162,13 +187,18 @@ pub const SUPPORTED_PROFILES: &[&str] = &[
 /// Returns `None` only when the profile is neither built-in nor declared,
 /// which is the same condition [`validate`] rejects.
 pub fn profile_defaults_for(manifest: &GateManifest, profile: &str) -> Option<Vec<String>> {
-    if let Some(builtin) = profile_defaults(profile) {
-        return Some(builtin.iter().map(|s| (*s).to_string()).collect());
+    let mut defaults = if let Some(builtin) = profile_defaults(profile) {
+        builtin.iter().map(|s| (*s).to_string()).collect()
+    } else {
+        manifest.profiles.get(profile)?.clone()
+    };
+    if !defaults.iter().any(|id| id == GOVERNANCE_QUALITY) {
+        defaults.push(GOVERNANCE_QUALITY.to_string());
     }
-    manifest.profiles.get(profile).cloned()
+    Some(defaults)
 }
 
-/// True when `profile` is a built-in name (not a project-defined one).
+/// True when `profile` has an explicit built-in or workspace default.
 pub fn is_builtin_profile(profile: &str) -> bool {
     profile_defaults(profile).is_some()
 }
@@ -800,7 +830,7 @@ pub enum ManifestError {
     #[error("unknown field \"{field}\"{suggestion}")]
     UnknownField { field: String, suggestion: String },
     #[error(
-        "unsupported profile \"{profile}\"; expected a built-in (backend, frontend, full, minimal, product, rust-product, release, deployable) or a `[profiles.{profile}]` declaration"
+        "unsupported profile \"{profile}\"; expected a built-in or workspace profile, or a `[profiles.{profile}]` declaration"
     )]
     UnknownProfile { profile: String },
     #[error("unsupported manifest version {got}, expected {expected}")]
@@ -1578,6 +1608,11 @@ mod tests {
     /// a command so nothing is unbound, and the named ones exempted.
     fn checks_manifest(required: usize, exempt: &[(&str, bool)]) -> String {
         let mut out = String::from("version = 1\nprofile = \"minimal\"\n");
+        // Keep governance quality bound but optional in this arithmetic-only
+        // fixture so its existing required-check counts remain isolated.
+        out.push_str(
+            "\n[[checks]]\nid = \"governance-quality\"\nrequired = false\ncommand = \"true\"\n",
+        );
         for i in 0..required {
             out.push_str(&format!(
                 "\n[[checks]]\nid = \"c{i}\"\ncommand = \"true\"\n"
@@ -1604,6 +1639,10 @@ mod tests {
 version = 1
 profile = "backend"
 
+[[checks]]
+id = "governance-quality"
+command = "true"
+
 [blocking]
 review_required_blocks = true
 
@@ -1629,7 +1668,10 @@ id = "ux-review"
         assert_eq!(m.binding_policy, BindingPolicy::Report);
         assert!(m.not_applicable.is_empty());
         let r = resolve(&m, &[]).unwrap();
-        assert_eq!(r.unbound, vec!["ux-review".to_string()]);
+        assert_eq!(
+            r.unbound,
+            vec!["governance-quality".to_string(), "ux-review".to_string()]
+        );
         assert!(r.exemptions.is_empty());
         let check = r
             .plan
@@ -1675,6 +1717,10 @@ version = 1
 profile = "minimal"
 
 [[checks]]
+id = "governance-quality"
+command = "true"
+
+[[checks]]
 id = "ux-review"
 command = "npm run review"
 "#,
@@ -1693,6 +1739,10 @@ command = "npm run review"
             r#"
 version = 1
 profile = "minimal"
+
+[[checks]]
+id = "governance-quality"
+command = "true"
 
 [[checks]]
 id = "ux-review"
@@ -1960,8 +2010,17 @@ ux-review = "we have a command after all"
         .unwrap();
         let r2 = resolve(&clean, &[]).unwrap();
         assert!(r2.exemption_budget.non_exempable.is_empty());
-        assert_eq!(r2.plan.checks.len(), 1);
-        assert_eq!(r2.plan.checks[0].gate_id, "declared-verification");
+        assert_eq!(r2.plan.checks.len(), 2);
+        assert!(r2
+            .plan
+            .checks
+            .iter()
+            .any(|check| check.gate_id == "declared-verification"));
+        assert!(r2
+            .plan
+            .checks
+            .iter()
+            .any(|check| check.gate_id == GOVERNANCE_QUALITY));
     }
 
     /// The spine fails the budget whatever the counts say: one
@@ -2108,7 +2167,7 @@ ux-review = "we have a command after all"
             ("reject", BindingPolicy::Reject),
         ] {
             let m = parse(&format!(
-                "version = 1\nprofile = \"minimal\"\nbinding_policy = \"{raw}\"\n"
+                "version = 1\nprofile = \"minimal\"\nbinding_policy = \"{raw}\"\n\n[[checks]]\nid = \"governance-quality\"\ncommand = \"true\"\n"
             ))
             .unwrap();
             assert_eq!(m.binding_policy, want);
@@ -2125,6 +2184,10 @@ ux-review = "we have a command after all"
 version = 1
 profile = "minimal"
 binding_policy = "reject"
+
+[[checks]]
+id = "governance-quality"
+command = "true"
 
 [[checks]]
 id = "ux-review"
@@ -2163,6 +2226,10 @@ command = "true"
 version = 1
 profile = "minimal"
 binding_policy = "reject"
+
+[[checks]]
+id = "governance-quality"
+command = "true"
 
 [[checks]]
 id = "smoke"
@@ -2528,9 +2595,72 @@ enabled = false
 
     #[test]
     fn unknown_profile_still_rejects_typos() {
-        // The new profiles do not weaken the unknown-profile error.
         let err = parse("version = 1\nprofile = \"prodcut\"\n").unwrap_err();
         assert!(matches!(err, ManifestError::UnknownProfile { .. }));
+    }
+
+    #[test]
+    fn workspace_profiles_schedule_only_governance_quality() {
+        let profiles = [
+            "typescript-product",
+            "python-product",
+            "dotnet-product",
+            "dotnet-library",
+            "typescript-monorepo",
+            "rust-platform",
+            "tooling",
+            "deployment",
+            "inventory",
+            "governance",
+        ];
+        for profile in profiles {
+            assert!(SUPPORTED_PROFILES.contains(&profile));
+            assert_eq!(profile_defaults(profile), Some(&[GOVERNANCE_QUALITY][..]));
+            let text = format!("version = 1\nprofile = \"{profile}\"\n");
+            let manifest = parse(&text).unwrap();
+            let resolved = resolve(&manifest, &[]).unwrap();
+            assert_eq!(
+                unbound_required_checks(&manifest, &selected_without_triggers(&manifest)),
+                vec![GOVERNANCE_QUALITY],
+                "fallback must be required and unbound for profile {profile}"
+            );
+            let ids: Vec<&str> = resolved
+                .plan
+                .checks
+                .iter()
+                .map(|check| check.gate_id.as_str())
+                .collect();
+            assert_eq!(ids, vec![GOVERNANCE_QUALITY], "profile {profile}");
+        }
+    }
+
+    #[test]
+    fn every_supported_profile_schedules_governance_quality_once() {
+        for profile in SUPPORTED_PROFILES {
+            let text = format!("version = 1\nprofile = \"{profile}\"\n");
+            let manifest = parse(&text).unwrap();
+            let defaults = profile_defaults_for(&manifest, profile).unwrap();
+            assert_eq!(
+                defaults
+                    .iter()
+                    .filter(|id| id.as_str() == GOVERNANCE_QUALITY)
+                    .count(),
+                1,
+                "profile {profile}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_project_profile_keeps_its_concern_set() {
+        let manifest =
+            parse("version = 1\nprofile = \"custom\"\n\n[profiles]\ncustom = [\"my-check\"]\n")
+                .unwrap();
+        assert_eq!(
+            profile_defaults_for(&manifest, "custom"),
+            Some(vec!["my-check".to_string(), GOVERNANCE_QUALITY.to_string()])
+        );
+        assert!(!is_builtin_profile("custom"));
     }
 
     #[test]
@@ -2567,7 +2697,11 @@ profile = "release"
             .collect();
         assert_eq!(
             ids,
-            vec!["capability-conformance", "release-evidence"],
+            vec![
+                "capability-conformance",
+                "governance-quality",
+                "release-evidence"
+            ],
             "release profile selects both release-gate concerns in sorted order"
         );
         // Both are required by default: the profile does not silently
