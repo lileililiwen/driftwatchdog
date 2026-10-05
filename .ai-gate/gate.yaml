@@ -19,6 +19,8 @@ checks:
   # pinned by `tests/gate_governance_quality.rs` as well as now being run.
   governance-quality: true
   declared-verification: true
+  placeholder-threshold: true
+  product-code-boundary: true
 blocking:
   - FAIL
   - REVIEW_REQUIRED
@@ -38,3 +40,5 @@ commands:
   tests: 'cargo test'
   security: 'cargo audit'
   governance-quality: 'python3 ../workspace-governance/scripts/workspace_check.py --root .. --project driftwatchdog --json'
+  placeholder-threshold: 'python3 ../workspace-governance/scripts/product_code_quality.py .'
+  product-code-boundary: 'python3 ../workspace-governance/scripts/product_code_quality.py .'

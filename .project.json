@@ -15,5 +15,14 @@
     "deployable": false,
     "jenkins_job": null,
     "compose_file": null
+  },
+  "quality": {
+    "product_roots": [
+      "src"
+    ],
+    "languages": [
+      "rust"
+    ],
+    "placeholder_threshold": 0
   }
 }
