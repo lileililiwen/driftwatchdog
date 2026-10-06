@@ -24,5 +24,49 @@
       "rust"
     ],
     "placeholder_threshold": 0
+  },
+  "discoverability": {
+    "description": "Local-first runtime failure memory for AI-assisted coding. Wraps any command, fingerprints recurring bugs, consumes external spec-checker results, and exports AI-ready context.",
+    "keywords": [
+      "failure memory",
+      "ai agents",
+      "debugging",
+      "fingerprinting",
+      "local-first",
+      "spec driven",
+      "gate runtime"
+    ],
+    "topics": [
+      "ai",
+      "ai-agents",
+      "cli",
+      "debugging",
+      "developer-tools",
+      "failure-memory",
+      "fingerprinting",
+      "local-first",
+      "rust",
+      "spec-driven-development",
+      "gate-runtime",
+      "openspec"
+    ],
+    "audience": [
+      "AI coding agents",
+      "software developers",
+      "platform engineers"
+    ],
+    "use_cases": [
+      "wrap any CLI command to capture and fingerprint failures across runs",
+      "produce AI-oriented context from recurring runtime memory",
+      "consume external spec-checker results and correlate to runtime failures"
+    ],
+    "search_phrases": [
+      "remember failed commands across AI coding runs",
+      "wrap any CLI to capture failures",
+      "recurring bug fingerprinting for AI agents"
+    ],
+    "homepage": "https://github.com/lileililiwen/driftwatchdog",
+    "license_spdx": "MIT",
+    "visibility": "public"
   }
 }
