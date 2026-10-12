@@ -14,6 +14,132 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`platform-gate-result-major-adoption` is implemented, verified, and
+archived.** `driftwatch gate --format platform` now emits
+`platform.gate-result` **1.0.0** — the precondition the `platform-contracts`
+registry names before major 0 is dropped (`narrowing.drops: [0]`,
+`state: declared`, notice: *"once the sole producer, driftwatchdog, emits
+platform.gate-result/1.0.0"*). It stops refusing the two states it was built
+to refuse and declares the version it claims.
+
+| Driftwatchdog `GateStatus` | platform 1.0.0 | claim |
+|---|---|---|
+| `PASS` | `passed` | ran and passed |
+| `FAIL` | `failed` | ran and reported a failure; severity stays orthogonal and unmapped |
+| `NOT_APPLICABLE` | `skipped` | a proven exemption |
+| `REVIEW_REQUIRED` | `review_required` | a human decision is still open |
+| `UNBOUND` | `unbound` | asserted, no command bound, nothing ran |
+| — | `errored` | **still never emitted**: every execution failure is already a `REVIEW_REQUIRED` |
+
+What changed in `src/gate/platform_result.rs`:
+
+1. **`Refusal::AggregateStatus` and `Refusal::CheckStatus` are deleted**, with
+   `REVIEW_REQUIRED_BECAUSE`, `UNBOUND_BECAUSE`, `unrepresentable_because`, and
+   `sorted_ids`. `StatusMapping` went with them: its only failure payload was
+   `Unrepresentable`, and keeping the wrapper would have kept the vocabulary of
+   refusal in the type system after the behaviour was gone. `map_status` is now
+   `fn(GateStatus) -> PlatformStatus` — total, infallible, no failure arm.
+2. **The document declares its version.** New root additional property
+   `contract`, from the new constant
+   `PLATFORM_GATE_RESULT_CONTRACT = "platform.gate-result/1.0.0"`. Field name
+   and value shape follow `src/checker/json.rs:41`
+   (`CHECKER_REPORT_CONTRACT = "driftwatch-checker/0.1.0"` → root `contract`),
+   deliberately not a second spelling such as `schema_version`. The registry
+   serves majors 0 and 1 simultaneously, so a document with only
+   `passed`/`failed`/`skipped` is otherwise ambiguous.
+3. **Seven refusal classes survive, unchanged**, in the order root identity →
+   per-check shape: `GateId`, `Pipeline`, `SubjectRef`, `EvaluatedAt`,
+   `CheckId`, `Detail`, `EvidenceRef`. Every pattern, bound, and error string is
+   byte-identical to the archived change. Each is proven still refusing — a unit
+   test per class, plus `all_seven_retained_refusal_classes_still_refuse` which
+   exercises all seven in one pass, plus the two CLI-reachable ones
+   (`check_id`, `detail`) end-to-end through the binary.
+4. **`PlatformStatus::Errored` stays defined and stays unreachable.** Two tests
+   hold both halves of that line: `every_status_has_an_arm_and_errored_is_never_produced`
+   (no `GateStatus` maps to it) and `errored_is_named_and_round_tripped_but_never_mapped`
+   (`as_str`/`parse` still round-trip it, so removing the variant can never be
+   mistaken for "the platform does not have it"), plus
+   `a_timed_out_check_is_never_reported_as_errored` end-to-end.
+
+Untouched by construction: `GateStatus`, `NOT_APPLICABLE`/`UNBOUND` semantics,
+`aggregate()`, the adapter tables, the manifest, the concern vocabulary, the
+SQLite schema, `--format human|json` (bytes and `0`/`1` exit codes),
+`gate evidence-export --format` (still `human|json` only), and
+`Cargo.toml`/`Cargo.lock`. `src/cli.rs` and `src/commands/gate.rs` changed doc
+text only. The five incomplete open changes (`per-check-gate-timeout`,
+`bind-declared-verification-command`, `declare-spec-purpose-placeholder-code`,
+`bind-governance-quality-checks`, `gate-unbound-check-fails`) were not edited,
+completed, archived, or re-scoped, and this change conflicts with none of them.
+
+### Measured: the format emits a real document, and it still refuses more often than it should
+
+Release binary run against six local repositories:
+
+| repository | exit | stdout bytes | outcome |
+|---|---|---|---|
+| `hypora` | `0` | `4012` | **emitted**, valid against the authoritative 1.0.0 schema |
+| `driftwatchdog` | `2` | `0` | refused: check `declared-verification` has a 2,049-character diagnostic (limit 512) |
+| `forge` | `2` | `0` | refused: check `build` has a 2,049-character diagnostic (limit 512) |
+| `platform-contracts` | `2` | `0` | refused: check `declared-verification` has a 2,049-character diagnostic (limit 512) |
+| `hermora` | `2` | `0` | refused: check `build` has a 2,027-character diagnostic (limit 512) |
+| `openpanel` | `2` | `0` | refused: check `build` has a 573-character diagnostic (limit 512) |
+
+So: **yes, the format can now emit a real document** — `hypora` produces a
+`result: passed` document with 9 checks and it validates cleanly against
+`platform-contracts/schemas/gate-result.schema.json` under an external
+JSON-Schema validator (checked by hand; the repo deliberately carries no
+validator dependency because the consumer owns validation). It also validates
+unchanged against the 0.1.0 four-value enum, which is the point of declaring
+the version.
+
+**Every remaining refusal is `detail`, and none is `check_id`.** That inverts
+the prior expectation, and the reason is measurable: driftwatchdog bounds a
+diagnostic at `MAX_DIAGNOSTIC_BYTES = 2048` **plus an ellipsis**, so the
+longest diagnostic this runtime can produce is **2,049 characters** — four
+times the contract's `maxLength: 512`. On this repository **4 of 9** checks
+exceed 512; on `openpanel`, **8 of 31**. The `check_id` pattern
+`^[a-z][a-z0-9_.-]{0,63}$` matches every check id in all 80 workspace
+`.ai-gate/gate.yaml` manifests (they are kebab-case keys), and `L1-configuration`
+is an illustrative example from the archived design, not a real concern id — so
+that refusal class is live and correct but not currently triggered anywhere in
+the fleet.
+
+**Recommendation (recorded, deliberately not implemented): option (a)** — carry
+the unshortened diagnostic in an additional property (`driftwatch_detail`) on the
+same check object, and emit `detail` verbatim when it fits and omit it when it
+does not; never truncate into `detail`, because a silently shortened diagnostic
+reads as a complete one. The precedent is established: the root already carries
+`driftwatch_profile` and a check carries `driftwatch_gate_id`, and the schema
+sets `additionalProperties: true`. Option (b) — raising `detail.maxLength` in
+`platform-contracts` — needs a major bump in another repository, will drift the
+moment driftwatchdog raises its own cap, and fixes the limit for every producer
+on the strength of one producer's default. Option (c) — accepting the refusal —
+keeps the format correct and unusable: 5 of 6 measured repositories emit nothing.
+(a) changes the meaning of a contract field for every consumer, so it needs the
+portfolio owner's decision first. **No fix is in this change.**
+
+Verification on 2026-10-12: `cargo fmt` clean; the complete `cargo test` suite
+passed **979 tests** (972 before, **+7** — 50 unit in `src/gate/platform_result.rs`,
+17 end-to-end in `tests/gate_platform_result.rs`) with 0 failures; `cargo clippy`
+on default targets clean; `cargo build --release` succeeded; strict OpenSpec
+validation passed; `git diff --check` clean; `node
+scripts/check-openspec-change-names.mjs` clean. `platform_result.rs` is 425 lines
+and `platform_result_tests.rs` is 781, both well inside the 1,000-line
+source-file-size boundary.
+
+No Forge file and no `platform-contracts` file was touched. Forge vendors the
+schema and *emits* `platform.gate-result` from its own evidence store
+(`forge/src/contract/mod.rs::emit_gate_result`); it never reads
+`driftwatch gate --format platform`, and its Driftwatchdog consumption path is
+`gate --format json`. Its vendored copy is still the 0.1.0 enum and is updated
+by Forge's own `scripts/sync-contracts.mjs` — a Forge-side change, not this one.
+No existing consumer of this producer is broken.
+
+Next action for the orchestrator: run the full `driftwatch` Gate runtime, `cargo
+clippy --all-targets --all-features -- -D warnings`, and `cargo test --workspace
+--all-targets` (the `.ai-gate/gate.yaml` `declared-verification` command), which
+were deliberately not run here. Then decide the residual `detail` gap.
+
 **`platform-gate-result-emission` is implemented, verified, and archived.**
 `driftwatch gate --format platform` emits the workspace's shared
 `platform.gate-result` contract, and refuses rather than coercing whenever the run

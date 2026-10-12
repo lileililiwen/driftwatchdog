@@ -457,7 +457,7 @@ before every relevant change is archived or completed:
     driftwatch gate --dry-run   # show the resolved plan; no execution, no persistence
     driftwatch gate             # execute applicable checks, persist the result, exit nonzero when blocked
     driftwatch gate --format json  # machine-readable status document
-    driftwatch gate --format platform  # platform.gate-result document; refuses rather than coerces
+    driftwatch gate --format platform  # platform.gate-result 1.0.0 document; refuses rather than coerces
     driftwatch gate evidence-export                  # completed-run -> Workspace Governance vocabulary
     driftwatch gate evidence-export --format json    # versioned `EvidenceExport` document
 
@@ -474,31 +474,54 @@ point for legacy checker-only projects.
 ### Emitting a `platform.gate-result` document
 
 `driftwatch gate --format platform` prints the same run in the
-workspace's shared `platform.gate-result` contract, so a portfolio
-consumer can read "may this deploy proceed?" without scraping the human
-table or hard-coding driftwatchdog's vocabulary.
+workspace's shared `platform.gate-result` contract at **major 1.0.0**,
+so a portfolio consumer can read "may this deploy proceed?" without
+scraping the human table or hard-coding driftwatchdog's vocabulary. The
+document declares the version it claims in a root `contract` field
+(`platform.gate-result/1.0.0`), the same shape `driftwatch check
+--format json` uses for `driftwatch-checker/0.1.0`.
 
-The two vocabularies are not the same shape, and the honest answer for
-many runs is refusal. `PASS` becomes `passed`, `FAIL` becomes `failed`,
-and `NOT_APPLICABLE` — a *proven* absence — becomes `skipped`.
-`REVIEW_REQUIRED` and `UNBOUND` have no platform equivalent at all: the
-contract has no human-decision state, and `skipped` would merge a
-never-attempted check with a proven exemption, which this Gate holds to
-be opposite claims. The emitter refuses rather than coercing. On refusal
-it writes **nothing** to stdout, prints one diagnostic naming the exact
-state or value and the check ids, and exits `2`; the gate run itself is
-still executed and still persisted.
+The two vocabularies now have the same six values, and every status maps
+onto one of them:
 
-Identifiers are checked the same way. A manifest check id that does not
-match the platform's `^[a-z][a-z0-9_.-]{0,63}$` is refused, not
-slugged — no reversible slug fits inside 64 characters, and lowering
-`L1-configuration` would merge it with `l1-configuration`. Conforming
-ids pass through unchanged and are repeated verbatim in the check's
-`driftwatch_gate_id`. An over-length diagnostic or evidence reference is
-refused rather than truncated, and the profile is preserved verbatim in
-`driftwatch_profile`.
+| `GateStatus` | platform | claim |
+|---|---|---|
+| `PASS` | `passed` | ran and passed |
+| `FAIL` | `failed` | ran and reported a failure |
+| `NOT_APPLICABLE` | `skipped` | a proven exemption |
+| `REVIEW_REQUIRED` | `review_required` | a human decision is still open |
+| `UNBOUND` | `unbound` | asserted, no command bound, nothing ran |
+| — | `errored` | never emitted; every execution failure is already a `REVIEW_REQUIRED` |
+
+`review_required` and `unbound` are not approximations. The contract
+defines them with exactly the claims this Gate makes and forbids merging
+them: *"A consumer MUST NOT read `skipped` and `unbound` alike, and MUST
+NOT read `review_required` as a decision already taken."* Optionality
+still changes whether a status blocks and never changes what it claims,
+so an optional unbound check is emitted as `unbound` under a `passed`
+root result rather than refused.
+
+Identifiers and lengths are where refusal still lives. A manifest check
+id that does not match the platform's `^[a-z][a-z0-9_.-]{0,63}$` is
+refused, not slugged — no reversible slug fits inside 64 characters, and
+lowering `L1-configuration` would merge it with `l1-configuration`.
+Conforming ids pass through unchanged and are repeated verbatim in the
+check's `driftwatch_gate_id`. An over-length diagnostic or evidence
+reference is refused rather than truncated, and the profile is preserved
+verbatim in `driftwatch_profile`. On refusal the emitter writes
+**nothing** to stdout, prints one diagnostic naming the exact value and
+the constraint, and exits `2`; the gate run itself is still executed and
+still persisted.
 
     driftwatch gate --format platform > gate-result.json   # exits 2 and prints nothing when unrepresentable
+
+**Known gap.** This Gate bounds a diagnostic at 2,048 bytes plus an
+ellipsis (2,049 characters) and the contract bounds `detail` at 512, so a
+run whose build or test output is longer refuses on `detail` alone. That
+is measured, not hypothetical: it is the reason `--format platform`
+currently refuses on this repository and on `forge`. Resolving it needs a
+contract decision (carry the long text in an additional property, or
+raise `detail.maxLength`) and is deliberately not decided here.
 
 Validation against the contract belongs to the consumer, which already
 vendors the schema; driftwatchdog asserts the constraints it depends on
