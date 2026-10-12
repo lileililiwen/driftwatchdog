@@ -225,21 +225,24 @@ pub enum CheckFormatArg {
     Json,
 }
 
-/// `driftwatch gate [--dry-run] [--format human|json]`
+/// `driftwatch gate [--dry-run] [--format human|json|platform]`
 #[derive(Debug, Args, Default, Clone)]
 #[command(
-    after_help = "Examples:\n  driftwatch gate\n  driftwatch gate --dry-run\n  driftwatch gate --format json\n  driftwatch gate evidence-export                  # completed-run -> governance vocabulary\n  driftwatch gate evidence-export --format json"
+    after_help = "Examples:\n  driftwatch gate\n  driftwatch gate --dry-run\n  driftwatch gate --format json\n  driftwatch gate --format platform                  # platform.gate-result document; refuses rather than coerces\n  driftwatch gate evidence-export                  # completed-run -> governance vocabulary\n  driftwatch gate evidence-export --format json"
 )]
 pub struct GateArgs {
     /// Show the resolved plan without child execution or persistence.
     #[arg(long)]
     pub dry_run: bool,
     /// Output format. `human` prints a table; `json` prints a
-    /// machine-readable status document to stdout.
-    #[arg(long, value_enum, default_value_t = GateFormatArg::Human)]
-    pub format: GateFormatArg,
-    /// Optional subcommand. When present, the top-level `gate` flags
-    /// are ignored and the subcommand takes over.
+    /// machine-readable status document to stdout; `platform` prints a
+    /// `platform.gate-result` document and refuses, rather than coercing,
+    /// when a status or identifier has no honest equivalent in that
+    /// contract.
+    #[arg(long, value_enum, default_value_t = GateOutputFormat::Human)]
+    pub format: GateOutputFormat,
+    /// Optional subcommand. When present, the top-level `gate` flags are
+    /// ignored and the subcommand takes over.
     #[command(subcommand)]
     pub subcommand: Option<GateSubcommand>,
 }
@@ -277,6 +280,24 @@ pub enum GateFormatArg {
     #[default]
     Human,
     Json,
+}
+
+/// Output format for the top-level `driftwatch gate` command.
+///
+/// Deliberately a separate enum from [`GateFormatArg`]: `gate
+/// evidence-export` emits a different vocabulary and keeps exactly two
+/// values, so widening the shared enum would have silently widened that
+/// subcommand's surface too. `Human` and `Json` behave identically to
+/// [`GateFormatArg`]; `Platform` is additive.
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub enum GateOutputFormat {
+    #[default]
+    Human,
+    Json,
+    /// Emit a `platform.gate-result` document. Writes nothing to stdout and
+    /// exits `2` when a status or identifier has no honest equivalent in
+    /// that contract; see `gate::platform_result`.
+    Platform,
 }
 
 /// `driftwatch link bug:<id> spec:<id> [--note "..."]`

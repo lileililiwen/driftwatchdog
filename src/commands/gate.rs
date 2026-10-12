@@ -23,13 +23,20 @@
 //!    `gate_runs` row transactionally, print remediation, and exit
 //!    nonzero when blocked.
 //!
+//! Three output formats sit on top of the same run. `--format human` and
+//! `--format json` are driftwatchdog's own; `--format platform` emits the
+//! portfolio's `platform.gate-result` contract through
+//! [`crate::gate::platform_result`] and exits `2` — writing nothing to
+//! stdout — when the run has no status or identifier the contract can name
+//! without a coercion. All three read the same persisted run.
+//!
 //! `driftwatch check` remains the compatibility entry point for legacy
 //! checker-only projects and is untouched.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::cli::{GateArgs, GateFormatArg};
+use crate::cli::{GateArgs, GateOutputFormat};
 use crate::error::Error;
 use crate::gate::adapters::{
     default_registry, run_capability_conformance_adapter, run_product_quality_adapter,
@@ -44,6 +51,7 @@ use crate::gate::concerns::{
 use crate::gate::dto::{to_gate_run_json, MAX_DIAGNOSTIC_BYTES, MAX_REMEDIATION_BYTES};
 use crate::gate::governance::run_governance_quality_adapter;
 use crate::gate::manifest::{self, ExemptionVerdict, ResolvedGatePlan, MAX_EXEMPTION_REASON_BYTES};
+use crate::gate::platform_result::{self, PlatformRun, PLATFORM_PIPELINE};
 use crate::gate::redact::bound_text;
 use crate::gate::types::{Finding, GateResult, GateSeverity, GateStatus};
 use crate::project::{git, ProjectRoot};
@@ -53,6 +61,11 @@ use crate::util::truncate_char_boundary;
 
 const EXIT_OK: i32 = 0;
 const EXIT_BLOCKED: i32 = 1;
+/// The run could not be published as a `platform.gate-result` document
+/// because some status or value has no honest equivalent in that contract.
+/// Reachable only through `--format platform`; no existing path can produce
+/// it, so `0` and `1` keep their meaning everywhere else.
+const EXIT_UNREPRESENTABLE: i32 = 2;
 /// Deadline applied to a check that declares no `timeout_ms` of its
 /// own. Unchanged from the constant that used to serve every check in
 /// the fleet, so no existing manifest needs an edit to keep its
@@ -132,8 +145,15 @@ pub fn gate(args: GateArgs, cwd: &Path) -> Result<i32, Error> {
     )?;
 
     match args.format {
-        GateFormatArg::Json => print_json(&outcome, &results, &resolved),
-        GateFormatArg::Human => print_human(&outcome, &results, &resolved),
+        GateOutputFormat::Json => print_json(&outcome, &results, &resolved),
+        GateOutputFormat::Human => print_human(&outcome, &results, &resolved),
+        GateOutputFormat::Platform => {
+            // The run is already persisted above: a refusal is a statement
+            // about emission, never about the run.
+            return Ok(print_platform(
+                &outcome, &results, &resolved, &taken_at, &revision,
+            ));
+        }
     }
 
     if outcome.blocked {
@@ -556,6 +576,55 @@ fn print_json(outcome: &AggregateOutcome, results: &[GateResult], resolved: &Res
     println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
 }
 
+/// Emit the `platform.gate-result` document, or refuse.
+///
+/// The document is built completely in memory before anything is printed,
+/// so there is no partial or coerced output on any path. On refusal stdout
+/// stays empty, one typed diagnostic naming the exact unrepresentable
+/// state or value goes to stderr, and the process exits
+/// [`EXIT_UNREPRESENTABLE`].
+///
+/// The refusal set is not a defensive edge: the platform contract has no
+/// human-decision state and no never-attempted state, so a run that needs
+/// either one genuinely has no document to publish. Declining is the honest
+/// answer, and the diagnostic names exactly which checks caused it.
+fn print_platform(
+    outcome: &AggregateOutcome,
+    results: &[GateResult],
+    resolved: &ResolvedGatePlan,
+    evaluated_at: &str,
+    subject_ref: &str,
+) -> i32 {
+    match platform_result::build(PlatformRun {
+        gate_id: &resolved.manifest_digest,
+        pipeline: PLATFORM_PIPELINE,
+        profile: &resolved.profile,
+        evaluated_at,
+        subject_ref: Some(subject_ref),
+        aggregate: outcome.status,
+        results,
+    }) {
+        Ok(doc) => {
+            println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+            if outcome.blocked {
+                EXIT_BLOCKED
+            } else {
+                EXIT_OK
+            }
+        }
+        Err(refusal) => {
+            eprintln!(
+                "driftwatch gate: refusing to emit a platform gate-result document: {refusal}"
+            );
+            eprintln!(
+                "driftwatch gate: nothing was written to stdout; use --format json for \
+                 driftwatchdog's own machine-readable status document."
+            );
+            EXIT_UNREPRESENTABLE
+        }
+    }
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -634,7 +703,7 @@ mod tests {
     fn gate_args(dry_run: bool) -> GateArgs {
         GateArgs {
             dry_run,
-            format: GateFormatArg::Human,
+            format: GateOutputFormat::Human,
             subcommand: None,
         }
     }

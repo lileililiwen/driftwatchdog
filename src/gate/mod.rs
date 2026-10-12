@@ -26,7 +26,11 @@
 //! owns the `governance-quality` concern's code-scoped adapter (it runs
 //! the project-bound governance checker, keeps only the finding codes
 //! the concern declares, and maps those findings onto the envelope; it
-//! binds no checker path of its own).
+//! binds no checker path of its own); [`platform_result`] owns the
+//! `platform.gate-result` emission — the pure mapping from a completed run
+//! onto the portfolio's vendored contract, plus the typed refusals for every
+//! driftwatchdog state or value that contract cannot name without a
+//! coercion.
 //!
 //! No OpenSpec types appear here. No tool is installed implicitly, no
 //! network call is made, and no LLM is invoked.
@@ -43,6 +47,7 @@ pub mod evidence;
 pub mod evidence_export;
 pub mod governance;
 pub mod manifest;
+pub mod platform_result;
 pub mod redact;
 pub mod source_size;
 pub mod toolchain;
@@ -95,6 +100,12 @@ pub use manifest::{
     ExemptionVerdict, GovernanceQualityPolicy, LoadOutcome, SourceSizePolicy, DEFAULT_MAX_LINES,
     EXEMPTION_BUDGET_CHECK, MAX_EXEMPTION_CAP, MAX_MAX_LINES, NON_EXEMPTABLE_ALIASES,
     NON_EXEMPTABLE_CONCERNS,
+};
+pub use platform_result::{
+    build as build_platform_gate_result, map_status as map_platform_status, PlatformCheck,
+    PlatformGateResult, PlatformRun, PlatformStatus, Refusal as PlatformRefusal, StatusMapping,
+    CHECK_ID_PATTERN, GATE_ID_PATTERN, MAX_CHECK_ID_CHARS, MAX_DETAIL_CHARS,
+    MAX_EVIDENCE_REF_CHARS, MAX_SUBJECT_REF_CHARS, PIPELINE_PATTERN, PLATFORM_PIPELINE,
 };
 pub use redact::{
     bound_text_with_extra, bounded_diagnostic, redact_secrets, redact_secrets_with_extra,

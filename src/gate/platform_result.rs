@@ -1,0 +1,1165 @@
+//! Machine-readable emission of a completed gate run as a
+//! `platform.gate-result` document.
+//!
+//! This module is the only producer of that contract in the portfolio.
+//! It is a **pure mapping with an exit**: given an executed run it either
+//! returns a complete document that conforms to the vendored schema, or a
+//! typed [`Refusal`] explaining exactly which value could not be
+//! represented without losing or inventing a claim.
+//!
+//! The two vocabularies do not have the same shape. Driftwatchdog has five
+//! [`GateStatus`] states; the platform has four values
+//! (`passed`, `failed`, `errored`, `skipped`) and no human-decision state:
+//!
+//! | [`GateStatus`] | platform | judgement |
+//! |---|---|---|
+//! | `PASS` | `passed` | direct |
+//! | `FAIL` | `failed` | direct; severity stays orthogonal and unmapped |
+//! | `NOT_APPLICABLE` | `skipped` | the proven absence is the one `skipped` can honestly name |
+//! | `REVIEW_REQUIRED` | — | **unrepresentable**: a human decision is still open and the platform has no such state |
+//! | `UNBOUND` | — | **unrepresentable**: coercing it to `skipped` would merge a never-attempted check with a proven exemption, which [`GateStatus`]'s own invariant forbids |
+//!
+//! `errored` is never emitted. The platform defines no execution-failure
+//! taxonomy for this producer, and every execution failure driftwatchdog
+//! observes (timeout, spawn failure, malformed envelope, exit-code
+//! contradiction) is already normalized to `REVIEW_REQUIRED`, which is
+//! itself refused. A run that would need `errored` semantics arrives as a
+//! refusal naming its checks, which is more useful than an invented mapping.
+//!
+//! Identity is the second problem. [`GateStatus`] aside, a check id comes
+//! from a project manifest that validates only that it is non-empty, while
+//! the platform requires `^[a-z][a-z0-9_.-]{0,63}$`. There is no lossless
+//! reversible slug inside 64 characters for arbitrary ids — lowercasing
+//! merges `L1-configuration` with `l1-configuration`, truncation merges
+//! long ids with each other, and every encoding scheme that would need a
+//! parser to be reversible is a scheme the first opaque-string consumer
+//! will misread. So conforming ids pass through **unchanged** and everything
+//! else is refused.
+//!
+//! Nothing here reads the clock, the filesystem, the database, or the
+//! manifest, so a unit test and a production run take the same branch. No
+//! JSON-Schema validator is used: the consumer owns validation, and a
+//! second copy of the schema's rules inside the producer would mask schema
+//! drift rather than surface it.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::gate::redact::redact_secrets;
+use crate::gate::types::{GateResult, GateStatus};
+
+/// The `pipeline` value this producer reports. A pipeline is a property of
+/// whatever produced the document, and for a `driftwatch gate` run that is
+/// always driftwatchdog's gate — never the project-owned profile, whose
+/// shape no platform pattern can express. The profile is preserved verbatim
+/// in the root `driftwatch_profile` additional property instead.
+pub const PLATFORM_PIPELINE: &str = "driftwatchdog-gate";
+
+/// Platform `result` / `checks[].status` vocabulary. `Errored` is part of
+/// the platform contract and is deliberately never constructed; see the
+/// module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlatformStatus {
+    Passed,
+    Failed,
+    Errored,
+    Skipped,
+}
+
+impl PlatformStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlatformStatus::Passed => "passed",
+            PlatformStatus::Failed => "failed",
+            PlatformStatus::Errored => "errored",
+            PlatformStatus::Skipped => "skipped",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "passed" => Some(PlatformStatus::Passed),
+            "failed" => Some(PlatformStatus::Failed),
+            "errored" => Some(PlatformStatus::Errored),
+            "skipped" => Some(PlatformStatus::Skipped),
+            _ => None,
+        }
+    }
+}
+
+/// What one driftwatchdog status means in the platform vocabulary.
+///
+/// This is a value, not a `Result`: the mapping is total and never fails.
+/// Unrepresentability is a property of the *data*, and naming it as a
+/// variant makes the table impossible to complete by accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusMapping {
+    /// The status has an honest platform equivalent.
+    Representable(PlatformStatus),
+    /// The status has none. Carries the driftwatchdog wire string so the
+    /// diagnostic can name the exact state rather than a paraphrase.
+    Unrepresentable(&'static str),
+}
+
+/// Map one [`GateStatus`] onto the platform vocabulary.
+///
+/// Total by construction: every [`GateStatus`] variant has an arm, so adding
+/// a sixth state is a compile error here rather than a silent emission.
+pub fn map_status(status: GateStatus) -> StatusMapping {
+    match status {
+        GateStatus::Pass => StatusMapping::Representable(PlatformStatus::Passed),
+        GateStatus::Fail => StatusMapping::Representable(PlatformStatus::Failed),
+        GateStatus::NotApplicable => StatusMapping::Representable(PlatformStatus::Skipped),
+        GateStatus::ReviewRequired => {
+            StatusMapping::Unrepresentable(GateStatus::ReviewRequired.as_str())
+        }
+        GateStatus::Unbound => StatusMapping::Unrepresentable(GateStatus::Unbound.as_str()),
+    }
+}
+
+/// One emitted check. `driftwatch_gate_id` is an additional property the
+/// schema permits; it repeats the driftwatchdog id verbatim. The mapping is
+/// the identity today, so it is redundant — it is emitted precisely so that
+/// the round trip stays machine-checkable if the mapping ever has to
+/// normalise, and so a consumer never has to guess which vocabulary an id
+/// belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformCheck {
+    pub check_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub driftwatch_gate_id: String,
+}
+
+/// A complete `platform.gate-result` document.
+///
+/// `driftwatch_profile` is an additional property carrying the project-owned
+/// profile verbatim; the schema constrains it not at all, which is exactly
+/// why the profile cannot be used as `pipeline`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformGateResult {
+    pub gate_id: String,
+    pub pipeline: String,
+    pub evaluated_at: String,
+    pub result: String,
+    pub subject_ref: Option<String>,
+    pub checks: Vec<PlatformCheck>,
+    pub evidence_refs: Vec<String>,
+    pub driftwatch_profile: String,
+}
+
+/// Everything the emitter needs about one executed run. Borrowed, so the
+/// mapping allocates only what the document contains.
+#[derive(Debug, Clone, Copy)]
+pub struct PlatformRun<'a> {
+    /// The run's manifest digest (`sha256:` + hex); also the run's identity
+    /// in `gate_runs`.
+    pub gate_id: &'a str,
+    /// The pipeline reporting itself. The CLI passes [`PLATFORM_PIPELINE`];
+    /// the parameter exists so the pattern check is reachable and testable.
+    pub pipeline: &'a str,
+    /// Project-owned profile name, carried verbatim.
+    pub profile: &'a str,
+    /// The run's RFC 3339 timestamp.
+    pub evaluated_at: &'a str,
+    /// The run's gated revision, when one was captured.
+    pub subject_ref: Option<&'a str>,
+    /// The aggregate status of the run.
+    pub aggregate: GateStatus,
+    /// Every normalized result, in plan order.
+    pub results: &'a [GateResult],
+}
+
+/// Why a document could not be emitted. Every variant names the exact value
+/// and the exact constraint it violated.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum Refusal {
+    #[error(
+        "the aggregate status {status} has no platform.gate-result equivalent \
+         (platform result is one of passed, failed, errored, skipped); {because}"
+    )]
+    AggregateStatus {
+        status: &'static str,
+        because: &'static str,
+    },
+
+    #[error("checks with status {status} have no platform.gate-result equivalent and are not coerced: {ids}")]
+    CheckStatus { status: &'static str, ids: String },
+
+    #[error("gate_id `{value}` does not match the platform pattern {pattern}")]
+    GateId {
+        value: String,
+        pattern: &'static str,
+    },
+
+    #[error("pipeline `{value}` does not match the platform pattern {pattern}")]
+    Pipeline {
+        value: String,
+        pattern: &'static str,
+    },
+
+    #[error("subject_ref is {length} characters; the platform allows at most {max} and driftwatchdog does not truncate it")]
+    SubjectRef { length: usize, max: usize },
+
+    #[error("evaluated_at `{value}` is not an RFC 3339 date-time")]
+    EvaluatedAt { value: String },
+
+    #[error(
+        "check id `{value}` does not match the platform pattern {pattern}; \
+         no reversible slug exists inside {max} characters, so driftwatchdog refuses instead of coercing it"
+    )]
+    CheckId {
+        value: String,
+        pattern: &'static str,
+        max: usize,
+    },
+
+    #[error(
+        "check `{check_id}` has a {length}-character diagnostic; the platform allows at most {max} \
+         for detail and driftwatchdog does not truncate a diagnostic to fit"
+    )]
+    Detail {
+        check_id: String,
+        length: usize,
+        max: usize,
+    },
+
+    #[error("evidence reference key `{key}` cannot be represented: the platform requires {min} to {max} characters")]
+    EvidenceRef { key: String, min: usize, max: usize },
+}
+
+const REVIEW_REQUIRED_BECAUSE: &str =
+    "driftwatchdog's REVIEW_REQUIRED means a human decision is still open and the platform has no human-decision state";
+const UNBOUND_BECAUSE: &str =
+    "coercion to skipped would merge a never-attempted check with a proven exemption, which driftwatchdog forbids";
+
+pub const GATE_ID_PATTERN: &str = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$";
+pub const PIPELINE_PATTERN: &str = "^[a-z][a-z0-9_.-]{0,127}$";
+pub const CHECK_ID_PATTERN: &str = "^[a-z][a-z0-9_.-]{0,63}$";
+
+/// `maxLength` for `subject_ref`, in Unicode code points.
+pub const MAX_SUBJECT_REF_CHARS: usize = 256;
+/// `maxLength` for `checks[].detail`, in Unicode code points.
+pub const MAX_DETAIL_CHARS: usize = 512;
+/// `maxLength` for each `evidence_refs` entry, in Unicode code points.
+pub const MAX_EVIDENCE_REF_CHARS: usize = 512;
+/// `maxLength` for `checks[].check_id`, in Unicode code points.
+pub const MAX_CHECK_ID_CHARS: usize = 64;
+
+/// Build the platform document, or refuse.
+///
+/// Pure: the only inputs are the arguments of `run`. Nothing is printed here
+/// and nothing is written anywhere — the caller prints a complete document or
+/// prints nothing at all, so a partial emission is not representable.
+///
+/// Refusals are evaluated in a fixed order — statuses, then root identity,
+/// then per-check shape — so a substantive refusal is never masked by a
+/// cosmetic one, and the diagnostic is identical on every run.
+pub fn build(run: PlatformRun<'_>) -> Result<PlatformGateResult, Refusal> {
+    // 1. Aggregate status. `REVIEW_REQUIRED` and `UNBOUND` have no platform
+    //    state and are refused, never lowered.
+    let result = match map_status(run.aggregate) {
+        StatusMapping::Representable(s) => s,
+        StatusMapping::Unrepresentable(status) => {
+            return Err(Refusal::AggregateStatus {
+                status,
+                because: unrepresentable_because(status),
+            })
+        }
+    };
+
+    // 2. Per-check statuses. This is stricter than "required checks only": an
+    //    optional check under review is still a check a human has not
+    //    decided about, and publishing it as `skipped` would make the same
+    //    false claim. Collect every offender so one diagnostic names them all.
+    let mut unrepresentable: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut mapped: Vec<(PlatformStatus, Option<String>)> = Vec::with_capacity(run.results.len());
+    for r in run.results {
+        let status = match map_status(r.status) {
+            StatusMapping::Representable(s) => s,
+            StatusMapping::Unrepresentable(status) => {
+                unrepresentable
+                    .entry(status)
+                    .or_default()
+                    .push(r.gate_id.clone());
+                // Reserve a slot so index alignment with `results` holds;
+                // this value is never read because the loop below refuses.
+                mapped.push((PlatformStatus::Passed, None));
+                continue;
+            }
+        };
+        // Redaction removes content; bounding would invent it. Only
+        // `redact_secrets` is applied, and the length is then checked rather
+        // than clamped.
+        let detail = r
+            .diagnostic
+            .as_deref()
+            .map(redact_secrets)
+            .filter(|d| !d.is_empty());
+        mapped.push((status, detail));
+    }
+    if let Some((status, ids)) = unrepresentable.into_iter().next() {
+        return Err(Refusal::CheckStatus {
+            status,
+            ids: sorted_ids(ids),
+        });
+    }
+
+    // 3. Root identity.
+    if !matches_gate_id(run.gate_id) {
+        return Err(Refusal::GateId {
+            value: run.gate_id.to_string(),
+            pattern: GATE_ID_PATTERN,
+        });
+    }
+    if !matches_pipeline(run.pipeline) {
+        return Err(Refusal::Pipeline {
+            value: run.pipeline.to_string(),
+            pattern: PIPELINE_PATTERN,
+        });
+    }
+    if let Some(subject) = run.subject_ref {
+        let length = subject.chars().count();
+        if length > MAX_SUBJECT_REF_CHARS {
+            return Err(Refusal::SubjectRef {
+                length,
+                max: MAX_SUBJECT_REF_CHARS,
+            });
+        }
+    }
+    if chrono::DateTime::parse_from_rfc3339(run.evaluated_at).is_err() {
+        return Err(Refusal::EvaluatedAt {
+            value: run.evaluated_at.to_string(),
+        });
+    }
+
+    // 4. Per-check shape: id, then detail, then evidence references.
+    let mut checks = Vec::with_capacity(run.results.len());
+    for (r, (status, detail)) in run.results.iter().zip(mapped) {
+        if !matches_check_id(&r.gate_id) {
+            return Err(Refusal::CheckId {
+                value: r.gate_id.clone(),
+                pattern: CHECK_ID_PATTERN,
+                max: MAX_CHECK_ID_CHARS,
+            });
+        }
+        if let Some(detail) = detail.as_deref() {
+            let length = detail.chars().count();
+            if length > MAX_DETAIL_CHARS {
+                return Err(Refusal::Detail {
+                    check_id: r.gate_id.clone(),
+                    length,
+                    max: MAX_DETAIL_CHARS,
+                });
+            }
+        }
+        checks.push(PlatformCheck {
+            check_id: r.gate_id.clone(),
+            status: status.as_str().to_string(),
+            detail,
+            driftwatch_gate_id: r.gate_id.clone(),
+        });
+    }
+
+    let mut evidence_refs: Vec<String> = Vec::new();
+    for r in run.results {
+        for e in &r.evidence {
+            let key = redact_secrets(&e.key);
+            let length = key.chars().count();
+            if length == 0 || length > MAX_EVIDENCE_REF_CHARS {
+                return Err(Refusal::EvidenceRef {
+                    key: e.key.clone(),
+                    min: 1,
+                    max: MAX_EVIDENCE_REF_CHARS,
+                });
+            }
+            // First-seen order, duplicates removed: deterministic, and a
+            // consumer resolving a key reaches the same artifact the run did.
+            if !evidence_refs.iter().any(|k| k == &key) {
+                evidence_refs.push(key);
+            }
+        }
+    }
+
+    Ok(PlatformGateResult {
+        gate_id: run.gate_id.to_string(),
+        pipeline: run.pipeline.to_string(),
+        evaluated_at: run.evaluated_at.to_string(),
+        result: result.as_str().to_string(),
+        subject_ref: run.subject_ref.map(str::to_string),
+        checks,
+        evidence_refs,
+        driftwatch_profile: run.profile.to_string(),
+    })
+}
+
+fn unrepresentable_because(status: &'static str) -> &'static str {
+    match status {
+        "UNBOUND" => UNBOUND_BECAUSE,
+        _ => REVIEW_REQUIRED_BECAUSE,
+    }
+}
+
+fn sorted_ids(ids: Vec<String>) -> String {
+    let mut ids = ids;
+    ids.sort();
+    ids.dedup();
+    ids.join(", ")
+}
+
+/// Total-length caps from the `{0,n}` quantifiers in the patterns. These are
+/// schema `maxLength`s expressed as whole-string limits: the leading class
+/// plus its repetition.
+pub const MAX_GATE_ID_CHARS: usize = 128;
+pub const MAX_PIPELINE_CHARS: usize = 128;
+
+/// `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$` as a direct ASCII scan. The
+/// pattern is an anchored ASCII character class, so a scan is equivalent to
+/// the regex and costs no dependency. The `{0,127}` tail is enforced as a
+/// whole-string length cap — a scan that checks the alphabet but forgets the
+/// quantifier accepts ids the schema rejects.
+fn matches_gate_id(s: &str) -> bool {
+    if s.chars().count() > MAX_GATE_ID_CHARS {
+        return false;
+    }
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
+/// `^[a-z][a-z0-9_.-]{0,127}$` as a direct ASCII scan.
+fn matches_pipeline(s: &str) -> bool {
+    if s.chars().count() > MAX_PIPELINE_CHARS {
+        return false;
+    }
+    let mut chars = s.chars();
+    match chars.next() {
+        Some('a'..='z') => {}
+        _ => return false,
+    }
+    chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '.' | '-'))
+}
+
+/// `^[a-z][a-z0-9_.-]{0,63}$` as a direct ASCII scan.
+fn matches_check_id(s: &str) -> bool {
+    if s.chars().count() > MAX_CHECK_ID_CHARS {
+        return false;
+    }
+    let mut chars = s.chars();
+    match chars.next() {
+        Some('a'..='z') => {}
+        _ => return false,
+    }
+    chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '.' | '-'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gate::types::{EvidenceRef, GateSeverity};
+
+    fn result(id: &str, status: GateStatus) -> GateResult {
+        GateResult {
+            gate_id: id.to_string(),
+            source: "test".to_string(),
+            status,
+            severity: GateSeverity::Info,
+            findings: vec![],
+            evidence: vec![],
+            missing_evidence: vec![],
+            diagnostic: None,
+            remediation: None,
+        }
+    }
+
+    fn passing() -> GateResult {
+        result("tests", GateStatus::Pass)
+    }
+
+    fn run<'a>(results: &'a [GateResult], aggregate: GateStatus) -> PlatformRun<'a> {
+        PlatformRun {
+            gate_id: "sha256:0123456789abcdef",
+            pipeline: PLATFORM_PIPELINE,
+            profile: "rust-product",
+            evaluated_at: "2026-10-12T10:00:00Z",
+            subject_ref: Some("9f1c0de"),
+            aggregate,
+            results,
+        }
+    }
+
+    // --- the mapping table -----------------------------------------------
+
+    #[test]
+    fn pass_maps_to_passed() {
+        assert_eq!(
+            map_status(GateStatus::Pass),
+            StatusMapping::Representable(PlatformStatus::Passed)
+        );
+    }
+
+    #[test]
+    fn fail_maps_to_failed() {
+        assert_eq!(
+            map_status(GateStatus::Fail),
+            StatusMapping::Representable(PlatformStatus::Failed)
+        );
+    }
+
+    #[test]
+    fn not_applicable_maps_to_skipped() {
+        assert_eq!(
+            map_status(GateStatus::NotApplicable),
+            StatusMapping::Representable(PlatformStatus::Skipped)
+        );
+    }
+
+    #[test]
+    fn review_required_is_unrepresentable() {
+        assert_eq!(
+            map_status(GateStatus::ReviewRequired),
+            StatusMapping::Unrepresentable("REVIEW_REQUIRED")
+        );
+    }
+
+    #[test]
+    fn unbound_is_unrepresentable() {
+        assert_eq!(
+            map_status(GateStatus::Unbound),
+            StatusMapping::Unrepresentable("UNBOUND")
+        );
+    }
+
+    /// The table is total, so no state can slip through un-mapped. The
+    /// `errored` value is reachable only here, which is the point: the
+    /// emitter never constructs it.
+    #[test]
+    fn every_status_has_an_arm_and_errored_is_never_produced() {
+        let all = [
+            GateStatus::Pass,
+            GateStatus::Fail,
+            GateStatus::ReviewRequired,
+            GateStatus::NotApplicable,
+            GateStatus::Unbound,
+        ];
+        for s in all {
+            let produced = match map_status(s) {
+                StatusMapping::Representable(p) => Some(p),
+                StatusMapping::Unrepresentable(_) => None,
+            };
+            assert_ne!(
+                produced,
+                Some(PlatformStatus::Errored),
+                "{s:?} must never become `errored`"
+            );
+        }
+    }
+
+    #[test]
+    fn platform_status_wire_strings_match_the_schema_enum() {
+        assert_eq!(PlatformStatus::Passed.as_str(), "passed");
+        assert_eq!(PlatformStatus::Failed.as_str(), "failed");
+        assert_eq!(PlatformStatus::Errored.as_str(), "errored");
+        assert_eq!(PlatformStatus::Skipped.as_str(), "skipped");
+        for s in [
+            PlatformStatus::Passed,
+            PlatformStatus::Failed,
+            PlatformStatus::Errored,
+            PlatformStatus::Skipped,
+        ] {
+            assert_eq!(PlatformStatus::parse(s.as_str()), Some(s));
+        }
+        assert_eq!(PlatformStatus::parse("PASS"), None);
+    }
+
+    // --- pattern validators ----------------------------------------------
+
+    #[test]
+    fn gate_id_pattern_accepts_and_rejects_the_right_values() {
+        for ok in [
+            "a",
+            "sha256:0123456789abcdef",
+            "driftwatchdog",
+            "A.b_c:d-e",
+            "9",
+        ] {
+            assert!(matches_gate_id(ok), "{ok} should match");
+        }
+        for bad in [
+            "",
+            "-leading",
+            ".leading",
+            "_leading",
+            ":leading",
+            "has space",
+            "héllo",
+        ] {
+            assert!(!matches_gate_id(bad), "{bad} should not match");
+        }
+        // 128 characters is the cap; 129 is not.
+        assert!(matches_gate_id(&"a".repeat(128)));
+        assert!(!matches_gate_id(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn pipeline_pattern_accepts_and_rejects_the_right_values() {
+        for ok in [
+            "driftwatchdog-gate",
+            "rust-product",
+            "minimal",
+            "a.b_c-d",
+            "a0",
+        ] {
+            assert!(matches_pipeline(ok), "{ok} should match");
+        }
+        for bad in ["", "Rust", "0abc", "has space", "with@at", "héllo"] {
+            assert!(!matches_pipeline(bad), "{bad} should not match");
+        }
+        assert!(matches_pipeline(&"a".repeat(128)));
+        assert!(!matches_pipeline(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn check_id_pattern_accepts_and_rejects_the_right_values() {
+        for ok in [
+            "tests",
+            "governance-quality",
+            "exemption-budget-2",
+            "source-file-size",
+            "c0ffee",
+            "a",
+            "a.b_c-d",
+        ] {
+            assert!(matches_check_id(ok), "{ok} should match");
+        }
+        // The exact cases the change is about.
+        for bad in ["", "L1-configuration", "0abc", "My Check", "résumé", "a:b"] {
+            assert!(!matches_check_id(bad), "{bad} should not match");
+        }
+        assert!(matches_check_id(&"a".repeat(64)));
+        assert!(!matches_check_id(&"a".repeat(65)));
+    }
+
+    // --- build: the happy paths ------------------------------------------
+
+    #[test]
+    fn a_clean_pass_builds_a_conforming_document() {
+        let results = vec![passing(), result("build", GateStatus::Pass)];
+        let doc = build(run(&results, GateStatus::Pass)).unwrap();
+        assert_eq!(doc.gate_id, "sha256:0123456789abcdef");
+        assert_eq!(doc.pipeline, PLATFORM_PIPELINE);
+        assert_eq!(doc.evaluated_at, "2026-10-12T10:00:00Z");
+        assert_eq!(doc.result, "passed");
+        assert_eq!(doc.subject_ref.as_deref(), Some("9f1c0de"));
+        assert_eq!(doc.driftwatch_profile, "rust-product");
+        assert_eq!(doc.checks.len(), 2);
+        assert_eq!(doc.checks[0].check_id, "tests");
+        assert_eq!(doc.checks[0].status, "passed");
+        assert_eq!(doc.checks[0].driftwatch_gate_id, "tests");
+        assert!(doc.evidence_refs.is_empty());
+    }
+
+    #[test]
+    fn a_clean_fail_builds_a_failing_document() {
+        let results = vec![result("tests", GateStatus::Fail)];
+        let doc = build(run(&results, GateStatus::Fail)).unwrap();
+        assert_eq!(doc.result, "failed");
+        assert_eq!(doc.checks[0].status, "failed");
+    }
+
+    #[test]
+    fn a_not_applicable_check_is_emitted_as_skipped() {
+        let results = vec![result("ux-review", GateStatus::NotApplicable)];
+        let doc = build(run(&results, GateStatus::Pass)).unwrap();
+        assert_eq!(doc.result, "passed");
+        assert_eq!(doc.checks[0].status, "skipped");
+        assert_eq!(doc.checks[0].check_id, "ux-review");
+    }
+
+    #[test]
+    fn an_optional_check_still_appears_with_its_own_status() {
+        // Optionality is not representable in the platform document. The
+        // check is emitted with its real status and the root `result` stays
+        // authoritative, which is what the contract says decides a deploy.
+        let results = vec![passing(), result("advisory", GateStatus::Fail)];
+        let doc = build(run(&results, GateStatus::Pass)).unwrap();
+        assert_eq!(doc.result, "passed");
+        assert_eq!(doc.checks[1].status, "failed");
+    }
+
+    #[test]
+    fn diagnostic_becomes_the_check_detail() {
+        let mut r = result("tests", GateStatus::Fail);
+        r.diagnostic = Some("cargo test: 3 failures".to_string());
+        let doc = build(run(&[r], GateStatus::Fail)).unwrap();
+        assert_eq!(
+            doc.checks[0].detail.as_deref(),
+            Some("cargo test: 3 failures")
+        );
+    }
+
+    #[test]
+    fn an_absent_diagnostic_is_omitted_rather_than_null() {
+        let doc = build(run(&[passing()], GateStatus::Pass)).unwrap();
+        assert_eq!(doc.checks[0].detail, None);
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(!json.contains("\"detail\""), "detail omitted: {json}");
+    }
+
+    #[test]
+    fn an_empty_diagnostic_is_omitted_rather_than_emitted_empty() {
+        let mut r = passing();
+        r.diagnostic = Some(String::new());
+        let doc = build(run(&[r], GateStatus::Pass)).unwrap();
+        assert_eq!(doc.checks[0].detail, None);
+    }
+
+    #[test]
+    fn the_document_serialises_to_the_contract_field_names() {
+        let doc = build(run(&[passing()], GateStatus::Pass)).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+        for required in ["gate_id", "pipeline", "evaluated_at", "result"] {
+            assert!(value.get(required).is_some(), "missing {required}");
+        }
+        assert_eq!(value["checks"][0]["check_id"], "tests");
+        assert_eq!(value["checks"][0]["status"], "passed");
+        // Additional properties the schema permits.
+        assert_eq!(value["checks"][0]["driftwatch_gate_id"], "tests");
+        assert_eq!(value["driftwatch_profile"], "rust-product");
+        // Never emitted: driftwatchdog has no tenant concept.
+        assert!(value.get("tenant_id").is_none());
+    }
+
+    // --- refusals ---------------------------------------------------------
+
+    #[test]
+    fn aggregate_review_required_refuses() {
+        let err = build(run(&[passing()], GateStatus::ReviewRequired)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::AggregateStatus {
+                status: "REVIEW_REQUIRED",
+                because: REVIEW_REQUIRED_BECAUSE,
+            }
+        );
+        assert!(err.to_string().contains("REVIEW_REQUIRED"));
+        assert!(err.to_string().contains("no human-decision state"));
+    }
+
+    #[test]
+    fn aggregate_unbound_refuses() {
+        let err = build(run(&[passing()], GateStatus::Unbound)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::AggregateStatus {
+                status: "UNBOUND",
+                because: UNBOUND_BECAUSE,
+            }
+        );
+        assert!(err.to_string().contains("UNBOUND"));
+    }
+
+    #[test]
+    fn a_check_under_review_refuses_and_names_the_ids() {
+        let results = vec![passing(), result("slow", GateStatus::ReviewRequired)];
+        let err = build(run(&results, GateStatus::Pass)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::CheckStatus {
+                status: "REVIEW_REQUIRED",
+                ids: "slow".to_string(),
+            }
+        );
+        assert!(err.to_string().contains("slow"));
+    }
+
+    #[test]
+    fn every_unrepresentable_check_id_is_named_once_and_sorted() {
+        let results = vec![
+            result("zzz", GateStatus::Unbound),
+            result("aaa", GateStatus::Unbound),
+            result("aaa", GateStatus::Unbound),
+            result("mmm", GateStatus::ReviewRequired),
+        ];
+        let err = build(run(&results, GateStatus::Pass)).unwrap_err();
+        // BTreeMap iteration is ordered, so REVIEW_REQUIRED is reported first.
+        assert_eq!(
+            err,
+            Refusal::CheckStatus {
+                status: "REVIEW_REQUIRED",
+                ids: "mmm".to_string(),
+            }
+        );
+        let results = vec![
+            result("zzz", GateStatus::Unbound),
+            result("aaa", GateStatus::Unbound),
+            result("aaa", GateStatus::Unbound),
+        ];
+        let err = build(run(&results, GateStatus::Pass)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::CheckStatus {
+                status: "UNBOUND",
+                ids: "aaa, zzz".to_string(),
+            }
+        );
+    }
+
+    /// The floor is "refuse on a required check". This implementation is
+    /// stricter: an optional pending review coerced to `skipped` would
+    /// publish the same false claim, so it refuses too.
+    #[test]
+    fn an_optional_review_under_review_also_refuses() {
+        let results = vec![passing(), result("advisory", GateStatus::ReviewRequired)];
+        let err = build(run(&results, GateStatus::Pass)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::CheckStatus {
+                status: "REVIEW_REQUIRED",
+                ids: "advisory".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_conforming_check_id_refuses_and_names_the_pattern() {
+        let results = vec![result("L1-configuration", GateStatus::Pass)];
+        let err = build(run(&results, GateStatus::Pass)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::CheckId {
+                value: "L1-configuration".to_string(),
+                pattern: CHECK_ID_PATTERN,
+                max: MAX_CHECK_ID_CHARS,
+            }
+        );
+        let text = err.to_string();
+        assert!(text.contains("L1-configuration"), "{text}");
+        assert!(text.contains("^[a-z][a-z0-9_.-]{0,63}$"), "{text}");
+        assert!(text.contains("no reversible slug"), "{text}");
+    }
+
+    #[test]
+    fn a_sixty_five_character_check_id_refuses() {
+        let long = "a".repeat(MAX_CHECK_ID_CHARS + 1);
+        let err = build(run(&[result(&long, GateStatus::Pass)], GateStatus::Pass)).unwrap_err();
+        assert!(matches!(err, Refusal::CheckId { .. }), "{err}");
+        // 64 is fine; 65 is not.
+        let ok = "a".repeat(MAX_CHECK_ID_CHARS);
+        assert!(build(run(&[result(&ok, GateStatus::Pass)], GateStatus::Pass)).is_ok());
+    }
+
+    #[test]
+    fn an_ellipsis_from_the_upstream_id_bound_refuses_rather_than_emitting() {
+        // `commands/gate.rs` truncates a check id to 128 characters with an
+        // ellipsis. The truncated value contains a character outside the
+        // platform alphabet, so the emitter reports it instead of shipping it.
+        let truncated = format!("{}…", "a".repeat(10));
+        let err = build(run(
+            &[result(&truncated, GateStatus::Pass)],
+            GateStatus::Pass,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, Refusal::CheckId { .. }), "{err}");
+    }
+
+    #[test]
+    fn an_over_length_diagnostic_refuses_with_the_check_and_length() {
+        let mut r = result("tests", GateStatus::Fail);
+        r.diagnostic = Some("x".repeat(MAX_DETAIL_CHARS + 1));
+        let err = build(run(&[r], GateStatus::Fail)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::Detail {
+                check_id: "tests".to_string(),
+                length: MAX_DETAIL_CHARS + 1,
+                max: MAX_DETAIL_CHARS,
+            }
+        );
+        let text = err.to_string();
+        assert!(text.contains("tests"), "{text}");
+        assert!(text.contains("does not truncate"), "{text}");
+    }
+
+    #[test]
+    fn a_diagnostic_at_exactly_the_limit_is_emitted() {
+        let mut r = result("tests", GateStatus::Fail);
+        r.diagnostic = Some("x".repeat(MAX_DETAIL_CHARS));
+        let doc = build(run(&[r], GateStatus::Fail)).unwrap();
+        assert_eq!(
+            doc.checks[0].detail.as_ref().unwrap().chars().count(),
+            MAX_DETAIL_CHARS
+        );
+    }
+
+    /// The schema counts code points; `str::len()` counts bytes. A
+    /// 300-byte, 300-character multi-byte diagnostic must still be measured
+    /// correctly, and one over the code-point limit must refuse even when it
+    /// is under the byte limit in the other direction.
+    #[test]
+    fn detail_length_is_measured_in_code_points_not_bytes() {
+        let mut r = result("tests", GateStatus::Fail);
+        // 512 two-byte characters: 1024 bytes, 512 code points. Conforming.
+        r.diagnostic = Some("é".repeat(MAX_DETAIL_CHARS));
+        let doc = build(run(&[r.clone()], GateStatus::Fail)).unwrap();
+        assert_eq!(
+            doc.checks[0].detail.as_ref().unwrap().chars().count(),
+            MAX_DETAIL_CHARS
+        );
+
+        // 513 two-byte characters: 1026 bytes, 513 code points. Not
+        // conforming, and the refusal reports 513 — not 1026.
+        r.diagnostic = Some("é".repeat(MAX_DETAIL_CHARS + 1));
+        let err = build(run(&[r], GateStatus::Fail)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::Detail {
+                check_id: "tests".to_string(),
+                length: MAX_DETAIL_CHARS + 1,
+                max: MAX_DETAIL_CHARS,
+            }
+        );
+    }
+
+    #[test]
+    fn an_over_length_subject_ref_refuses() {
+        let results = [passing()];
+        let mut r = run(&results, GateStatus::Pass);
+        let long_revision = "r".repeat(MAX_SUBJECT_REF_CHARS + 1);
+        r.subject_ref = Some(&long_revision);
+        let err = build(r).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::SubjectRef {
+                length: MAX_SUBJECT_REF_CHARS + 1,
+                max: MAX_SUBJECT_REF_CHARS,
+            }
+        );
+        assert!(err.to_string().contains("does not truncate"));
+    }
+
+    #[test]
+    fn a_non_rfc3339_timestamp_refuses() {
+        let results = [passing()];
+        let mut r = run(&results, GateStatus::Pass);
+        r.evaluated_at = "2026-10-12 10:00:00";
+        let err = build(r).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::EvaluatedAt {
+                value: "2026-10-12 10:00:00".to_string()
+            }
+        );
+        assert!(err.to_string().contains("RFC 3339"));
+    }
+
+    #[test]
+    fn an_rfc3339_timestamp_with_an_offset_is_accepted() {
+        let results = [passing()];
+        let mut r = run(&results, GateStatus::Pass);
+        r.evaluated_at = "2026-10-12T12:00:00+02:00";
+        assert_eq!(build(r).unwrap().evaluated_at, "2026-10-12T12:00:00+02:00");
+    }
+
+    #[test]
+    fn a_non_conforming_gate_id_refuses() {
+        let results = [passing()];
+        let mut r = run(&results, GateStatus::Pass);
+        r.gate_id = "sha256/abc";
+        let err = build(r).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::GateId {
+                value: "sha256/abc".to_string(),
+                pattern: GATE_ID_PATTERN,
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_conforming_pipeline_refuses() {
+        let results = [passing()];
+        let mut r = run(&results, GateStatus::Pass);
+        r.pipeline = "Bad Pipeline";
+        let err = build(r).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::Pipeline {
+                value: "Bad Pipeline".to_string(),
+                pattern: PIPELINE_PATTERN,
+            }
+        );
+    }
+
+    /// The CLI always passes the constant, so this is a guard against the
+    /// constant ever drifting out of the pattern rather than a live path.
+    #[test]
+    fn the_shipped_pipeline_constant_conforms() {
+        assert!(matches_pipeline(PLATFORM_PIPELINE));
+        assert!(PLATFORM_PIPELINE
+            .chars()
+            .next()
+            .unwrap()
+            .is_ascii_lowercase());
+    }
+
+    #[test]
+    fn an_empty_evidence_key_refuses() {
+        let mut r = passing();
+        r.evidence.push(EvidenceRef {
+            key: String::new(),
+            digest: None,
+            media_type: None,
+            byte_size: None,
+            preview: None,
+        });
+        let err = build(run(&[r], GateStatus::Pass)).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::EvidenceRef {
+                key: String::new(),
+                min: 1,
+                max: MAX_EVIDENCE_REF_CHARS,
+            }
+        );
+        assert!(err.to_string().contains("1 to 512"));
+    }
+
+    #[test]
+    fn an_over_length_evidence_key_refuses() {
+        let mut r = passing();
+        r.evidence.push(EvidenceRef {
+            key: "k".repeat(MAX_EVIDENCE_REF_CHARS + 1),
+            digest: None,
+            media_type: None,
+            byte_size: None,
+            preview: None,
+        });
+        let err = build(run(&[r], GateStatus::Pass)).unwrap_err();
+        assert!(matches!(err, Refusal::EvidenceRef { .. }), "{err}");
+    }
+
+    #[test]
+    fn evidence_refs_are_distinct_and_in_first_seen_order() {
+        let mut a = passing();
+        a.evidence = vec![key("tests:report"), key("shared:artifact")];
+        let mut b = result("build", GateStatus::Pass);
+        b.evidence = vec![key("shared:artifact"), key("build:report")];
+        let results = vec![a, b];
+        let doc = build(run(&results, GateStatus::Pass)).unwrap();
+        assert_eq!(
+            doc.evidence_refs,
+            vec![
+                "tests:report".to_string(),
+                "shared:artifact".to_string(),
+                "build:report".to_string()
+            ]
+        );
+    }
+
+    fn key(k: &str) -> EvidenceRef {
+        EvidenceRef {
+            key: k.to_string(),
+            digest: Some("sha256:abc".to_string()),
+            media_type: Some("application/json".to_string()),
+            byte_size: Some(42),
+            preview: Some("ok".to_string()),
+        }
+    }
+
+    /// Redaction is a security control and stays; bounding is a data loss
+    /// and is refused instead.
+    #[test]
+    fn detail_is_redacted_before_it_is_measured() {
+        let mut r = result("tests", GateStatus::Fail);
+        r.diagnostic = Some("failed with password=hunter2".to_string());
+        let doc = build(run(&[r], GateStatus::Fail)).unwrap();
+        let detail = doc.checks[0].detail.as_deref().unwrap();
+        assert!(!detail.contains("hunter2"), "secret survived: {detail}");
+    }
+
+    // --- ordering ---------------------------------------------------------
+
+    /// A substantive refusal must not be masked by a cosmetic one: a run
+    /// that is both under review and carries a bad id reports the status.
+    #[test]
+    fn status_refusals_are_evaluated_before_identity_and_shape() {
+        let results = vec![result("L1-configuration", GateStatus::ReviewRequired)];
+        let mut r = run(&results, GateStatus::Pass);
+        r.gate_id = "bad id";
+        r.pipeline = "Bad Pipeline";
+        r.evaluated_at = "not a timestamp";
+        let err = build(r).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::CheckStatus {
+                status: "REVIEW_REQUIRED",
+                ids: "L1-configuration".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn root_identity_is_evaluated_before_per_check_shape() {
+        // Both are wrong here: the check id cannot be represented and the
+        // timestamp is not a date-time. Root identity is evaluated first, so
+        // the diagnostic is the timestamp — a run whose identity cannot even
+        // be read should be told that, not which of its checks is odd.
+        let results = vec![result("L1-configuration", GateStatus::Pass)];
+        let mut r = run(&results, GateStatus::Pass);
+        r.evaluated_at = "not a timestamp";
+        let err = build(r).unwrap_err();
+        assert!(
+            matches!(err, Refusal::EvaluatedAt { .. }),
+            "root identity must be reported before the check id: {err}"
+        );
+    }
+
+    #[test]
+    fn the_timestamp_is_checked_before_per_check_shape() {
+        // Conforming ids, so the timestamp is the only thing that can fail.
+        let results = vec![result("tests", GateStatus::Pass)];
+        let mut r = run(&results, GateStatus::Pass);
+        r.evaluated_at = "not a timestamp";
+        assert!(matches!(build(r).unwrap_err(), Refusal::EvaluatedAt { .. }));
+    }
+
+    /// No refusal ever yields a document. `build` returns `Err`, so there is
+    /// nothing to print; this asserts the shape of the API rather than a
+    /// runtime behaviour.
+    #[test]
+    fn a_refusal_produces_no_document() {
+        let results = vec![result("L1-configuration", GateStatus::Pass)];
+        assert!(build(run(&results, GateStatus::Pass)).is_err());
+        let results = vec![result("tests", GateStatus::ReviewRequired)];
+        assert!(build(run(&results, GateStatus::Pass)).is_err());
+        assert!(build(run(&[], GateStatus::Unbound)).is_err());
+    }
+
+    /// A run with no results at all is still a document: an empty
+    /// `checks` array and a `passed` result are both truthful.
+    #[test]
+    fn an_empty_run_builds_an_empty_checks_array() {
+        let doc = build(run(&[], GateStatus::Pass)).unwrap();
+        assert!(doc.checks.is_empty());
+        assert_eq!(doc.result, "passed");
+    }
+
+    #[test]
+    fn an_absent_subject_ref_is_emitted_as_null() {
+        let results = [passing()];
+        let mut r = run(&results, GateStatus::Pass);
+        r.subject_ref = None;
+        let doc = build(r).unwrap();
+        assert_eq!(doc.subject_ref, None);
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("\"subject_ref\":null"), "{json}");
+    }
+}
