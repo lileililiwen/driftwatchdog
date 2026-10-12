@@ -265,7 +265,8 @@ evidence.
    * `driftwatch gate --dry-run` — shows the resolved plan, the
      `manifest: sha256:…` digest, the rule-pack identity, and the
      `not_scheduled` set. Nothing is executed and nothing is
-     persisted.
+     persisted. `--dry-run --format json` emits the same plan as a
+     machine-readable rehearsal document that carries no verdict.
    * `driftwatch gate` — executes, persists one `gate_runs` row,
      prints the per-check table, and exits nonzero when blocked.
    * `driftwatch gate --format json` — machine-readable status
@@ -456,6 +457,7 @@ before every relevant change is archived or completed:
 
     driftwatch gate --dry-run   # show the resolved plan; no execution, no persistence
     driftwatch gate             # execute applicable checks, persist the result, exit nonzero when blocked
+    driftwatch gate --dry-run --format json  # machine-readable rehearsal document (a plan, never a verdict)
     driftwatch gate --format json  # machine-readable status document
     driftwatch gate --format platform  # platform.gate-result 1.0.0 document; refuses rather than coerces
     driftwatch gate evidence-export                  # completed-run -> Workspace Governance vocabulary
@@ -470,6 +472,30 @@ enabled = true`, aggregates with the manifest blocking policy, and
 persists one `gate_runs` row with change/revision identity and
 manifest digest. `driftwatch check` remains the compatibility entry
 point for legacy checker-only projects.
+
+### Rehearsing a gate in machine-readable form
+
+`driftwatch gate --dry-run --format json` emits a machine-readable
+**rehearsal** document (`contract: driftwatch-gate-plan/0.1.0`,
+`document_kind: gate-plan-rehearsal`, `dry_run: true`) so a control
+plane can inspect a plan without scraping text. It describes the
+*plan* and deliberately carries no verdict: no `status`, `result`,
+`passed`, `blocked` or `outcome`, anywhere, at any depth — the closed
+deny-set is enforced by a recursive test rather than by review. It
+reports the resolved checks (id, required, exempt, selecting layer,
+command source, effective timeout), the blocking policy, the exemption
+budget, the manifest and rule-pack identity, and a
+`blocking_prediction` saying whether the *plan alone* already forces a
+block. That prediction is `true` when the plan decides it (a required
+check that binds no command, or an exemption budget over cap) and
+`null` when it does not — never `false`, because a plan cannot prove
+that a gate passes. A rehearsal exits `0`, persists nothing, and
+creates no `gate_runs` row.
+
+`driftwatch gate --dry-run --format platform` still prints the human
+plan and exits `0`: `platform.gate-result` is an outcome contract with
+no value for "planned", and refusing would invent a semantic that
+exit `2` does not mean.
 
 ### Emitting a `platform.gate-result` document
 

@@ -14,6 +14,181 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`gate-dry-run-json-plan` is implemented, verified, and archived.**
+`driftwatch gate --dry-run --format json` no longer ignores `--format`.
+Archived as `2026-10-12-gate-dry-run-json-plan`; implementation commit is
+`02a13d4`.
+
+**The defect, located.** `src/commands/gate.rs` resolved the plan and then
+returned on `--dry-run` before ever reading `args.format`:
+
+```rust
+if args.dry_run {
+    print!("{}", manifest::render_plan(&resolved));   // <- four lines
+    return Ok(EXIT_OK);
+}
+...
+match args.format { Json => print_json(..), Human => print_human(..), Platform => print_platform(..) }
+```
+
+The dispatch sat twenty-four lines *below* that return. One ordering decision
+made `--format` dead on a rehearsal.
+
+**Why the branch was not simply moved.** `print_json` composes its document
+from `AggregateOutcome` and `Vec<GateResult>` — products of `execute_plan` →
+`aggregate`. A rehearsal has neither. Reaching that writer would mean
+inventing the values a rehearsal must never claim. So this is a **third
+document kind**, not a variant of the status document, and the hard part was
+making it impossible to read as a verdict.
+
+**What the rehearsal document is.** A root `dry_run: true`, a
+`document_kind` of `gate-plan-rehearsal`, and a versioned root `contract`
+`driftwatch-gate-plan/0.1.0` — the third user of the shape
+`src/checker/json.rs:41` established and `platform_result.rs` repeated. No
+`status`, `result`, `passed`, `blocked` or `outcome` anywhere, at any depth:
+the deny-set is a production constant (`VERDICT_LIKE_KEYS`) walked
+recursively over the emitted document, and the build debug-asserts its own
+output, so a future edit that adds one fails the suite instead of shipping.
+Planned checks carry plan facts only — id, required, exempt, selecting layer,
+command source, effective timeout — because nothing ran.
+
+Command text, `project_commands` values, `evaluated_at` and `revision` are
+deliberately absent: a command is project-authored text that can carry
+credentials, and a rehearsal is not about a moment. The human plan still
+prints command text, byte-identically, for anyone who needs it.
+
+### The question that had to be answered rather than guessed
+
+*Is `blocked` knowable pre-execution?* **Partially, in one direction only.**
+`aggregate()` derives `blocked` from `Vec<GateResult>`, so the outcome of
+every check with a bound command is unknowable until it runs. But two facts
+are decided at resolution time and are independent of any child's exit code:
+
+| plan fact | execution result | aggregate | predictable? |
+|---|---|---|---|
+| `ResolvedGatePlan::unbound` non-empty | `UNBOUND` | required → `failures` → `blocked: true` | **yes, forces a block** |
+| budget `OverCap` / `HardFail` | required `FAIL` | `failures` → `blocked: true` | **yes, forces a block** |
+| budget `Exhausted` | *optional* `REVIEW_REQUIRED` | never blocks | forces nothing |
+| required check with a command | whatever the child does | depends entirely on the child | **no** |
+| `ai-review` (only when `[ai] enabled`) | adapter-dependent | may add a review | **no** — not on the plan at all |
+
+So the condition is **sufficient but not necessary**: the plan can prove a
+block and can never prove a pass. Hence `blocking_prediction.would_block` is
+`true` or `null` and **`false` is structurally unreachable** — `WouldBlock` has
+no third variant and `false` has no serialization.
+`unbound_required_checks` (`src/gate/manifest.rs:1128`) is exactly the forcing
+set, and the one divergence between it and `execute_plan` — an exempted
+*never-exempable* concern — is covered by the budget arm, because
+`hard_fails()` is true exactly when `non_exempable` is non-empty, which is the
+same manifest declaration `execute_plan` reads.
+
+### Exit code: unchanged, and the rule that pins it
+
+`openspec/specs/gate-cli-and-memory-integration/spec.md`, requirement *Run
+Gate locally*: *"returns a nonzero exit code for blocking failures or
+unresolved blocking reviews"*, with scenario *Dry run*: *"the resolved plan is
+shown without child execution or persistence"*. The nonzero condition is
+defined over what the **run** observed; a rehearsal observes neither, so `0`
+is specified rather than accidental. Independently pinned by the pre-existing
+test in `src/commands/gate_tests.rs`
+(`gate_dry_run_shows_plan_without_execution_or_persistence`, commented *"Even
+though the check would fail, dry-run exits zero and persists nothing"*), which
+is kept unchanged. **No old-and-new exit test was added, because the behaviour
+did not change.**
+
+### `--format platform --dry-run`: reported, not invented
+
+Unchanged: it prints the human plan and exits `0`. `platform.gate-result` is
+an *outcome* contract with no value for "planned"; refusing with exit `2`
+would invent a semantic `EXIT_UNREPRESENTABLE` does not mean, and emitting
+anything else would be the coercion that format was built to refuse. The
+branch is now an explicit documented arm and is pinned by a test rather than
+left accidental.
+
+### Measured: the unchanged surfaces really are unchanged
+
+Release binary, three-check fixture (`minimal` profile, `slow-tests` optional
+with `timeout_ms = 120000`, `governance-quality` left unbound), captured from
+`cf823dc` before any edit and again after:
+
+| surface | bytes | `diff` before → after |
+|---|---|---|
+| `--dry-run --format human` | 1318 | **empty** |
+| `--format json` (real run) | 1866 | **empty** |
+| `--format human` (real run) | 765 | **empty** |
+
+`--format platform --dry-run` verified unchanged too, and
+`git diff --stat -- src/gate/platform_result.rs
+src/gate/platform_result_tests.rs` is **empty** — the platform work was not
+touched at all.
+
+### Side-effect freedom, measured
+
+| after | `gate_runs` rows |
+|---|---|
+| fresh project | 0 |
+| `--dry-run --format human` | 0 |
+| `--dry-run --format json` | 0 |
+| `--dry-run --format platform` | 0 |
+| `--format json` (real run, exits 1) | **1** |
+
+### The source-file-size gate got better, not worse
+
+`src/commands/gate.rs` is **696** lines, down from **1110**. Its inline test
+module moved verbatim to `src/commands/gate_tests.rs` via
+`#[path = "gate_tests.rs"] mod tests;` — the same split
+`platform_result.rs` already uses (`platform_result_tests.rs`, commit
+`3f4a923`). It is a pure move: every assertion is unchanged, including the
+per-check-timeout negative controls. `src/gate/dry_run_plan.rs` is 453 and
+`src/gate/dry_run_plan_tests.rs` is 488, both well inside the 1,000-line
+boundary. No existing offender was made worse and one was fixed.
+
+Verification on 2026-10-13: `cargo fmt` and `cargo fmt --check` clean;
+`cargo test` passed **1007 tests** (979 before, **+28** — 18 unit in
+`src/gate/dry_run_plan_tests.rs`, 10 end-to-end in
+`tests/gate_dry_run_json.rs`) with 0 failures; `cargo clippy` on default
+targets clean; `cargo build --release` succeeded; strict OpenSpec validation
+passed 8/8 after the archive; `git diff --check` clean; `node
+scripts/check-openspec-change-names.mjs` clean.
+
+The eight pre-existing open changes are untouched and unconflicted. The
+adjacent one, `per-check-gate-timeout`, is not collided with: that change
+owns `ManifestCheck::timeout_ms` and its resolution, and this change only
+*reads* `ResolvedGatePlan::check_timeouts`, which already exists on `main`.
+
+### Reported for Forge, not fixed here — Forge is another repository
+
+Forge's `run_gate` will keep classifying the rehearsal as
+`GateOutcome::PlanPreview`, because Forge's `parse_gate_document`
+(`/home/paul/code/forge/src/gate/engine.rs:362-364`) requires `blocked` (bool)
+and `results` (array) and **this document deliberately has neither**, since
+either would be a verdict-shaped field. Consequences on the Forge side, none
+of them a correctness regression:
+
+1. `GateOutcome::PlanPreview.plan` will hold this JSON document's lines rather
+   than the human plan's. They are bounded and redacted by Forge's own
+   capture path, and the classification is unchanged: a rehearsal is still
+   never evidence and never a pass.
+2. Forge's `GateOutcome::PlanPreview` doc comment (*"answered with the real
+   sibling's human plan text"*) and `src/gate/mod.rs:13-21` (*"the dry-run
+   surface prints a human-readable plan and exits before the JSON writer"*)
+   become inaccurate.
+3. Forge already has the vocabulary for the intended end state —
+   `GateEvidence` carries `dry_run: true` and its header says *"a
+   forward-compatible parseable document from a rehearsal (`dry_run: true`,
+   never persisted)"*. Teaching `parse_gate_document` to accept a
+   `dry_run: true` document with no `blocked`/`results` is a Forge-side
+   change.
+
+**No Forge file and no file in any other repository was modified.**
+
+Next action for the orchestrator: run the full `driftwatch` Gate runtime,
+`cargo clippy --all-targets --all-features -- -D warnings`, and
+`cargo test --workspace --all-targets` (the `.ai-gate/gate.yaml`
+`declared-verification` command), which were deliberately not run here. Note
+that this repository's own gate reports the `source-file-size` concern
+against eight files; `src/commands/gate.rs` is no longer one of them.
+
 **`platform-gate-result-major-adoption` is implemented, verified, and
 archived.** `driftwatch gate --format platform` now emits
 `platform.gate-result` **1.0.0** — the precondition the `platform-contracts`
