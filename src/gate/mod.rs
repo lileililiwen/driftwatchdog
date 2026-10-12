@@ -30,7 +30,10 @@
 //! `platform.gate-result` emission — the pure mapping from a completed run
 //! onto the portfolio's vendored contract, plus the typed refusals for every
 //! driftwatchdog state or value that contract cannot name without a
-//! coercion.
+//! coercion; [`dry_run_plan`] owns the `--dry-run` **rehearsal** document —
+//! the machine-readable resolved plan that declares itself a rehearsal and
+//! carries no verdict-shaped key, so a plan preview can never be read as a
+//! quality score.
 //!
 //! No OpenSpec types appear here. No tool is installed implicitly, no
 //! network call is made, and no LLM is invoked.
@@ -42,6 +45,7 @@ pub mod ai;
 pub mod aigate;
 pub mod concerns;
 pub mod context;
+pub mod dry_run_plan;
 pub mod dto;
 pub mod evidence;
 pub mod evidence_export;
