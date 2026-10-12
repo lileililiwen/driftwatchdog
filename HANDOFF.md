@@ -14,6 +14,91 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`platform-gate-result-emission` is implemented, verified, and archived.**
+`driftwatch gate --format platform` emits the workspace's shared
+`platform.gate-result` contract, and refuses rather than coercing whenever the run
+has no honest equivalent in it. Archived as
+`2026-10-12-platform-gate-result-emission`; implementation commit is `0226ab7`.
+
+The contract and Driftwatchdog do not have the same shape, and the interesting part
+of the change is the refusal set, not the JSON:
+
+| Driftwatchdog `GateStatus` | platform | judgement |
+|---|---|---|
+| `PASS` | `passed` | direct |
+| `FAIL` | `failed` | direct; severity stays orthogonal and unmapped |
+| `NOT_APPLICABLE` | `skipped` | the *proven* absence is the one `skipped` can honestly name |
+| `REVIEW_REQUIRED` | — | **unrepresentable**: no platform human-decision state exists |
+| `UNBOUND` | — | **unrepresentable**: `skipped` would merge a never-attempted check with a proven exemption, which `src/gate/types.rs:7-11` forbids |
+| — | `errored` | **never emitted**: every execution failure is already a `REVIEW_REQUIRED`, and the contract defines no execution-failure taxonomy for this producer |
+
+Refusal is stricter than the stated floor. The floor is "refuse on a *required*
+check"; this refuses on **any** check in those states, because optionality changes
+whether a status blocks and never changes what it claims. Nine ordered refusal
+classes, evaluated statuses → root identity → per-check shape, so a substantive
+refusal is never masked by a cosmetic one. On any of them: stdout is empty, one
+diagnostic naming the exact state or value and the check ids goes to stderr, and
+the exit code is `2`. The gate run is still executed and still persisted — a
+refusal is a statement about emission, never about the run.
+
+Two findings from implementation that are worth keeping:
+
+1. **The pattern validators needed the `{0,n}` quantifiers.** An ASCII scan that
+   checks the alphabet but forgets the length cap accepts ids the schema rejects.
+   The negative-control tests caught it (`"a".repeat(129)` passed
+   `matches_gate_id`); `MAX_GATE_ID_CHARS` / `MAX_PIPELINE_CHARS` now enforce the
+   whole-string cap.
+2. **Lengths are counted in code points, not bytes.** JSON Schema `maxLength`
+   counts Unicode code points; Rust `str::len()` counts UTF-8 bytes. `bound_text`
+   is deliberately **not** applied to any field the platform bounds — it truncates
+   with an ellipsis, which is the silent loss this change exists to prevent.
+   `redact_secrets` still runs, because redaction removes content while bounding
+   invents it.
+
+`checks[].check_id` is the identity mapping: conforming ids pass through unchanged
+and are repeated verbatim in `driftwatch_gate_id`; non-conforming ids are refused
+rather than slugged, because no reversible slug fits inside 64 characters and
+lowering `L1-configuration` would merge it with `l1-configuration`. `pipeline` is
+the constant `driftwatchdog-gate` — a pipeline is a property of the producer — and
+the project-owned profile is preserved verbatim in `driftwatch_profile` rather
+than coerced into `^[a-z][a-z0-9_.-]{0,127}$`.
+
+Verification on 2026-10-12: `cargo fmt` and `cargo fmt --check` clean; the complete
+`cargo test` suite passed **972 tests** (912 before, **+60** — 45 unit in
+`src/gate/platform_result.rs`, 15 end-to-end in `tests/gate_platform_result.rs`)
+with 0 failures; `cargo clippy` on default targets passed; strict OpenSpec
+validation passed **8/8** after the archive; `git diff --check` clean; `node
+scripts/check-openspec-change-names.mjs` clean.
+
+The emitted document was additionally checked against the **authoritative
+schema** at `platform-contracts/schemas/gate-result.schema.json` with an external
+JSON-Schema validator (not a dependency, run once by hand): clean pass, clean fail,
+and not-applicable documents all validate. That check is not in the repo suite
+because the consumer owns validation and this repository deliberately carries no
+validator dependency.
+
+Additive, as designed: `--format human` and `--format json` keep byte-identical
+stdout and their `0`/`1` exit codes; the default is still `human`;
+`driftwatch gate evidence-export --format` still accepts exactly `human|json` and
+rejects `platform`; the gate pipeline, the aggregate policy, the manifest, the
+concern vocabulary, and the SQLite schema are untouched; `git diff -- Cargo.toml
+Cargo.lock` is empty. No Forge file and no `platform-contracts` file was touched.
+
+The five incomplete open changes are untouched and unconflicted:
+`per-check-gate-timeout`, `bind-declared-verification-command`,
+`declare-spec-purpose-placeholder-code`, `bind-governance-quality-checks`, and
+`gate-unbound-check-fails` were not edited, completed, archived, or re-scoped. This
+change only *reads* `AggregateOutcome` and `GateResult`; it writes no manifest
+field, no command binding, no timeout, and no check status. The two changes already
+marked Complete (`mandatory-governance-quality-all-profiles`,
+`declare-new-change-with-gate-debt-code`) and `installer-stdout-purity` were left
+alone.
+
+Next action for the orchestrator: run the full `driftwatch` Gate runtime, `cargo
+clippy --all-targets --all-features -- -D warnings`, and `cargo test --workspace
+--all-targets` (the `.ai-gate/gate.yaml` `declared-verification` command), which
+were deliberately not run here.
+
 **`mandatory-governance-quality-all-profiles` is implemented, verified, and
 not archived.** `profile_defaults_for` now adds required `governance-quality`
 exactly once across all supported built-in profiles, ten named workspace
@@ -1112,7 +1197,7 @@ Earlier run on installer-stdout-purity, 2026-10-03:\n\n    cargo fmt --check    
 ## Module map
 
 - `src/main.rs` — binary entrypoint, `anyhow` boundary, returns `ExitCode`; dispatches all 13 top-level subcommands (the new `driftwatch gate evidence-export` flows through the existing `gate` dispatcher as a `GateSubcommand`).
-- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Gate,Link,Unlink,Completions,Man,Mcp}`) and arg structs; `RunArgs` carries opt-in `--timeout-ms`; `GateArgs` carries `--dry-run` and `--format human|json` plus a new `GateSubcommand::EvidenceExport(GateEvidenceExportArgs)` (with its own `--format` / `--dry-run`) so the existing flat `driftwatch gate` flags are preserved when no subcommand is given; `CheckArgs` carries `--format human|json`.
+- `src/cli.rs` — `clap` derive types (`Cli`, `Command::{Init,Run,List,Top,Show,Report,Gc,Export,Doctor,Check,Gate,Link,Unlink,Completions,Man,Mcp}`) and arg structs; `RunArgs` carries opt-in `--timeout-ms`; `GateArgs` carries `--dry-run` and `--format human|json|platform` via the dedicated `GateOutputFormat` enum (a separate enum from `GateFormatArg`, which keeps exactly `human|json` so `gate evidence-export` cannot be given `--format platform`) plus a new `GateSubcommand::EvidenceExport(GateEvidenceExportArgs)` (with its own `--format` / `--dry-run`) so the existing flat `driftwatch gate` flags are preserved when no subcommand is given; `CheckArgs` carries `--format human|json`.
 - `src/error.rs` — `thiserror` `Error` enum used by library code; includes `LinkTarget` and `ManualLinkNotFound` variants.
 - `src/fingerprint/mod.rs` — module entry, re-exports `Rules`, `Canonical`, `fingerprint`.
 - `src/fingerprint/normalizer.rs` — generic normalizer (13 ordered rules).
@@ -1149,6 +1234,7 @@ Earlier run on installer-stdout-purity, 2026-10-03:\n\n    cargo fmt --check    
 - `src/gate/aigate.rs` — business `.ai-gate/gate.yaml` → `GateManifest` conversion (`RUNTIME_NAME = "driftwatchdog"`, `AiGateDoc { runtime, manifest }`, strict `yaml-rust2` mapping with `did-you-mean` unknown-field hints, `checks` map of `true|false|"optional"`, `commands` must reference a selected check, empty-command/unknown-blocking rejection before execution, `blocking` list → review-required policy, `rule_pack` → identity, non-built-in profile selects exactly its declared checks); reuses the shared pipeline, no second Gate, no network.
 - `src/gate/evidence.rs` — bounded evidence domain (`ArtifactKind`/`ArtifactRecord`/`NewArtifact`/`EvidenceError`, `MAX_ARTIFACT_BYTES = 1 MiB`, `MAX_PREVIEW_BYTES = 1024`, `build_record`/`store_bytes` via temp+rename, `confine_adapter_path`/`confined_path` escape rejection, `redact_secrets_with_extra` previews, `evidence_backed_pass` guard, `UNAVAILABLE_PREVIEW` marker); no OpenSpec types, no tool install, no network.
 - `src/gate/evidence_export.rs` — workspace-governance evidence export (closed `GOVERNANCE_FIELDS` set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed `GOVERNANCE_STATES` set `verified` / `unverified` / `blocked`, `EVIDENCE_EXPORT_SCHEMA_VERSION = 1`, `Field` constructor refusing unknown names, `EvidenceState` parse/serialise, `FieldExport` / `EvidenceExport` / `StaleDiagnostic` structs, `fields_for_concern` mapping `release-evidence` → the seven release-evidence fields and `capability-conformance` → `checks`, `build` reducer with `verified > blocked > unverified` priority, stale-revision rule with a `stale` diagnostic naming both revisions, `ExportError::{UnknownField, NoRun}`, `render_human` and `render_json` with secret-redaction re-use); pure read, no execution, no mutation, no second evidence store, no OpenSpec types.
+- `src/gate/platform_result.rs` — `platform.gate-result` emission (`PlatformStatus` with the contract's four wire values, the **total** `map_status` returning `StatusMapping::{Representable, Unrepresentable}` for all five `GateStatus` states, `PlatformGateResult` / `PlatformCheck` / `PlatformRun`, the nine-variant `Refusal`, and the pure `build`). Mapping `PASS`→`passed`, `FAIL`→`failed`, `NOT_APPLICABLE`→`skipped` (documented judgement); `REVIEW_REQUIRED` and `UNBOUND` refuse; `errored` is never constructed. `check_id` is the identity mapping and refuses anything not already matching `^[a-z][a-z0-9_.-]{0,63}$` (no reversible slug fits in 64 characters); the original id is repeated verbatim in `driftwatch_gate_id`. `pipeline` is the constant `driftwatchdog-gate` with the project profile preserved verbatim in `driftwatch_profile`. All length checks count Unicode code points (JSON Schema `maxLength`) rather than UTF-8 bytes, and no field the platform bounds is passed through `bound_text`; `redact_secrets` still runs because redaction removes content while bounding invents it. The four patterns are hand-written ASCII scans with their `{0,n}` quantifiers enforced as whole-string caps. Refusals are evaluated in a fixed order (statuses → root identity → per-check shape) so the diagnostic is deterministic. No clock, no filesystem, no JSON-Schema validator dependency: validation belongs to the consumer that already vendors the schema.
 - `src/gate/adapters.rs` — adapter contracts (`AdapterRegistry`/`AdapterCapability`/`OutputFormat`/`AdapterInput`, duplicate/empty validation before execution), five built-ins (`checker`, `gitleaks`, `osv`, `semgrep`, `project-runtime`) via CLI boundaries only, tolerant normalizers (`parse_checker_json`/`parse_sarif`/`parse_gitleaks` without secret values/`parse_osv`/`parse_semgrep`) with finding/evidence caps and redaction, exit-findings-evidence separated (nonzero-with-findings → `FAIL`), infra mapping (`SpawnFailed`/`NonZeroExit`/`Timeout`+timeout evidence/`Signalled`/`MalformedOutput` → `REVIEW_REQUIRED` + `<tool>:output`), `run_text_adapter` exit-code mapping, `run_all` failure isolation, pure deterministic `evaluate` (threshold rules + rule-required available-evidence guard); also owns the **product-quality envelope adapter** (`PRODUCT_QUALITY_ENVELOPE_VERSION = 1` parser, version + status check, bounded findings/evidence/missing_evidence/diagnostic/remediation and secret redaction, `expected_exit_for_status` / `default_severity_for_status` mapping, `contradiction_result` and `envelope_result` helpers, `run_product_quality_adapter` entry point used by `src/commands/gate.rs` `execute_plan` for the two product-quality concern ids; spawn/timeout/signal map to `infra_result`; the text-mode fallback preserves the existing `project-runtime` semantics for legacy commands) and the **release-gate envelope adapters** (`RELEASE_GATE_ENVELOPE_VERSION = 1` shared wire version, `parse_release_envelope` / `parse_capability_envelope` parsers with `capabilities` sub-object handling for the capability envelope, `envelope_review_result` for malformed/missing cases, `envelope_to_result` helper with secret redaction, `run_release_evidence_adapter` with the required-evidence guard for `revision` / `product_version` / `artifacts` / `provenance` plus the stale-revision guard using a caller-supplied current revision from `git::capture`, `run_capability_conformance_adapter` with the empty-`verified`-list and out-of-scope-verified guards using the resolved plan ids; both release-gate adapters deliberately do not provide a text-mode fallback so missing coverage is never silently treated as a pass); no SDKs, no scanner reimplementation, no network, no LLM.
 - `src/gate/context.rs` — generic read-only context providers (`ProviderRegistry`, bounded hashed `ContextDocument` with kind/path/digest/size/change-id, `git` diff/status + `project-files` + optional `openspec` providers emitting generic documents only, project-root confinement, truncation bounds, secret-safe previews, unavailable-not-empty semantics, `collect_context`/`selection_from_manifest`/`context_checks`); no OpenSpec types in gate core, no mutation, no network.
 - `src/gate/ai.rs` — provider-neutral AI evaluation (`AiProviderConfig` opt-in with explicit missing-provider policy, `AiRule`, bounded redacted `AiEvalRequest` with prompt/rule digests, tolerant `AiProviderOutput` with fail-closed `validate_output`, `run_ai_evaluation` via the bounded checker runner, `AiEvaluationRecord` persistence wrapper, `load_ai_config`/`ai_checks`); no embedded LLM, no API keys, no network, no OpenSpec types.
@@ -1156,7 +1242,7 @@ Earlier run on installer-stdout-purity, 2026-10-03:\n\n    cargo fmt --check    
 - `src/runtime/runner.rs` — `CommandSpec` (incl. opt-in `timeout_ms`), `CapturedStream`, `RunOutcome` (incl. `timed_out` + `diagnostic`), `run`; byte-accumulating UTF-8-once drain, signal-aware status, process-group kill on timeout.
 - `src/util.rs` — `truncate_char_boundary` shared helper (byte limit, char-boundary cut, ellipsis).
 - `src/checker/runner.rs` — `CheckerSpec`, `run_checker`, `CheckerRun` (incl. `signalled` + `capture_error`) with bounded capture and per-checker timeout plus group kill.
-- `src/commands/{run,list,top,show,report,gc,export,doctor,check,gate,link,unlink,report_ai,evidence_export}.rs` — per-subcommand orchestration returning process exit code. `top.rs` and `show.rs` expose `render` functions that return the same bytes the CLI prints; `report_ai.rs` exposes `render_ai_for_mcp` for the read-only MCP path and renders a `Gate status` section from the latest `gate_runs` row (tolerant of old DBs). `gate.rs` exposes `gate` plus `gate_history_checks` for `doctor`; its `execute_plan` captures `git::capture` once per run for the release-evidence staleness check and dispatches the built-in `source-file-size` concern to `crate::gate::source_size::scan(&proj.root, &resolved.source_size)` in-process, `governance-quality` to `crate::gate::governance::run_governance_quality_adapter` (matched first, since it is a product-profile concern but consumes a code-scoped report rather than the product-quality envelope), the product-quality / release-evidence / capability-conformance concerns to the dedicated envelope adapters, and every other concern to the project-runtime text adapter; its top-level `gate` function also routes the new `GateSubcommand::EvidenceExport` to `evidence_export::evidence_export`. `evidence_export.rs` is the read-only `driftwatch gate evidence-export` orchestrator: it opens the DB read-only, reads the latest `gate_runs` row, parses the persisted `results_json` (bare array; legacy versioned document accepted as a fallback), captures the current project revision via `git::capture`, calls `evidence_export::build`, prints the human or JSON document, and refuses with a non-zero exit when no run exists.
+- `src/commands/{run,list,top,show,report,gc,export,doctor,check,gate,link,unlink,report_ai,evidence_export}.rs` — per-subcommand orchestration returning process exit code. `top.rs` and `show.rs` expose `render` functions that return the same bytes the CLI prints; `report_ai.rs` exposes `render_ai_for_mcp` for the read-only MCP path and renders a `Gate status` section from the latest `gate_runs` row (tolerant of old DBs). `gate.rs` exposes `gate` plus `gate_history_checks` for `doctor`; its `execute_plan` captures `git::capture` once per run for the release-evidence staleness check and dispatches the built-in `source-file-size` concern to `crate::gate::source_size::scan(&proj.root, &resolved.source_size)` in-process, `governance-quality` to `crate::gate::governance::run_governance_quality_adapter` (matched first, since it is a product-profile concern but consumes a code-scoped report rather than the product-quality envelope), the product-quality / release-evidence / capability-conformance concerns to the dedicated envelope adapters, and every other concern to the project-runtime text adapter; its top-level `gate` function also routes the new `GateSubcommand::EvidenceExport` to `evidence_export::evidence_export`, and its third output arm `GateOutputFormat::Platform` calls `platform_result::build` and hands the outcome to `print_platform`, which prints the document only on success and otherwise writes the two-line refusal diagnostic to stderr and returns the new `EXIT_UNREPRESENTABLE = 2` (reachable only through `--format platform`, so `0` and `1` keep their meaning everywhere else; the run is persisted before the format is chosen, so a refusal never hides the run). `evidence_export.rs` is the read-only `driftwatch gate evidence-export` orchestrator: it opens the DB read-only, reads the latest `gate_runs` row, parses the persisted `results_json` (bare array; legacy versioned document accepted as a fallback), captures the current project revision via `git::capture`, calls `evidence_export::build`, prints the human or JSON document, and refuses with a non-zero exit when no run exists.
 - `src/commands/meta.rs` — `completions` (all five shells via `clap_complete`) and `man` (via `clap_mangen`) generators.
 - `src/mcp/{mod,server,tools}.rs` — Model Context Protocol server over stdio. `server.rs` is the JSON-RPC 2.0 dispatch loop (newline-delimited, `PROTOCOL_VERSION = "2024-11-05"`, `-32700`/`-32601`/`-32602` error codes, EOF exits 0). `tools.rs` defines four read-only tools (`top_bugs`, `show_bug`, `ai_report`, `doctor_status`) that reuse the existing CLI builders; every input schema is closed (`additionalProperties: false`). The DB is opened with `SQLITE_OPEN_READ_ONLY` via the existing `Db::open_read_only` so a write attempt fails at the driver level.
 - `src/cli.rs` — `clap` derive types plus `Completions`/`Man` subcommands, `long_about` with examples, per-command `after_help` examples, and the binary-naming rule doc comment.

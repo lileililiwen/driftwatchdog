@@ -291,7 +291,7 @@ new external dependency.
     driftwatchdog show <bug-id>
     driftwatchdog report [--ai] [--limit N] [--days N] [--tag TAG]
     driftwatchdog check [--only NAMES] [--dry-run]
-    driftwatchdog gate [--dry-run] [--format human|json]
+    driftwatchdog gate [--dry-run] [--format human|json|platform]
     driftwatchdog link bug:<id> spec:<id> [--note "..."]
     driftwatchdog unlink <link-id>
     driftwatchdog export json|jsonl|markdown
@@ -457,6 +457,7 @@ before every relevant change is archived or completed:
     driftwatch gate --dry-run   # show the resolved plan; no execution, no persistence
     driftwatch gate             # execute applicable checks, persist the result, exit nonzero when blocked
     driftwatch gate --format json  # machine-readable status document
+    driftwatch gate --format platform  # platform.gate-result document; refuses rather than coerces
     driftwatch gate evidence-export                  # completed-run -> Workspace Governance vocabulary
     driftwatch gate evidence-export --format json    # versioned `EvidenceExport` document
 
@@ -469,6 +470,39 @@ enabled = true`, aggregates with the manifest blocking policy, and
 persists one `gate_runs` row with change/revision identity and
 manifest digest. `driftwatch check` remains the compatibility entry
 point for legacy checker-only projects.
+
+### Emitting a `platform.gate-result` document
+
+`driftwatch gate --format platform` prints the same run in the
+workspace's shared `platform.gate-result` contract, so a portfolio
+consumer can read "may this deploy proceed?" without scraping the human
+table or hard-coding driftwatchdog's vocabulary.
+
+The two vocabularies are not the same shape, and the honest answer for
+many runs is refusal. `PASS` becomes `passed`, `FAIL` becomes `failed`,
+and `NOT_APPLICABLE` — a *proven* absence — becomes `skipped`.
+`REVIEW_REQUIRED` and `UNBOUND` have no platform equivalent at all: the
+contract has no human-decision state, and `skipped` would merge a
+never-attempted check with a proven exemption, which this Gate holds to
+be opposite claims. The emitter refuses rather than coercing. On refusal
+it writes **nothing** to stdout, prints one diagnostic naming the exact
+state or value and the check ids, and exits `2`; the gate run itself is
+still executed and still persisted.
+
+Identifiers are checked the same way. A manifest check id that does not
+match the platform's `^[a-z][a-z0-9_.-]{0,63}$` is refused, not
+slugged — no reversible slug fits inside 64 characters, and lowering
+`L1-configuration` would merge it with `l1-configuration`. Conforming
+ids pass through unchanged and are repeated verbatim in the check's
+`driftwatch_gate_id`. An over-length diagnostic or evidence reference is
+refused rather than truncated, and the profile is preserved verbatim in
+`driftwatch_profile`.
+
+    driftwatch gate --format platform > gate-result.json   # exits 2 and prints nothing when unrepresentable
+
+Validation against the contract belongs to the consumer, which already
+vendors the schema; driftwatchdog asserts the constraints it depends on
+and refuses rather than validating its own output.
 
 ### Exporting a run for the Workspace Governance audit
 
