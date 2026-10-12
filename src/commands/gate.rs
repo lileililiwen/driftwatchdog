@@ -25,10 +25,10 @@
 //!
 //! Three output formats sit on top of the same run. `--format human` and
 //! `--format json` are driftwatchdog's own; `--format platform` emits the
-//! portfolio's `platform.gate-result` contract through
+//! portfolio's `platform.gate-result` contract at major 1.0.0 through
 //! [`crate::gate::platform_result`] and exits `2` — writing nothing to
-//! stdout — when the run has no status or identifier the contract can name
-//! without a coercion. All three read the same persisted run.
+//! stdout — when an identifier or length has no honest representation in that
+//! contract. All three read the same persisted run.
 //!
 //! `driftwatch check` remains the compatibility entry point for legacy
 //! checker-only projects and is untouched.
@@ -62,9 +62,10 @@ use crate::util::truncate_char_boundary;
 const EXIT_OK: i32 = 0;
 const EXIT_BLOCKED: i32 = 1;
 /// The run could not be published as a `platform.gate-result` document
-/// because some status or value has no honest equivalent in that contract.
-/// Reachable only through `--format platform`; no existing path can produce
-/// it, so `0` and `1` keep their meaning everywhere else.
+/// because some identifier or length has no honest representation in that
+/// contract and driftwatchdog will not truncate it to fit. Reachable only
+/// through `--format platform`; no existing path can produce it, so `0` and
+/// `1` keep their meaning everywhere else.
 const EXIT_UNREPRESENTABLE: i32 = 2;
 /// Deadline applied to a check that declares no `timeout_ms` of its
 /// own. Unchanged from the constant that used to serve every check in
@@ -580,14 +581,15 @@ fn print_json(outcome: &AggregateOutcome, results: &[GateResult], resolved: &Res
 ///
 /// The document is built completely in memory before anything is printed,
 /// so there is no partial or coerced output on any path. On refusal stdout
-/// stays empty, one typed diagnostic naming the exact unrepresentable
-/// state or value goes to stderr, and the process exits
-/// [`EXIT_UNREPRESENTABLE`].
+/// stays empty, one typed diagnostic naming the exact offending value goes to
+/// stderr, and the process exits [`EXIT_UNREPRESENTABLE`].
 ///
-/// The refusal set is not a defensive edge: the platform contract has no
-/// human-decision state and no never-attempted state, so a run that needs
-/// either one genuinely has no document to publish. Declining is the honest
-/// answer, and the diagnostic names exactly which checks caused it.
+/// The refusal set is not a defensive edge. Every status has an honest value
+/// in contract major 1.0.0, but the contract still bounds `check_id`, the
+/// diagnostic detail, and every evidence reference — and driftwatchdog check
+/// ids come from a project manifest that bounds them only as non-empty. A run
+/// carrying an identifier or a diagnostic that does not fit is declined rather
+/// than shortened, and the diagnostic names exactly which value caused it.
 fn print_platform(
     outcome: &AggregateOutcome,
     results: &[GateResult],

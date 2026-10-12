@@ -1,11 +1,12 @@
 //! End-to-end tests for `driftwatch gate --format platform`.
 //!
-//! The contract being emitted (`platform.gate-result`) is not driftwatchdog's
-//! vocabulary: it has four status values where driftwatchdog has five, and it
-//! constrains identifiers driftwatchdog leaves to a project manifest. Every
-//! run that cannot be represented without a coercion must produce **no
-//! document at all**: empty stdout, one typed diagnostic on stderr, and a
-//! non-zero exit code.
+//! The contract being emitted (`platform.gate-result` major 1.0.0) is not
+//! driftwatchdog's vocabulary: it constrains identifiers driftwatchdog leaves
+//! to a project manifest, and it bounds fields driftwatchdog bounds far more
+//! loosely. The document declares its own contract version, and every gate
+//! status maps onto one of the contract's six values. A run that still cannot
+//! be represented must produce **no document at all**: empty stdout, one typed
+//! diagnostic on stderr, and a non-zero exit code.
 //!
 //! These tests go through the binary so the stdout/exit-code contract is
 //! observed the way a consumer observes it, not merely asserted on a return
@@ -95,6 +96,9 @@ fn a_clean_pass_emits_a_conforming_document() {
     for required in ["gate_id", "pipeline", "evaluated_at", "result"] {
         assert!(doc.get(required).is_some(), "missing {required}: {doc}");
     }
+    // The producer declares which contract version it claims, so a consumer
+    // never has to infer it from the values present.
+    assert_eq!(doc["contract"], "platform.gate-result/1.0.0");
     assert_eq!(doc["result"], "passed");
     assert_eq!(doc["pipeline"], "driftwatchdog-gate");
     assert!(
@@ -167,56 +171,85 @@ fn a_declared_exemption_is_emitted_as_skipped() {
     );
 }
 
-// --- refusals -------------------------------------------------------------
+// --- the statuses 1.0.0 added, at both levels --------------------------
 
 #[test]
-fn a_required_unbound_check_refuses_and_names_the_state_and_the_id() {
+fn a_required_unbound_check_is_emitted_as_unbound() {
     let tmp = init_dir();
-    // Required, selected, no command: the never-attempted absence.
+    // Required, selected, no command: the never-attempted absence. The
+    // aggregate blocks, so the root result is `failed` and the check itself
+    // says `unbound` — two facts, both true, neither merged into the other.
     write_manifest(
         &tmp,
         "profile = \"minimal\"\n[[checks]]\nid = \"ux-review\"\n",
     );
 
-    assert_refused(&tmp, &["refusing to emit", "UNBOUND", "ux-review"]);
+    let assert = gate_with_format(&tmp, "platform").code(1);
+    let doc: Value = serde_json::from_str(&String::from_utf8_lossy(&assert.get_output().stdout))
+        .expect("stdout is one JSON document");
+    assert_eq!(doc["result"], "failed");
+    let checks = doc["checks"].as_array().unwrap();
+    let unbound = checks
+        .iter()
+        .find(|c| c["check_id"] == "ux-review")
+        .unwrap();
+    assert_eq!(
+        unbound["status"], "unbound",
+        "an unbound check is reported, not omitted and not skipped: {doc}"
+    );
     assert_eq!(latest_run(&tmp).status, "FAIL");
 }
 
 #[test]
-fn an_optional_unbound_check_refuses_even_though_it_does_not_block() {
+fn an_optional_unbound_check_is_emitted_even_though_it_does_not_block() {
     let tmp = init_dir();
-    // Optional, so the aggregate is `PASS` and the refusal is the
-    // per-check one. Coercing it to `skipped` would claim a proven
-    // exemption for a check nothing ever ran.
+    // Optional, so the aggregate is `PASS` and the document is emitted with a
+    // `passed` root and one `unbound` entry. At contract major 0 this run was
+    // refused outright.
     write_manifest(
         &tmp,
         "profile = \"minimal\"\n[[checks]]\nid = \"ux-review\"\nrequired = false\n",
     );
 
-    assert_refused(&tmp, &["refusing to emit", "UNBOUND", "ux-review"]);
+    let assert = gate_with_format(&tmp, "platform").success();
+    let doc: Value = serde_json::from_str(&String::from_utf8_lossy(&assert.get_output().stdout))
+        .expect("stdout is one JSON document");
+    assert_eq!(doc["result"], "passed");
+    let checks = doc["checks"].as_array().unwrap();
+    let unbound = checks
+        .iter()
+        .find(|c| c["check_id"] == "ux-review")
+        .unwrap();
+    assert_eq!(unbound["status"], "unbound");
     assert_eq!(latest_run(&tmp).status, "PASS");
 }
 
 #[test]
-fn a_check_under_review_refuses_and_names_the_state_and_the_id() {
+fn a_pending_review_is_emitted_as_review_required() {
     let tmp = init_dir();
-    // Optional and slow: it lands in `pending_reviews` as `optional:<id>`
-    // and never blocks, so the aggregate is `PASS` and the refusal is the
-    // per-check one. The 1s deadline is the point; the sleep is the honest
+    // Optional and slow: it lands in `pending_reviews` as `optional:<id>` and
+    // never blocks, so the aggregate is `PASS` and the check carries
+    // `review_required`. The 1s deadline is the point; the sleep is the honest
     // part of the fixture, because an ignored deadline would let the check
-    // pass and the document would be emitted.
+    // pass and the document would say `passed`.
     write_manifest(
         &tmp,
         "profile = \"minimal\"\n[[checks]]\nid = \"slow\"\nrequired = false\n\
          command = \"sleep 5\"\ntimeout_ms = 1000\n",
     );
 
-    assert_refused(&tmp, &["refusing to emit", "REVIEW_REQUIRED", "slow"]);
+    let assert = gate_with_format(&tmp, "platform").success();
+    let doc: Value = serde_json::from_str(&String::from_utf8_lossy(&assert.get_output().stdout))
+        .expect("stdout is one JSON document");
+    assert_eq!(doc["result"], "passed");
+    let checks = doc["checks"].as_array().unwrap();
+    let slow = checks.iter().find(|c| c["check_id"] == "slow").unwrap();
+    assert_eq!(slow["status"], "review_required");
     assert_eq!(latest_run(&tmp).status, "PASS");
 }
 
 #[test]
-fn a_check_under_review_that_blocks_refuses_on_the_aggregate() {
+fn a_blocking_pending_review_is_emitted_as_an_aggregate_review_required() {
     let tmp = init_dir();
     write_manifest(
         &tmp,
@@ -224,11 +257,38 @@ fn a_check_under_review_that_blocks_refuses_on_the_aggregate() {
          command = \"sleep 5\"\ntimeout_ms = 1000\n",
     );
 
-    assert_refused(
+    let assert = gate_with_format(&tmp, "platform").code(1);
+    let doc: Value = serde_json::from_str(&String::from_utf8_lossy(&assert.get_output().stdout))
+        .expect("stdout is one JSON document");
+    assert_eq!(
+        doc["result"], "review_required",
+        "an open human decision is its own result, not a failure: {doc}"
+    );
+    let checks = doc["checks"].as_array().unwrap();
+    let slow = checks.iter().find(|c| c["check_id"] == "slow").unwrap();
+    assert_eq!(slow["status"], "review_required");
+}
+
+/// `errored` is never emitted by this runtime: every execution failure is
+/// already a `REVIEW_REQUIRED`, which now has a value of its own.
+#[test]
+fn a_timed_out_check_is_never_reported_as_errored() {
+    let tmp = init_dir();
+    write_manifest(
         &tmp,
-        &["refusing to emit", "aggregate status REVIEW_REQUIRED"],
+        "profile = \"minimal\"\n[[checks]]\nid = \"slow\"\n\
+         command = \"sleep 5\"\ntimeout_ms = 1000\n",
+    );
+
+    let assert = gate_with_format(&tmp, "platform").code(1);
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    assert!(
+        !stdout.contains("\"errored\""),
+        "errored has no driftwatchdog source: {stdout}"
     );
 }
+
+// --- refusals -------------------------------------------------------------
 
 #[test]
 fn a_non_conforming_check_id_refuses_instead_of_being_slugged() {
@@ -275,22 +335,42 @@ fn an_over_length_diagnostic_refuses_instead_of_being_truncated() {
     );
 }
 
+/// Not every retained refusal class is reachable through the CLI: `gate_id`,
+/// `pipeline` and `evaluated_at` come from a digest, a constant, and the run's
+/// own RFC 3339 clock, and `subject_ref` is a Git revision. Those five are
+/// covered exhaustively by the unit tests in `src/gate/platform_result_tests.rs`
+///; what the binary adds is the observable half — empty stdout, a non-zero
+/// exit code, and a diagnostic naming the constraint. `check_id`, `detail` and
+/// `evidence_ref` are the reachable ones, and they are observed here.
+#[test]
+fn a_refusal_names_the_constraint_and_writes_nothing_to_stdout() {
+    let tmp = init_dir();
+    write_manifest(
+        &tmp,
+        "profile = \"minimal\"\n[[checks]]\nid = \"Not Conforming\"\ncommand = \"true\"\n",
+    );
+    assert_refused(&tmp, &["refusing to emit", "Not Conforming"]);
+}
+
 // --- the refusal is about emission, not about the run ---------------------
 
 #[test]
 fn a_refusal_still_persists_the_run_it_declined_to_publish() {
     let tmp = init_dir();
+    // The identifier refuses; the run behind it is still real and recorded.
     write_manifest(
         &tmp,
-        "profile = \"minimal\"\n[[checks]]\nid = \"ux-review\"\n",
+        "profile = \"minimal\"\n[[checks]]\nid = \"L1-configuration\"\ncommand = \"true\"\n",
     );
 
     gate_with_format(&tmp, "platform").failure().stdout("");
 
     let run = latest_run(&tmp);
-    assert_eq!(run.status, "FAIL");
-    assert!(run.blocked);
-    assert!(run.results_json.contains("UNBOUND"), "{}", run.results_json);
+    assert!(
+        run.results_json.contains("L1-configuration"),
+        "{}",
+        run.results_json
+    );
     assert!(run.manifest_digest.starts_with("sha256:"));
 }
 

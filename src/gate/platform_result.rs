@@ -7,42 +7,47 @@
 //! typed [`Refusal`] explaining exactly which value could not be
 //! represented without losing or inventing a claim.
 //!
-//! The two vocabularies do not have the same shape. Driftwatchdog has five
-//! [`GateStatus`] states; the platform has four values
-//! (`passed`, `failed`, `errored`, `skipped`) and no human-decision state:
+//! The contract's `result` and `checks[].status` share one six-value
+//! vocabulary and driftwatchdog has five [`GateStatus`] states, so the
+//! mapping is total and lossless at major 1:
 //!
-//! | [`GateStatus`] | platform | judgement |
+//! | [`GateStatus`] | platform | claim |
 //! |---|---|---|
-//! | `PASS` | `passed` | direct |
-//! | `FAIL` | `failed` | direct; severity stays orthogonal and unmapped |
-//! | `NOT_APPLICABLE` | `skipped` | the proven absence is the one `skipped` can honestly name |
-//! | `REVIEW_REQUIRED` | — | **unrepresentable**: a human decision is still open and the platform has no such state |
-//! | `UNBOUND` | — | **unrepresentable**: coercing it to `skipped` would merge a never-attempted check with a proven exemption, which [`GateStatus`]'s own invariant forbids |
+//! | `PASS` | `passed` | ran and passed |
+//! | `FAIL` | `failed` | ran and reported a failure; severity stays orthogonal and unmapped |
+//! | `NOT_APPLICABLE` | `skipped` | a proven exemption |
+//! | `REVIEW_REQUIRED` | `review_required` | a human decision is still open |
+//! | `UNBOUND` | `unbound` | asserted, no command bound, nothing ran |
 //!
-//! `errored` is never emitted. The platform defines no execution-failure
-//! taxonomy for this producer, and every execution failure driftwatchdog
-//! observes (timeout, spawn failure, malformed envelope, exit-code
-//! contradiction) is already normalized to `REVIEW_REQUIRED`, which is
-//! itself refused. A run that would need `errored` semantics arrives as a
-//! refusal naming its checks, which is more useful than an invented mapping.
+//! `review_required` and `unbound` are not approximations. The schema defines
+//! them with exactly the claims [`GateStatus`] already makes, and forbids the
+//! merge this runtime's own status model also forbids: *"A consumer MUST NOT
+//! read `skipped` and `unbound` alike, and MUST NOT read `review_required` as
+//! a decision already taken."* At contract major 0 those two states had no
+//! representation and this emitter refused them; at major 1 refusing them
+//! would decline to state a claim the contract states exactly.
 //!
-//! Identity is the second problem. [`GateStatus`] aside, a check id comes
-//! from a project manifest that validates only that it is non-empty, while
-//! the platform requires `^[a-z][a-z0-9_.-]{0,63}$`. There is no lossless
+//! `errored` is never emitted. Every execution failure driftwatchdog observes
+//! (timeout, spawn failure, malformed envelope, exit-code contradiction) is
+//! already normalized to `REVIEW_REQUIRED`, which now has an honest value of
+//! its own. It stays defined — it is a value of the contract and a consumer
+//! of this type must be able to name it — and a test holds it unreachable.
+//!
+//! Identity and length are where refusal still lives. A check id comes from a
+//! project manifest that validates only that it is non-empty, while the
+//! platform requires `^[a-z][a-z0-9_.-]{0,63}$`. There is no lossless
 //! reversible slug inside 64 characters for arbitrary ids — lowercasing
 //! merges `L1-configuration` with `l1-configuration`, truncation merges
 //! long ids with each other, and every encoding scheme that would need a
 //! parser to be reversible is a scheme the first opaque-string consumer
 //! will misread. So conforming ids pass through **unchanged** and everything
-//! else is refused.
+//! else is refused, exactly as an over-length diagnostic or evidence key is.
 //!
 //! Nothing here reads the clock, the filesystem, the database, or the
 //! manifest, so a unit test and a production run take the same branch. No
 //! JSON-Schema validator is used: the consumer owns validation, and a
 //! second copy of the schema's rules inside the producer would mask schema
 //! drift rather than surface it.
-
-use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -56,16 +61,39 @@ use crate::gate::types::{GateResult, GateStatus};
 /// in the root `driftwatch_profile` additional property instead.
 pub const PLATFORM_PIPELINE: &str = "driftwatchdog-gate";
 
-/// Platform `result` / `checks[].status` vocabulary. `Errored` is part of
-/// the platform contract and is deliberately never constructed; see the
-/// module docs.
+/// The version of the `platform.gate-result` contract this producer claims,
+/// emitted as the root `contract` property.
+///
+/// The registry serves contract majors 0 and 1 simultaneously today, so a
+/// document carrying only `passed` / `failed` / `skipped` is ambiguous between
+/// a 0.1.0 producer and a 1.0.0 producer that happened to have no open
+/// decision and no unbound check. The producer resolves that ambiguity, not
+/// the consumer.
+///
+/// Shape follows the in-repo precedent at `crate::checker::json`
+/// (`CHECKER_REPORT_CONTRACT` → a root `contract` field): one named constant,
+/// one field name, `name/major.minor.patch`. A second spelling for the same
+/// concept would give every future consumer a branch.
+pub const PLATFORM_GATE_RESULT_CONTRACT: &str = "platform.gate-result/1.0.0";
+
+/// Platform `result` / `checks[].status` vocabulary, contract major 1.
+///
+/// `Errored` is part of the contract and is deliberately never constructed by
+/// [`map_status`]; see the module docs. It is still defined and still
+/// round-trips through [`PlatformStatus::parse`], because a consumer of this
+/// type must be able to name every value the contract defines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PlatformStatus {
     Passed,
     Failed,
+    /// Never produced by this runtime. See the module docs.
     Errored,
     Skipped,
+    /// A human decision is still open and no one has decided the outcome.
+    ReviewRequired,
+    /// The check was asserted, no command was bound to it, and nothing ran.
+    Unbound,
 }
 
 impl PlatformStatus {
@@ -75,6 +103,8 @@ impl PlatformStatus {
             PlatformStatus::Failed => "failed",
             PlatformStatus::Errored => "errored",
             PlatformStatus::Skipped => "skipped",
+            PlatformStatus::ReviewRequired => "review_required",
+            PlatformStatus::Unbound => "unbound",
         }
     }
 
@@ -84,38 +114,30 @@ impl PlatformStatus {
             "failed" => Some(PlatformStatus::Failed),
             "errored" => Some(PlatformStatus::Errored),
             "skipped" => Some(PlatformStatus::Skipped),
+            "review_required" => Some(PlatformStatus::ReviewRequired),
+            "unbound" => Some(PlatformStatus::Unbound),
             _ => None,
         }
     }
 }
 
-/// What one driftwatchdog status means in the platform vocabulary.
-///
-/// This is a value, not a `Result`: the mapping is total and never fails.
-/// Unrepresentability is a property of the *data*, and naming it as a
-/// variant makes the table impossible to complete by accident.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StatusMapping {
-    /// The status has an honest platform equivalent.
-    Representable(PlatformStatus),
-    /// The status has none. Carries the driftwatchdog wire string so the
-    /// diagnostic can name the exact state rather than a paraphrase.
-    Unrepresentable(&'static str),
-}
-
 /// Map one [`GateStatus`] onto the platform vocabulary.
 ///
-/// Total by construction: every [`GateStatus`] variant has an arm, so adding
-/// a sixth state is a compile error here rather than a silent emission.
-pub fn map_status(status: GateStatus) -> StatusMapping {
+/// **Total and infallible at contract major 1**: every state has an honest
+/// value, so there is no failure arm and no `Result`. Adding a sixth
+/// [`GateStatus`] variant is a compile error here rather than a silent
+/// emission.
+///
+/// The same function serves the aggregate `result` and every
+/// `checks[].status`, which is also what the contract states: the vocabulary
+/// is shared and each value carries the same meaning at both levels.
+pub fn map_status(status: GateStatus) -> PlatformStatus {
     match status {
-        GateStatus::Pass => StatusMapping::Representable(PlatformStatus::Passed),
-        GateStatus::Fail => StatusMapping::Representable(PlatformStatus::Failed),
-        GateStatus::NotApplicable => StatusMapping::Representable(PlatformStatus::Skipped),
-        GateStatus::ReviewRequired => {
-            StatusMapping::Unrepresentable(GateStatus::ReviewRequired.as_str())
-        }
-        GateStatus::Unbound => StatusMapping::Unrepresentable(GateStatus::Unbound.as_str()),
+        GateStatus::Pass => PlatformStatus::Passed,
+        GateStatus::Fail => PlatformStatus::Failed,
+        GateStatus::NotApplicable => PlatformStatus::Skipped,
+        GateStatus::ReviewRequired => PlatformStatus::ReviewRequired,
+        GateStatus::Unbound => PlatformStatus::Unbound,
     }
 }
 
@@ -136,11 +158,14 @@ pub struct PlatformCheck {
 
 /// A complete `platform.gate-result` document.
 ///
-/// `driftwatch_profile` is an additional property carrying the project-owned
-/// profile verbatim; the schema constrains it not at all, which is exactly
-/// why the profile cannot be used as `pipeline`.
+/// `contract` is the declared contract version
+/// ([`PLATFORM_GATE_RESULT_CONTRACT`]) and `driftwatch_profile` is an
+/// additional property carrying the project-owned profile verbatim. The schema
+/// constrains neither, which is exactly why the profile cannot be used as
+/// `pipeline`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformGateResult {
+    pub contract: String,
     pub gate_id: String,
     pub pipeline: String,
     pub evaluated_at: String,
@@ -175,20 +200,12 @@ pub struct PlatformRun<'a> {
 
 /// Why a document could not be emitted. Every variant names the exact value
 /// and the exact constraint it violated.
+///
+/// There is no status variant: at contract major 1 every [`GateStatus`] has an
+/// honest value, so a refusal is always about an *identifier or a length* the
+/// contract bounds and driftwatchdog will not truncate to fit.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Refusal {
-    #[error(
-        "the aggregate status {status} has no platform.gate-result equivalent \
-         (platform result is one of passed, failed, errored, skipped); {because}"
-    )]
-    AggregateStatus {
-        status: &'static str,
-        because: &'static str,
-    },
-
-    #[error("checks with status {status} have no platform.gate-result equivalent and are not coerced: {ids}")]
-    CheckStatus { status: &'static str, ids: String },
-
     #[error("gate_id `{value}` does not match the platform pattern {pattern}")]
     GateId {
         value: String,
@@ -231,11 +248,6 @@ pub enum Refusal {
     EvidenceRef { key: String, min: usize, max: usize },
 }
 
-const REVIEW_REQUIRED_BECAUSE: &str =
-    "driftwatchdog's REVIEW_REQUIRED means a human decision is still open and the platform has no human-decision state";
-const UNBOUND_BECAUSE: &str =
-    "coercion to skipped would merge a never-attempted check with a proven exemption, which driftwatchdog forbids";
-
 pub const GATE_ID_PATTERN: &str = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$";
 pub const PIPELINE_PATTERN: &str = "^[a-z][a-z0-9_.-]{0,127}$";
 pub const CHECK_ID_PATTERN: &str = "^[a-z][a-z0-9_.-]{0,63}$";
@@ -255,60 +267,12 @@ pub const MAX_CHECK_ID_CHARS: usize = 64;
 /// and nothing is written anywhere — the caller prints a complete document or
 /// prints nothing at all, so a partial emission is not representable.
 ///
-/// Refusals are evaluated in a fixed order — statuses, then root identity,
-/// then per-check shape — so a substantive refusal is never masked by a
-/// cosmetic one, and the diagnostic is identical on every run.
+/// Refusals are evaluated in a fixed order — the root identity, then the
+/// per-check shape — so a substantive refusal is never masked by a cosmetic
+/// one, and the diagnostic is identical on every run. No status refuses at
+/// contract major 1: [`map_status`] is total.
 pub fn build(run: PlatformRun<'_>) -> Result<PlatformGateResult, Refusal> {
-    // 1. Aggregate status. `REVIEW_REQUIRED` and `UNBOUND` have no platform
-    //    state and are refused, never lowered.
-    let result = match map_status(run.aggregate) {
-        StatusMapping::Representable(s) => s,
-        StatusMapping::Unrepresentable(status) => {
-            return Err(Refusal::AggregateStatus {
-                status,
-                because: unrepresentable_because(status),
-            })
-        }
-    };
-
-    // 2. Per-check statuses. This is stricter than "required checks only": an
-    //    optional check under review is still a check a human has not
-    //    decided about, and publishing it as `skipped` would make the same
-    //    false claim. Collect every offender so one diagnostic names them all.
-    let mut unrepresentable: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
-    let mut mapped: Vec<(PlatformStatus, Option<String>)> = Vec::with_capacity(run.results.len());
-    for r in run.results {
-        let status = match map_status(r.status) {
-            StatusMapping::Representable(s) => s,
-            StatusMapping::Unrepresentable(status) => {
-                unrepresentable
-                    .entry(status)
-                    .or_default()
-                    .push(r.gate_id.clone());
-                // Reserve a slot so index alignment with `results` holds;
-                // this value is never read because the loop below refuses.
-                mapped.push((PlatformStatus::Passed, None));
-                continue;
-            }
-        };
-        // Redaction removes content; bounding would invent it. Only
-        // `redact_secrets` is applied, and the length is then checked rather
-        // than clamped.
-        let detail = r
-            .diagnostic
-            .as_deref()
-            .map(redact_secrets)
-            .filter(|d| !d.is_empty());
-        mapped.push((status, detail));
-    }
-    if let Some((status, ids)) = unrepresentable.into_iter().next() {
-        return Err(Refusal::CheckStatus {
-            status,
-            ids: sorted_ids(ids),
-        });
-    }
-
-    // 3. Root identity.
+    // 1. Root identity.
     if !matches_gate_id(run.gate_id) {
         return Err(Refusal::GateId {
             value: run.gate_id.to_string(),
@@ -336,9 +300,11 @@ pub fn build(run: PlatformRun<'_>) -> Result<PlatformGateResult, Refusal> {
         });
     }
 
-    // 4. Per-check shape: id, then detail, then evidence references.
+    // 2. Per-check shape: id, then detail, then evidence references. The
+    //    status itself is mapped above the identity checks — it is total, so
+    //    it can neither refuse nor be masked.
     let mut checks = Vec::with_capacity(run.results.len());
-    for (r, (status, detail)) in run.results.iter().zip(mapped) {
+    for r in run.results {
         if !matches_check_id(&r.gate_id) {
             return Err(Refusal::CheckId {
                 value: r.gate_id.clone(),
@@ -346,6 +312,14 @@ pub fn build(run: PlatformRun<'_>) -> Result<PlatformGateResult, Refusal> {
                 max: MAX_CHECK_ID_CHARS,
             });
         }
+        // Redaction removes content; bounding would invent it. Only
+        // `redact_secrets` is applied, and the length is then checked rather
+        // than clamped.
+        let detail = r
+            .diagnostic
+            .as_deref()
+            .map(redact_secrets)
+            .filter(|d| !d.is_empty());
         if let Some(detail) = detail.as_deref() {
             let length = detail.chars().count();
             if length > MAX_DETAIL_CHARS {
@@ -358,7 +332,7 @@ pub fn build(run: PlatformRun<'_>) -> Result<PlatformGateResult, Refusal> {
         }
         checks.push(PlatformCheck {
             check_id: r.gate_id.clone(),
-            status: status.as_str().to_string(),
+            status: map_status(r.status).as_str().to_string(),
             detail,
             driftwatch_gate_id: r.gate_id.clone(),
         });
@@ -385,29 +359,16 @@ pub fn build(run: PlatformRun<'_>) -> Result<PlatformGateResult, Refusal> {
     }
 
     Ok(PlatformGateResult {
+        contract: PLATFORM_GATE_RESULT_CONTRACT.to_string(),
         gate_id: run.gate_id.to_string(),
         pipeline: run.pipeline.to_string(),
         evaluated_at: run.evaluated_at.to_string(),
-        result: result.as_str().to_string(),
+        result: map_status(run.aggregate).as_str().to_string(),
         subject_ref: run.subject_ref.map(str::to_string),
         checks,
         evidence_refs,
         driftwatch_profile: run.profile.to_string(),
     })
-}
-
-fn unrepresentable_because(status: &'static str) -> &'static str {
-    match status {
-        "UNBOUND" => UNBOUND_BECAUSE,
-        _ => REVIEW_REQUIRED_BECAUSE,
-    }
-}
-
-fn sorted_ids(ids: Vec<String>) -> String {
-    let mut ids = ids;
-    ids.sort();
-    ids.dedup();
-    ids.join(", ")
 }
 
 /// Total-length caps from the `{0,n}` quantifiers in the patterns. These are

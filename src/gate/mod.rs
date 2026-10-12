@@ -103,9 +103,9 @@ pub use manifest::{
 };
 pub use platform_result::{
     build as build_platform_gate_result, map_status as map_platform_status, PlatformCheck,
-    PlatformGateResult, PlatformRun, PlatformStatus, Refusal as PlatformRefusal, StatusMapping,
-    CHECK_ID_PATTERN, GATE_ID_PATTERN, MAX_CHECK_ID_CHARS, MAX_DETAIL_CHARS,
-    MAX_EVIDENCE_REF_CHARS, MAX_SUBJECT_REF_CHARS, PIPELINE_PATTERN, PLATFORM_PIPELINE,
+    PlatformGateResult, PlatformRun, PlatformStatus, Refusal as PlatformRefusal, CHECK_ID_PATTERN,
+    GATE_ID_PATTERN, MAX_CHECK_ID_CHARS, MAX_DETAIL_CHARS, MAX_EVIDENCE_REF_CHARS,
+    MAX_SUBJECT_REF_CHARS, PIPELINE_PATTERN, PLATFORM_GATE_RESULT_CONTRACT, PLATFORM_PIPELINE,
 };
 pub use redact::{
     bound_text_with_extra, bounded_diagnostic, redact_secrets, redact_secrets_with_extra,

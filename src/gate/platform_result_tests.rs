@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::gate::types::{EvidenceRef, GateSeverity};
 
@@ -36,47 +35,38 @@ fn run<'a>(results: &'a [GateResult], aggregate: GateStatus) -> PlatformRun<'a> 
 
 #[test]
 fn pass_maps_to_passed() {
-    assert_eq!(
-        map_status(GateStatus::Pass),
-        StatusMapping::Representable(PlatformStatus::Passed)
-    );
+    assert_eq!(map_status(GateStatus::Pass), PlatformStatus::Passed);
 }
 
 #[test]
 fn fail_maps_to_failed() {
-    assert_eq!(
-        map_status(GateStatus::Fail),
-        StatusMapping::Representable(PlatformStatus::Failed)
-    );
+    assert_eq!(map_status(GateStatus::Fail), PlatformStatus::Failed);
 }
 
 #[test]
 fn not_applicable_maps_to_skipped() {
     assert_eq!(
         map_status(GateStatus::NotApplicable),
-        StatusMapping::Representable(PlatformStatus::Skipped)
+        PlatformStatus::Skipped
     );
 }
 
 #[test]
-fn review_required_is_unrepresentable() {
+fn review_required_maps_to_review_required() {
     assert_eq!(
         map_status(GateStatus::ReviewRequired),
-        StatusMapping::Unrepresentable("REVIEW_REQUIRED")
+        PlatformStatus::ReviewRequired
     );
 }
 
 #[test]
-fn unbound_is_unrepresentable() {
-    assert_eq!(
-        map_status(GateStatus::Unbound),
-        StatusMapping::Unrepresentable("UNBOUND")
-    );
+fn unbound_maps_to_unbound() {
+    assert_eq!(map_status(GateStatus::Unbound), PlatformStatus::Unbound);
 }
 
-/// The table is total, so no state can slip through un-mapped. The
-/// `errored` value is reachable only here, which is the point: the
-/// emitter never constructs it.
+/// The table is total, so no state can slip through un-mapped, and no state
+/// becomes `errored`: this runtime normalises every execution failure to
+/// `REVIEW_REQUIRED` upstream, and 1.0.0 gives that state its own value.
 #[test]
 fn every_status_has_an_arm_and_errored_is_never_produced() {
     let all = [
@@ -87,33 +77,94 @@ fn every_status_has_an_arm_and_errored_is_never_produced() {
         GateStatus::Unbound,
     ];
     for s in all {
-        let produced = match map_status(s) {
-            StatusMapping::Representable(p) => Some(p),
-            StatusMapping::Unrepresentable(_) => None,
-        };
         assert_ne!(
-            produced,
-            Some(PlatformStatus::Errored),
+            map_status(s),
+            PlatformStatus::Errored,
             "{s:?} must never become `errored`"
         );
     }
 }
 
+/// The produced values must be exactly the five the runtime can reach — no
+/// sixth, no accidental `Errored`.
+#[test]
+fn the_produced_values_are_exactly_the_five_reachable_states() {
+    let mut produced: Vec<&str> = [
+        GateStatus::Pass,
+        GateStatus::Fail,
+        GateStatus::NotApplicable,
+        GateStatus::ReviewRequired,
+        GateStatus::Unbound,
+    ]
+    .into_iter()
+    .map(|s| map_status(s).as_str())
+    .collect();
+    produced.sort_unstable();
+    assert_eq!(
+        produced,
+        vec!["failed", "passed", "review_required", "skipped", "unbound"]
+    );
+}
+
+/// `errored` stays in the vocabulary — it is a value of the contract and a
+/// consumer of this type must be able to name it — while never being produced.
+#[test]
+fn errored_is_named_and_round_tripped_but_never_mapped() {
+    assert_eq!(PlatformStatus::Errored.as_str(), "errored");
+    assert_eq!(
+        PlatformStatus::parse("errored"),
+        Some(PlatformStatus::Errored)
+    );
+    assert!(!matches!(
+        map_status(GateStatus::Pass),
+        PlatformStatus::Errored
+    ));
+}
+
 #[test]
 fn platform_status_wire_strings_match_the_schema_enum() {
-    assert_eq!(PlatformStatus::Passed.as_str(), "passed");
-    assert_eq!(PlatformStatus::Failed.as_str(), "failed");
-    assert_eq!(PlatformStatus::Errored.as_str(), "errored");
-    assert_eq!(PlatformStatus::Skipped.as_str(), "skipped");
-    for s in [
+    // Exactly the 1.x enum, in schema order.
+    let all = [
         PlatformStatus::Passed,
         PlatformStatus::Failed,
         PlatformStatus::Errored,
         PlatformStatus::Skipped,
-    ] {
+        PlatformStatus::ReviewRequired,
+        PlatformStatus::Unbound,
+    ];
+    let wire: Vec<&str> = all.iter().map(|s| s.as_str()).collect();
+    assert_eq!(
+        wire,
+        vec![
+            "passed",
+            "failed",
+            "errored",
+            "skipped",
+            "review_required",
+            "unbound"
+        ]
+    );
+    for s in all {
         assert_eq!(PlatformStatus::parse(s.as_str()), Some(s));
     }
+    // 0.x-only values are not a thing, and neither is anything else.
     assert_eq!(PlatformStatus::parse("PASS"), None);
+    assert_eq!(PlatformStatus::parse("reviewrequired"), None);
+    assert_eq!(PlatformStatus::parse("unbound "), None);
+}
+
+/// The declared contract version is a single constant and a single field
+/// name, matching the `driftwatch-checker/0.1.0` precedent.
+#[test]
+fn the_document_declares_its_contract_version() {
+    assert_eq!(PLATFORM_GATE_RESULT_CONTRACT, "platform.gate-result/1.0.0");
+    let doc = build(run(&[passing()], GateStatus::Pass)).unwrap();
+    assert_eq!(doc.contract, PLATFORM_GATE_RESULT_CONTRACT);
+    let json = serde_json::to_string(&doc).unwrap();
+    assert!(
+        json.contains("\"contract\":\"platform.gate-result/1.0.0\""),
+        "the root `contract` key must be the declared version: {json}"
+    );
 }
 
 // --- pattern validators ----------------------------------------------
@@ -269,102 +320,73 @@ fn the_document_serialises_to_the_contract_field_names() {
     assert_eq!(value["checks"][0]["check_id"], "tests");
     assert_eq!(value["checks"][0]["status"], "passed");
     // Additional properties the schema permits.
+    assert_eq!(value["contract"], "platform.gate-result/1.0.0");
     assert_eq!(value["checks"][0]["driftwatch_gate_id"], "tests");
     assert_eq!(value["driftwatch_profile"], "rust-product");
     // Never emitted: driftwatchdog has no tenant concept.
     assert!(value.get("tenant_id").is_none());
 }
 
-// --- refusals ---------------------------------------------------------
+// --- the two states 1.0.0 added, at both levels -----------------------
 
 #[test]
-fn aggregate_review_required_refuses() {
-    let err = build(run(&[passing()], GateStatus::ReviewRequired)).unwrap_err();
-    assert_eq!(
-        err,
-        Refusal::AggregateStatus {
-            status: "REVIEW_REQUIRED",
-            because: REVIEW_REQUIRED_BECAUSE,
-        }
-    );
-    assert!(err.to_string().contains("REVIEW_REQUIRED"));
-    assert!(err.to_string().contains("no human-decision state"));
-}
-
-#[test]
-fn aggregate_unbound_refuses() {
-    let err = build(run(&[passing()], GateStatus::Unbound)).unwrap_err();
-    assert_eq!(
-        err,
-        Refusal::AggregateStatus {
-            status: "UNBOUND",
-            because: UNBOUND_BECAUSE,
-        }
-    );
-    assert!(err.to_string().contains("UNBOUND"));
-}
-
-#[test]
-fn a_check_under_review_refuses_and_names_the_ids() {
+fn an_aggregate_under_review_is_emitted_as_review_required() {
     let results = vec![passing(), result("slow", GateStatus::ReviewRequired)];
-    let err = build(run(&results, GateStatus::Pass)).unwrap_err();
-    assert_eq!(
-        err,
-        Refusal::CheckStatus {
-            status: "REVIEW_REQUIRED",
-            ids: "slow".to_string(),
-        }
-    );
-    assert!(err.to_string().contains("slow"));
+    let doc = build(run(&results, GateStatus::ReviewRequired)).unwrap();
+    assert_eq!(doc.result, "review_required");
+    assert_eq!(doc.checks[1].status, "review_required");
 }
 
 #[test]
-fn every_unrepresentable_check_id_is_named_once_and_sorted() {
-    let results = vec![
-        result("zzz", GateStatus::Unbound),
-        result("aaa", GateStatus::Unbound),
-        result("aaa", GateStatus::Unbound),
-        result("mmm", GateStatus::ReviewRequired),
-    ];
-    let err = build(run(&results, GateStatus::Pass)).unwrap_err();
-    // BTreeMap iteration is ordered, so REVIEW_REQUIRED is reported first.
-    assert_eq!(
-        err,
-        Refusal::CheckStatus {
-            status: "REVIEW_REQUIRED",
-            ids: "mmm".to_string(),
-        }
-    );
-    let results = vec![
-        result("zzz", GateStatus::Unbound),
-        result("aaa", GateStatus::Unbound),
-        result("aaa", GateStatus::Unbound),
-    ];
-    let err = build(run(&results, GateStatus::Pass)).unwrap_err();
-    assert_eq!(
-        err,
-        Refusal::CheckStatus {
-            status: "UNBOUND",
-            ids: "aaa, zzz".to_string(),
-        }
-    );
+fn an_aggregate_unbound_is_emitted_as_unbound() {
+    let results = vec![result("ux-review", GateStatus::Unbound)];
+    let doc = build(run(&results, GateStatus::Unbound)).unwrap();
+    assert_eq!(doc.result, "unbound");
+    assert_eq!(doc.checks[0].status, "unbound");
 }
 
-/// The floor is "refuse on a required check". This implementation is
-/// stricter: an optional pending review coerced to `skipped` would
-/// publish the same false claim, so it refuses too.
+/// Optionality changes whether a status blocks; it never changes what the
+/// status claims, and it is no longer a reason to refuse.
 #[test]
-fn an_optional_review_under_review_also_refuses() {
+fn an_optional_check_under_review_is_emitted_not_refused() {
     let results = vec![passing(), result("advisory", GateStatus::ReviewRequired)];
-    let err = build(run(&results, GateStatus::Pass)).unwrap_err();
-    assert_eq!(
-        err,
-        Refusal::CheckStatus {
-            status: "REVIEW_REQUIRED",
-            ids: "advisory".to_string(),
-        }
-    );
+    let doc = build(run(&results, GateStatus::Pass)).unwrap();
+    assert_eq!(doc.result, "passed");
+    assert_eq!(doc.checks[1].status, "review_required");
 }
+
+#[test]
+fn an_optional_unbound_check_is_emitted_not_refused() {
+    let results = vec![passing(), result("advisory", GateStatus::Unbound)];
+    let doc = build(run(&results, GateStatus::Pass)).unwrap();
+    assert_eq!(doc.result, "passed");
+    assert_eq!(doc.checks[1].status, "unbound");
+}
+
+/// The invariant `src/gate/types.rs` holds locally, now expressible on the
+/// wire: the two opposite claims stay two different values in one document.
+#[test]
+fn unbound_is_never_merged_with_skipped() {
+    let results = vec![
+        result("ux-review", GateStatus::NotApplicable),
+        result("coverage", GateStatus::Unbound),
+    ];
+    let doc = build(run(&results, GateStatus::Pass)).unwrap();
+    assert_eq!(doc.checks[0].status, "skipped");
+    assert_eq!(doc.checks[1].status, "unbound");
+}
+
+/// The check object is the contract's "an unbound check is reported here
+/// rather than omitted" clause: every asserted check is counted.
+#[test]
+fn an_unbound_check_is_reported_rather_than_omitted() {
+    let results = vec![passing(), result("coverage", GateStatus::Unbound)];
+    let doc = build(run(&results, GateStatus::Pass)).unwrap();
+    assert_eq!(doc.checks.len(), 2);
+    assert!(doc.checks.iter().any(|c| c.status == "unbound"));
+}
+
+// --- refusals ---------------------------------------------------------
 
 #[test]
 fn a_non_conforming_check_id_refuses_and_names_the_pattern() {
@@ -625,21 +647,22 @@ fn detail_is_redacted_before_it_is_measured() {
 
 // --- ordering ---------------------------------------------------------
 
-/// A substantive refusal must not be masked by a cosmetic one: a run
-/// that is both under review and carries a bad id reports the status.
+/// No status refuses any more, so the surviving order is root identity,
+/// then per-check shape. A run that is both under review and carries a bad
+/// id is refused for the id — the review itself is emitted, not the reason.
 #[test]
-fn status_refusals_are_evaluated_before_identity_and_shape() {
+fn a_status_never_shadows_an_identity_or_shape_refusal() {
     let results = vec![result("L1-configuration", GateStatus::ReviewRequired)];
-    let mut r = run(&results, GateStatus::Pass);
+    let mut r = run(&results, GateStatus::ReviewRequired);
     r.gate_id = "bad id";
     r.pipeline = "Bad Pipeline";
     r.evaluated_at = "not a timestamp";
     let err = build(r).unwrap_err();
     assert_eq!(
         err,
-        Refusal::CheckStatus {
-            status: "REVIEW_REQUIRED",
-            ids: "L1-configuration".to_string(),
+        Refusal::GateId {
+            value: "bad id".to_string(),
+            pattern: GATE_ID_PATTERN,
         }
     );
 }
@@ -671,14 +694,70 @@ fn the_timestamp_is_checked_before_per_check_shape() {
 
 /// No refusal ever yields a document. `build` returns `Err`, so there is
 /// nothing to print; this asserts the shape of the API rather than a
-/// runtime behaviour.
+/// runtime behaviour. Every remaining class is an identity or a length,
+/// so a status is no longer a reason to be here.
 #[test]
 fn a_refusal_produces_no_document() {
     let results = vec![result("L1-configuration", GateStatus::Pass)];
     assert!(build(run(&results, GateStatus::Pass)).is_err());
-    let results = vec![result("tests", GateStatus::ReviewRequired)];
-    assert!(build(run(&results, GateStatus::Pass)).is_err());
-    assert!(build(run(&[], GateStatus::Unbound)).is_err());
+    let results = [passing()];
+    let mut r = run(&results, GateStatus::Pass);
+    r.evaluated_at = "not a timestamp";
+    assert!(build(r).is_err());
+    let long = "s".repeat(MAX_SUBJECT_REF_CHARS + 1);
+    let mut r = run(&results, GateStatus::Pass);
+    r.subject_ref = Some(&long);
+    assert!(build(r).is_err());
+}
+
+/// Every one of the seven retained classes still refuses, and none of them
+/// refuses because of a status. One document shape, one bounded `subject_ref`.
+#[test]
+fn all_seven_retained_refusal_classes_still_refuse() {
+    let ok = [passing()];
+
+    let mut r = run(&ok, GateStatus::Pass);
+    r.gate_id = "sha256/abc";
+    assert!(matches!(build(r).unwrap_err(), Refusal::GateId { .. }));
+
+    let mut r = run(&ok, GateStatus::Pass);
+    r.pipeline = "Bad Pipeline";
+    assert!(matches!(build(r).unwrap_err(), Refusal::Pipeline { .. }));
+
+    let long = "r".repeat(MAX_SUBJECT_REF_CHARS + 1);
+    let mut r = run(&ok, GateStatus::Pass);
+    r.subject_ref = Some(&long);
+    assert!(matches!(build(r).unwrap_err(), Refusal::SubjectRef { .. }));
+
+    let mut r = run(&ok, GateStatus::Pass);
+    r.evaluated_at = "2026-10-12 10:00:00";
+    assert!(matches!(build(r).unwrap_err(), Refusal::EvaluatedAt { .. }));
+
+    let bad_id = vec![result("L1-configuration", GateStatus::Pass)];
+    assert!(matches!(
+        build(run(&bad_id, GateStatus::Pass)).unwrap_err(),
+        Refusal::CheckId { .. }
+    ));
+
+    let mut long_detail = result("tests", GateStatus::Fail);
+    long_detail.diagnostic = Some("x".repeat(MAX_DETAIL_CHARS + 1));
+    assert!(matches!(
+        build(run(&[long_detail], GateStatus::Fail)).unwrap_err(),
+        Refusal::Detail { .. }
+    ));
+
+    let mut long_key = passing();
+    long_key.evidence.push(EvidenceRef {
+        key: "k".repeat(MAX_EVIDENCE_REF_CHARS + 1),
+        digest: None,
+        media_type: None,
+        byte_size: None,
+        preview: None,
+    });
+    assert!(matches!(
+        build(run(&[long_key], GateStatus::Pass)).unwrap_err(),
+        Refusal::EvidenceRef { .. }
+    ));
 }
 
 /// A run with no results at all is still a document: an empty
