@@ -401,7 +401,7 @@ clippy --all-targets --all-features -- -D warnings`, and `cargo test --workspace
 were deliberately not run here.
 
 **`mandatory-governance-quality-all-profiles` is implemented, verified, and
-not archived.** `profile_defaults_for` now adds required `governance-quality`
+archived** (2026-10-12). `profile_defaults_for` now adds required `governance-quality`
 exactly once across all supported built-in profiles, ten named workspace
 profiles, and project-defined profiles while preserving their other concerns.
 Unknown profile typos still fail validation. No fleet manifest was edited.
@@ -425,12 +425,30 @@ Before this change, `src/commands/gate.rs` was already 1,035 lines and
 `src/gate/manifest.rs` 2,956 lines. These findings were not silenced or
 rewritten here.
 
-The new active OpenSpec package is
-`openspec/changes/mandatory-governance-quality-all-profiles/`. It is not
-archived. Commit 1 is `9426fed` (`feat(gate): require governance quality for
-every profile`). This handoff-only update is commit 2. Next, re-run the
-workspace-governance binder after this change lands so the 35 newly governed
-repositories receive their project-owned commands.
+The change was archived as
+`openspec/changes/archive/2026-10-12-mandatory-governance-quality-all-profiles/`.
+Its original implementation commit is `9426fed` (`feat(gate): require
+governance quality for every profile`); the archive commit is `76f13b8`
+(`chore(openspec): archive mandatory-governance-quality-all-profiles`). The
+spec delta promoted **one** requirement into the canonical
+`openspec/specs/generic-gate-contract/spec.md` — *Governance quality is
+scheduled for every profile*, carrying all six scenarios — taking that spec
+from **3 requirements to 4**. `--skip-specs` was not used. The five
+incomplete open changes were not touched.
+
+Archival verification on 2026-10-13: `cargo fmt --check` clean (exit 0);
+`cargo test` passed with 0 failures (exit 0); `cargo clippy --all-targets
+--all-features -- -D warnings` clean (exit 0); `openspec validate --changes
+--strict --no-interactive` 8 passed / 0 failed before the archive and 7 after;
+`openspec validate --all --strict --no-interactive` **39 passed, 0 failed
+(39 items)** after the archive. The Driftwatchdog **Gate runtime** was
+deliberately not run; its known pre-existing `placeholder-threshold`,
+`product-code-boundary`, and `source-file-size` findings come from the five
+still-incomplete open changes and from long-standing repo debt, and are
+unrelated to this archive.
+
+Next action for the orchestrator: re-run the workspace-governance binder so the
+35 newly governed repositories receive their project-owned commands.
 
 **A blocking rule that no gate could read is now declared.**
 `workspace-governance` `0611298` added a rule that stops a repository carrying
