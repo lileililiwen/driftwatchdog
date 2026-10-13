@@ -69,3 +69,23 @@
 - [x] Commit 2: `HANDOFF.md` only
 - [x] Explicit paths, never `git add -A`
 - [x] On `main`. No branch, no worktree, no push, not archived.
+
+      **Archived 2026-10-13.** The "not archived" in this box was accurate
+      when written and is superseded now. It was held back for a real
+      reason, recorded rather than worked around: this change's `MODIFIED`
+      delta targets the requirement *"A bound concern reports only the codes
+      it owns"*, and that requirement existed in **no canonical spec** —
+      only in still-open deltas. `bind-governance-quality-checks` promoted
+      it into `openspec/specs/generic-gate-contract/spec.md` on
+      2026-10-13, so the target now resolves and
+      `openspec validate declare-new-change-with-gate-debt-code --strict
+      --no-interactive` passes. The delta was **not** weakened to get
+      through: it still modifies that requirement and still adds its own.
+
+- [x] Re-verify the negative control at archive time. Removing
+      `QUALITY_NEW_CHANGE_WITH_GATE_DEBT` from
+      `GOVERNANCE_QUALITY_DECLARED_CODES` still turns
+      `a_new_change_on_a_repository_carrying_gate_debt_is_a_gate_failure`
+      red with exactly the recorded `left: Pass, right: Fail`, and restoring
+      the constant turns it green. A declaration whose test cannot fail is
+      not a declaration.
