@@ -14,6 +14,74 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`per-check-gate-timeout` is implemented, verified, and archived**
+(2026-10-13; archive commit `bcb87c4`). It closed at **32/32** boxes. This
+archive adds no code: the field, its validation, its resolution and its
+rendering shipped at implementation time (`aae4a67`). What the archive does is
+keep the two fleet-scale boxes visible instead of pretending they were done.
+
+### The residue was moved, not closed, and the reason is the digest
+
+Neither open box could be completed here. The first is a **digest-stability
+question** the change surfaced and deliberately did not fix: the YAML converter
+stamps `source = "manifest"` on every check it builds
+(`src/gate/aigate.rs:387,397`) and the native form leaves `source` absent
+(`src/gate/manifest.rs:733`), so the two forms have never produced
+byte-identical canonical manifests. **Re-measured at archive time on two
+temporary projects** — same `build` + `tests`, same commands, same `timeout_ms` —
+and it is still reproducible:
+
+| | resolved deadlines | `manifest_digest` |
+| --- | --- | --- |
+| `.ai-gate/gate.yaml` | `build: 60000ms`, `tests: 900000ms` | `sha256:c694b16555d225fe` |
+| native `gate.toml` | `build: 60000ms`, `tests: 900000ms` | **`sha256:ac4f2706e671645a`** |
+
+Identical declarations, identical effective deadlines, different digests. The
+timeout contract holds across both forms; the canonical form does not. That is
+carried as `workspace-fleet-check-sweep` item **1.1**, open and unstarted, with
+the note that fixing it **moves the digest of every `.ai-gate/gate.yaml`
+manifest** — because the label it drops is one the converter wrote into all of
+them. That migration is why it was never fixed inside a timeout change, and it
+is the reason the single-owner test compares the rendered *timeout block* rather
+than the whole plan.
+
+The second box is the **76-manifest timeout sweep**: which deadline a repository
+needs is that repository's call, measured on its own machine. Carried as items
+**1.2a-1.2f**, one box per repository, unstarted. A sweep tool could write a
+placeholder, and a placeholder deadline is a false claim about a repository's
+coverage in exactly the way the single hardcoded constant was.
+
+### What was verified here, freshly
+
+`driftwatch gate --dry-run` in this repository renders the block — `check
+timeouts (default 60000ms):` with one line per scheduled check, including
+`- declared-verification: 60000ms`, the check and deadline the original defect
+was about. 5 tests in `tests/gate_check_timeout.rs` pass, including the control
+that really kills `sleep 5` under a declared 1s deadline and really reports
+`project-runtime:timeout`. 19 timeout-named unit tests pass across
+`src/gate/manifest.rs`, `src/gate/aigate.rs` and `src/commands/gate.rs`.
+`cargo fmt --check` clean; `cargo test` **1010 passed, 0 failed, 31 suites**;
+`cargo clippy --all-targets --all-features -- -D warnings` clean; `sh
+tests/packaging/run_all.sh` **11 ok, 0 FAIL**; `git diff --check` clean. The
+**`driftwatch gate` runtime was deliberately not run** — its pre-existing
+`placeholder-threshold`, `product-code-boundary` and `source-file-size`
+findings are unrelated to this archive.
+
+**Spec promotion, `--skip-specs` NOT used:** `gate-project-configuration`
+**+2 added, ~0 modified, -0**, from **6 requirements to 8** — *Every gate check
+may declare its own execution timeout* and *Both manifest forms declare a check
+timeout identically*. This change carried **no** `generic-gate-contract` delta,
+so that capability was not touched by this archive.
+
+### The queue after this archive
+
+Two more archives in this restructuring, then one change remains open:
+`workspace-fleet-check-sweep`, the fleet-scale residue of all three originals,
+staying open and unarchived by design. It carries owner decisions 1-6 as an
+explicit open question set — **no answer was invented** — and one spec delta,
+tied to item 1.1, that states its own target rather than claiming shipped
+behaviour.
+
 **`declare-spec-purpose-placeholder-code` is implemented, verified, and
 archived** (2026-10-13; archive commit `183efd2`). It closed at **23/23**
 boxes. The implementation is one string: `SPEC_PURPOSE_PLACEHOLDER` joins
@@ -788,6 +856,11 @@ binds its own command.
 
 **`per-check-gate-timeout` is implemented and deliberately not archived**
 (commit `aae4a67`; it carries three open boxes, recorded below).
+
+> **Superseded 2026-10-13:** archived as `bcb87c4` at 32/32. The three open
+> boxes are discharged — two by transfer to `workspace-fleet-check-sweep` as
+> explicitly *carried, not done*, one by the archive itself. The material below
+> is kept as the implementation record and is still true.
 
 **The problem, measured rather than assumed.** `driftwatch gate` hardcoded
 one 60s deadline for every check it ran — `CHECK_TIMEOUT_MS` in
@@ -1709,7 +1782,7 @@ Read these in order:
 | release-evidence-and-capability-gate | archived 2026-09-24 | `release` built-in profile + stable concern IDs `release-evidence` and `capability-conformance`; shared wire shape with the product-quality envelope (`RELEASE_GATE_ENVELOPE_VERSION = 1`, exit-code authority rule, bounded fields, secret redaction); release-evidence required-evidence guard (PASS requires `revision`, `product_version`, at least one `artifacts` entry, and `provenance`; stale revision vs current git rev downgrades to REVIEW_REQUIRED); capability-conformance required-evidence guard (PASS requires non-empty `verified` whose ids are all in the resolved plan; out-of-scope verified ids downgrade to REVIEW_REQUIRED); malformed/missing/wrong-version envelopes downgrade to REVIEW_REQUIRED; no text-mode fallback so missing coverage can never be silently treated as a pass. New `src/gate/concerns.rs` (6 unit tests) + 5 new `src/gate/manifest.rs` unit tests + 18 new `src/gate/adapters.rs` unit tests + 19 new `tests/gate_release_evidence.rs` integration tests. `driftwatch check` and every other Gate concern path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator (no release publisher, signer, SBOM generator, or deployment executor is added). | product-quality-gate-contract |
 | gate-evidence-export | archived 2026-09-27 | Read-only `driftwatch gate evidence-export` subcommand (`--format human|json`, `--dry-run` for documentation) that maps a completed `gate_runs` row into the workspace-governance `release_evidence` vocabulary (closed field set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed state set `verified` / `unverified` / `blocked`); per-field state priority `verified > blocked > unverified` with `verified` reserved for scheduled checks that ran and passed on the current revision; stale-revision rule emits every field `unverified` with a `stale` diagnostic naming both revisions; unknown governance field is an `ExportError::UnknownField` construction error; refuses with a non-zero exit when no run exists. New `src/gate/evidence_export.rs` (23 unit tests) + new `src/commands/evidence_export.rs` (8 unit tests) + new `tests/gate_evidence_export.rs` (11 integration tests covering ran/PASS, ran/FAIL, not-scheduled, could-not-execute, stale revision, schema, and read-only invariants). The bounded-evidence store, the release-evidence / capability-conformance adapters, the release-gate envelope wire version, the `gate_runs` schema, the `driftwatch check` path, and the `gate --format json` path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator. | release-evidence-and-capability-gate |
 | post-mvp-readiness | archived 2026-09-27 | Documentation-only README readiness pass: a checked-in terminal capture under `docs/assets/run-failure.txt` + `docs/assets/gate-run.txt` (synthetic project, no real repo data, no external image host, redacted), a consolidated built-in Gate profile and concern catalog in `README.md` (profile → stable concern IDs → default `required = true` → exit-code authority rule → text-mode fallback behaviour) sourced from `src/gate/concerns.rs` and `src/gate/manifest.rs`, and an ordered integration recipe from no manifest to a first `driftwatch gate` run (init, surface choice, profile + commands, blocking override, context providers, dry-run + run + export). The catalog and the recipe explicitly note Driftwatchdog owns the central workspace Gate (75 workspace `.ai-gate/gate.yaml` files name `runtime: driftwatchdog`). No `src/**`, concern ID, envelope, wire version, CLI surface, profile, rule, or canonical spec was changed; Driftwatchdog remains an executor/aggregator. | gate-evidence-export |
-| per-check-gate-timeout | implemented 2026-10-04, NOT archived (3 open boxes recorded in Current state) | `driftwatch gate` hardcoded one 60s deadline for every check (`CHECK_TIMEOUT_MS` in `src/commands/gate.rs`) that no manifest could reach; four fleet repositories were killed mid-run and reported unproven, and two more had 8% and 2% headroom. `ManifestCheck.timeout_ms: Option<u64>` mirrors the checker config's existing field, its `unwrap_or(DEFAULT)` resolution, and its refusal of `0`; the business YAML form gains a per-check `timeouts:` mapping onto the same field so the value rules run once in `manifest::validate` for both forms. `MAX_CHECK_TIMEOUT_MS = 3_600_000` bounds the value and is named in the error. **The default is unchanged at 60s** and all 77 fleet manifests produce byte-identical `manifest_digest` values before and after, measured by diffing `--dry-run` output from both binaries — no manifest needs an edit. `ResolvedGatePlan.check_timeouts` + `--dry-run` rendering make the effective deadline visible. 9 new `src/gate/manifest.rs` unit tests + 5 in `src/gate/aigate.rs` + 3 in `src/commands/gate.rs` + 5 new `tests/gate_check_timeout.rs` integration tests. Timeout stays distinct from failure (`REVIEW_REQUIRED` + `project-runtime:timeout` vs `FAIL`). No new execution path, dependency, or network call. | gate-cli-and-memory-integration; gate-project-configuration |
+| per-check-gate-timeout | implemented 2026-10-04, archived 2026-10-13 at 32/32 (2 boxes carried to `workspace-fleet-check-sweep`, unstarted) | `driftwatch gate` hardcoded one 60s deadline for every check (`CHECK_TIMEOUT_MS` in `src/commands/gate.rs`) that no manifest could reach; four fleet repositories were killed mid-run and reported unproven, and two more had 8% and 2% headroom. `ManifestCheck.timeout_ms: Option<u64>` mirrors the checker config's existing field, its `unwrap_or(DEFAULT)` resolution, and its refusal of `0`; the business YAML form gains a per-check `timeouts:` mapping onto the same field so the value rules run once in `manifest::validate` for both forms. `MAX_CHECK_TIMEOUT_MS = 3_600_000` bounds the value and is named in the error. **The default is unchanged at 60s** and all 77 fleet manifests produce byte-identical `manifest_digest` values before and after, measured by diffing `--dry-run` output from both binaries — no manifest needs an edit. `ResolvedGatePlan.check_timeouts` + `--dry-run` rendering make the effective deadline visible. 9 new `src/gate/manifest.rs` unit tests + 5 in `src/gate/aigate.rs` + 3 in `src/commands/gate.rs` + 5 new `tests/gate_check_timeout.rs` integration tests. Timeout stays distinct from failure (`REVIEW_REQUIRED` + `project-runtime:timeout` vs `FAIL`). No new execution path, dependency, or network call. | gate-cli-and-memory-integration; gate-project-configuration |
 | installer-stdout-purity | archived 2026-10-12 | The shell installer's stdout is a contract: exactly one line on success (the installed path) and nothing on failure. Two cleanup deletes could append to it — the `EXIT` trap that removes the work directory (fires *after* the final `printf`) and the staged-binary cleanup further down (redirected stderr but not stdout). On a host whose `rm` is a wrapper that reports what it removed on stdout, `$( install.sh ... )` captured two lines and `test_installer.sh:21` failed. Both sites now redirect stdout; the trap keeps its stderr channel so a real cleanup failure is still visible and gains `|| true` so a failing delete cannot become a failed install. Regression test `tests/packaging/test_installer_stdout.sh` puts a chatty `rm` (and a second-call-failing `mv` for the failure path) on the installer's PATH so the defect reproduces on every host, and asserts one-line/empty stdout plus that each cleanup site was reached. Installer stderr, `--dry-run`, exit codes, checksum verification, and the atomic install are unchanged. | bind-governance-quality-checks (recorded dependency only) |
 | source-file-size-gate | archived 2026-09-28 | Built-in `source-file-size` concern scheduled by the `product`/`rust-product` profiles and executed in-process by a new `src/gate/source_size.rs` scanner (no project command, no language parsing). It resolves a repository-owned source boundary (Git: `git ls-files --cached --others --exclude-standard`; non-Git: symlink-free walk with root `.gitignore`), applies default dependency/build/vendor/state/generated/test exclusions plus conventional source roots, honors repository-relative `include`/`exclude` glob overrides (exclude wins), skips symlinks and binary/invalid-UTF-8 files, and counts raw `0x0A` bytes (`wc -l` semantics) per file. A required concern returns `FAIL` with one bounded finding per file above the default 1,000-line maximum; boundary/read uncertainty returns `REVIEW_REQUIRED`, so incomplete coverage never becomes a pass. A strict `[source_size]` manifest table (`max_lines` positive and <= 1,000,000; `include`/`exclude` repository-relative, non-empty, no absolute/`..` patterns) is validated before execution and participates in the manifest digest; `.ai-gate/gate.yaml` uses the built-in default. `--dry-run` renders `source_size: max_lines=... include=[...] exclude=[...]` without scanning or persisting. New `src/gate/source_size.rs` (18 unit tests) + `tests/gate_source_file_size.rs` (13 integration tests) + `concerns.rs`/`manifest.rs`/`mod.rs`/`aigate.rs`/`commands/gate.rs` updates. `driftwatch check`, every other concern path, the CLI surface, and the SQLite schema are unchanged. | product-quality-gate-contract |
 
@@ -1866,24 +1939,31 @@ OpenSpec Codex skill generation initially hit a read-only sandbox directory. The
 
 ## Next action
 
-**`per-check-gate-timeout` is implemented and must stay unarchived.** Every
-implementation box in its `tasks.md` is checked and the full suite is green
-(908 passed / 0 failed / 29 suites), but three boxes are open on purpose, so
-`openspec archive` must not be run on it yet. The three open items:
+**`per-check-gate-timeout` is implemented and archived** (2026-10-13;
+`bcb87c4`). The earlier "must stay unarchived" note below is **withdrawn**: the
+three open items were not missing work in this repository, and two of them were
+never closable here. They are now carried, unstarted, in
+`workspace-fleet-check-sweep`, and the third (the archive itself) is done.
 
 1. **The 76 manifests are not swept to declare their own timeouts.** This
    change adds the field; which deadline a repository needs is that
    repository's call, measured on its own machine. The four that cannot pass
    under 60s — `fotofy`, `openaccounting`, `rust-ecommerce`,
    `alltools-platform` — stay unproven until their owners declare a value, and
-   `cvunify` / `labrys` keep their 8% and 2% headroom until they do.
+   `cvunify` / `labrys` keep their 8% and 2% headroom until they do. **Still
+   open**, as `workspace-fleet-check-sweep` items 1.2a-1.2f.
 2. **The `source`-label divergence between the two manifest forms** (above) is
-   recorded and not fixed here.
-3. **Not archived** — archiving needs separate authorization.
+   recorded and not fixed here, and is still reproducible — measured again at
+   archive time, `sha256:c694b16555d225fe` for the YAML form against
+   `sha256:ac4f2706e671645a` for the native form on identical declarations.
+   **Still open**, as item 1.1.
+3. **Not archived** — archiving needs separate authorization. **Done**:
+   archived 2026-10-13 with `--skip-specs` not used.
 
 **The next queue item is a fleet decision, not a code change.** The useful
 follow-up is helping the four affected repositories measure their real warm
-durations and declare them, which is owner work per repository.
+durations and declare them, which is owner work per repository — and the
+operator's answers to open decisions 1-6, which gate the rest of the sweep.
 
 **`installer-stdout-purity` is implemented and archived** (2026-10-12). Every
 box in its `tasks.md` is checked, the full suite is green, and its spec delta
