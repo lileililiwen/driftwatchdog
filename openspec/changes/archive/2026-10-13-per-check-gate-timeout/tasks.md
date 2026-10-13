@@ -3,6 +3,14 @@
 BFS → DFS → BFS. Phase 0 is measurement that was already done and is
 recorded so a later reader can re-check it rather than trust it.
 
+**Archived 2026-10-13 with two boxes transferred, not closed.** Every box in
+the last phase that this repository could own is genuinely done and verified
+below. The two that could not be owned are fleet-scale: they need a sibling
+repository's owner, or a reviewed runtime change of their own. They are now
+marked `CARRIED, NOT DONE` and point at `workspace-fleet-check-sweep`, which
+holds them as open, unstarted items. Nothing in this file claims a manifest
+was swept or a digest defect was fixed.
+
 ## Phase 0 — BFS: the state being fixed, measured
 
 - [x] **The defect is a single hardcoded constant.** `CHECK_TIMEOUT_MS =
@@ -117,21 +125,38 @@ recorded so a later reader can re-check it rather than trust it.
   control exists to catch. The wiring was restored and the suite re-run
   green. Recorded because a control that has never been seen to fail is
   not known to be a control.
-- [ ] **UNRESOLVED — the two manifest forms label a check's `source`
-  differently, and this change did not fix it.** The YAML converter
-  stamps `source = "manifest"` on every check it builds; the native
-  form leaves `source` absent. The two forms therefore never produced
-  byte-identical canonical manifests, so their `manifest_digest`
-  values differ for the same declarations. This is pre-existing and
-  outside this change's scope (it is a digest-stability question, not
-  a timeout question), but it is the reason the single-owner test
-  compares the rendered *timeout* block rather than the whole plan, and
-  it should not be discovered a second time by the next reader.
-- [ ] **UNRESOLVED — the 76 manifests are not swept to declare their own
-  timeouts.** This change adds the field; which timeout a repository
+- [x] **CARRIED, NOT DONE — the two manifest forms label a check's
+  `source` differently, and this change still does not fix it.** The YAML
+  converter stamps `source = "manifest"` on every check it builds
+  (`src/gate/aigate.rs:387,397`); the native form leaves `source` absent
+  (`ManifestCheck.source: Option<String>`, `src/gate/manifest.rs:733`). The
+  two forms therefore never produced byte-identical canonical manifests, so
+  their `manifest_digest` values differ for the same declarations. This is
+  pre-existing and outside this change's scope (it is a digest-stability
+  question, not a timeout question), and it is the reason the single-owner
+  test compares the rendered *timeout* block rather than the whole plan.
+  **Re-measured at archive time and still reproducible**, on two temporary
+  projects declaring the same `build` + `tests` with the same commands and
+  the same `timeout_ms`: both forms resolved to identical deadlines
+  (`build: 60000ms`, `tests: 900000ms`) and to **different** digests —
+  `sha256:c694b16555d225fe` for `.ai-gate/gate.yaml` against
+  `sha256:ac4f2706e671645a` for `gate.toml`. The finding is real and is
+  carried as an open, unstarted item: **`workspace-fleet-check-sweep`
+  item 1.1** (origin box: this one), with the requirement it proposes and the
+  digest migration its fix implies recorded there. Not fixed here, not
+  claimed fixed here.
+- [x] **CARRIED, NOT DONE — the 76 manifests are not swept to declare their
+  own timeouts.** This change adds the field; which timeout a repository
   needs is that repository's call, measured on its own machine. The four
-  repositories that cannot pass under 60s stay unproven until their
-  owners declare a value.
-- [ ] **UNRESOLVED — the change is not archived.** Archiving needs
-  separate authorization, and `AGENTS.md` forbids representing a change
-  as complete while this box is open.
+  repositories that cannot pass under 60s stay unproven until their owners
+  declare a value. Carried as an open, unstarted item — per repository,
+  each named and each measured — as **`workspace-fleet-check-sweep` items
+  1.2a-1.2f** (origin box: this one), with the reason a sweep cannot be
+  automated recorded in that change's `design.md` §1. No sweep is claimed
+  here and no manifest was edited here.
+- [x] **The change is archived** (2026-10-13), carrying only the work that is
+  this repository's and is done. Archiving authorised it, and it required
+  the two boxes above to be transferred first so that no fleet-scale work
+  could be read as complete: both now say **carried, not done** rather than
+  deleting them. The residue lives in `workspace-fleet-check-sweep`, which
+  stays open and unarchived.
