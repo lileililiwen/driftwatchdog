@@ -14,6 +14,84 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`declare-spec-purpose-placeholder-code` is implemented, verified, and
+archived** (2026-10-13; archive commit `183efd2`). It closed at **23/23**
+boxes. The implementation is one string: `SPEC_PURPOSE_PLACEHOLDER` joins
+`GOVERNANCE_QUALITY_DECLARED_CODES` in `src/gate/governance/mod.rs:104`, so
+the `governance-quality` concern can report a finding it previously filtered
+out before the status was ever computed. This archive adds no code.
+
+### The last open box was a decision, and it is closed as one
+
+It read *"No durable declared-versus-emitted guard is built"* — a recorded
+decision, not missing work. It is now a **completed decision item** carrying
+its justification. No guard was invented, and nothing in the promoted spec
+claims one exists.
+
+**Why a correct guard is impossible on this side, stated from this
+repository's own code rather than from the sibling.**
+`parse_report` (`src/gate/governance/mod.rs:148`) reads exactly one key out
+of the checker's report — `findings` — and synthesises its `total` by
+counting that array. The set of codes the checker **can emit** is therefore
+never received: an absent key and an empty list are indistinguishable at this
+boundary.
+
+**Why the obvious guard would be worse than none.** "Saw a code this concern
+does not declare → `REVIEW_REQUIRED`" reads a fleet-wide audit whose finding
+stream carries at least a dozen codes this concern does not own
+(`PUBLICATION_UNVERIFIED`, `DISCOVERABILITY_MISSING`, `LICENSE_MISSING`,
+`HANDOFF_SCAFFOLD`, `DEPLOYMENT_PROMOTION_STALE`, `DISCOVERED_UNREGISTERED`).
+It fires on **every** run — a permanently red gate, which is the same failure
+as a permanently green one. `bind-governance-quality-checks` design §2 already
+rejected folding a portfolio backlog into a code-scoped concern for exactly
+this reason. A guard reading a key the envelope does not carry is dead code;
+one scoped to the declared codes while reading a fleet-wide stream is the
+broken rule. A half-guard is worse than none.
+
+**The spec already agreed, in normative language.** The promoted scenario
+*"A declared code and an undeclared code are not conflated"* states the
+concern SHALL NOT *"infer, assert, or report any divergence between the
+declared set and the producing checker's full set of emittable codes, because
+the producing checker's report does not carry that set"*. So the archive does
+not promote a promise the change declined to make.
+
+**Cross-repo dependency C1 stays open and is now the sole precondition.**
+`scripts/workspace_check.py --json` needs a third top-level key beside
+`summary` and `findings` — `emittable_codes` — listing every code registered
+in the checker under its current configuration, **including codes with no
+finding and codes behind a disabled fence**, and **not** derived from the
+findings array, because a code with zero findings is exactly the case the
+guard exists to catch. Owned by `workspace-governance`, against its in-flight
+`spec-purpose-backfill-gate`. With that key the concern reports a **two-sided**
+divergence as `REVIEW_REQUIRED` (2): a code the checker can emit that the
+concern does not declare, and a code the concern declares that the checker
+can no longer emit — the second invisible today, and the one the next renamed
+or removed code will produce.
+
+### Verification on 2026-10-13
+
+`cargo fmt --check` clean; `cargo test` **1010 passed, 0 failed** (874 at
+implementation time; the intervening archives added theirs); `cargo clippy
+--all-targets --all-features -- -D warnings` clean; `openspec validate
+declare-spec-purpose-placeholder-code --strict --no-interactive` valid;
+`openspec validate --changes --strict --no-interactive` 4 passed / 0 failed
+before the archive and **3 after**; `openspec validate --all --strict
+--no-interactive` **35 passed, 0 failed (35 items)** after the archive;
+`sh tests/packaging/run_all.sh` **11 ok, 0 FAIL**, including `change_workflow`
+against the rewritten section; `git diff --check` clean. The **`driftwatch
+gate` runtime was deliberately not run**.
+
+Two stale present-tense claims beside the closed box were marked superseded
+rather than restated, because both were true when written and are false now:
+tasks 3.5's *"Not archived"*, and task 5.2's *"`governance-quality` UNBOUND"*
+in this repository — the manifest was later given a `commands:` block by other
+work, so the concern is bound and runs here.
+
+**No file outside this repository was read or modified for C1.** The three
+remaining open changes — `per-check-gate-timeout`,
+`bind-declared-verification-command`, `gate-unbound-check-fails` — were not
+edited, completed, archived or re-scoped.
+
 **`declare-new-change-with-gate-debt-code` is implemented, verified, and
 archived** (2026-10-13; archive commit `ecafe11`). It closed at **27/27**
 boxes. The implementation is one line: `QUALITY_NEW_CHANGE_WITH_GATE_DEBT`
@@ -938,11 +1016,12 @@ pre-existing uncommitted work — `alltools-platform`'s `docker-compose.yml` and
 ---
 
 The `declare-spec-purpose-placeholder-code` change is implemented and
-**deliberately not archived** (it carries an open cross-repo dependency,
-recorded below). One string changed: `"SPEC_PURPOSE_PLACEHOLDER"` joins
-`GOVERNANCE_QUALITY_DECLARED_CODES` in `src/gate/governance/mod.rs`, so the
-`governance-quality` concern can report a finding it previously filtered out
-before the status was ever computed.
+**archived** (2026-10-13; `183efd2` — see the Current state entry at the top
+of this file). It was **deliberately not archived** for a while, carrying the
+open cross-repo dependency C1 recorded below. One string changed:
+`"SPEC_PURPOSE_PLACEHOLDER"` joins `GOVERNANCE_QUALITY_DECLARED_CODES` in
+`src/gate/governance/mod.rs`, so the `governance-quality` concern can report a
+finding it previously filtered out before the status was ever computed.
 
 **Why it was not documentation.** Measured on a bound fixture — a real
 `product` manifest, a real command, a checker-shaped report whose single
@@ -999,8 +1078,9 @@ that key the concern reports a two-sided divergence as `REVIEW_REQUIRED`: a
 code the checker can emit that the concern does not declare, and a code the
 concern declares that the checker can no longer emit. Both directions are
 needed; the second is invisible today. No half-guard was built — see
-`openspec/changes/declare-spec-purpose-placeholder-code/design.md` §5 and
-`tasks.md` 6.1, which is left **unchecked** on purpose.
+`openspec/changes/archive/2026-10-13-declare-spec-purpose-placeholder-code/design.md`
+§5 and `tasks.md` 6.1, which records that as a completed **decision** rather
+than leaving it open (archived 2026-10-13, `183efd2`).
 
 **No sibling manifest needed widening**, re-verified read-only: 77 `gate.yaml`
 files in the workspace, exactly one naming `governance-quality` (this
