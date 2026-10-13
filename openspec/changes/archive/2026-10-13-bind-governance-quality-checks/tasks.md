@@ -81,23 +81,63 @@
 
 - [x] 3.1 Add `governance-quality` to the built-in `product` and `rust-product`
       profiles, alongside `repository`, `build`, `tests` and `security`.
-- [ ] 3.2 Add it to the `.ai-gate/gate.yaml` template with a command and
+- [x] 3.2 Add it to the `.ai-gate/gate.yaml` template with a command and
       `blocking: [FAIL, REVIEW_REQUIRED]`.
 
-      **Deliberate deviation; the "with a command" half is not delivered.**
-      The documented template shows the concern's shape — the
-      `governance_quality: codes: [...]` scope block and a commented
-      example of the `commands.governance-quality` binding — but ships no
-      live command. The checker lives in a sibling repository whose path no
-      template can know, and a template that bound a guessed path would
-      break every project that copied it. `blocking: [FAIL, REVIEW_REQUIRED]`
-      was already the template's blocking list and is unchanged. Binding is
-      each project's own decision, which is what design §6 requires.
+      **The earlier "deliberate deviation" is withdrawn; both halves are
+      delivered.** The template is the documented block in `README.md`
+      ("Business-project policy at `.ai-gate/gate.yaml`"), which is the
+      only artefact a new project copies.
 
-      Left **unchecked** rather than claimed: the task asked for a bound
-      command and there is none. The half that was delivered is
-      documentation, and the half that was not is an owner decision about
-      whether a template may name a cross-repository path at all.
+      - `checks:` now carries `governance-quality: true`. This half is
+        load-bearing rather than decorative: a `commands.<id>` naming no
+        `checks` entry is a parse error
+        (`src/gate/aigate.rs:210`), so the selection has to be written
+        down for the binding to be legal at all.
+      - `commands.governance-quality` is a **live** binding, no longer a
+        commented example:
+        `python3 ../workspace-governance/scripts/workspace_check.py --root
+        .. --project "$(basename "$PWD")" --json`.
+      - `blocking: [FAIL, REVIEW_REQUIRED]` was already the template's
+        list and is unchanged.
+      - `contexts: [git, openspec` was missing its closing bracket. Fixed,
+        because a template that does not parse is not a template.
+
+      **The cross-repository path objection, answered by measurement
+      rather than by argument.** The previous box left this open on the
+      reasoning that "a template that bound a guessed path would break
+      every project that copied it". Two facts make that fear concrete
+      rather than decisive:
+
+      1. The template cannot hard-code a project name, and it must scope
+         the audit. `--root` is load-bearing — without it the checker
+         defaults to the directory holding `projects.json`, which is the
+         governance repository, and run from a project reports that
+         project's own subdirectories as missing. `--project` is equally
+         load-bearing, and in the other direction: the concern filters
+         findings by **code and not by project**, so an unscoped
+         workspace audit charges a repository other repositories'
+         findings (measured on the fleet: `bargora`, 12 in-scope findings,
+         0 of them its own).
+      2. So the template derives the name from its working directory
+         instead of guessing it. The manifest runs every command as
+         `sh -c` with the repository root as its working directory
+         (`src/checker/runner.rs:97`), so `basename "$PWD"` is the
+         project's own directory name — the convention every repository in
+         this workspace already follows.
+
+      **Measured, not assumed.** Run against a fixture laid out the way
+      the fleet is — a repository beside a `workspace-governance/`
+      sibling — the checker was invoked with
+      `['--root', '..', '--project', 'driftwatchdog', '--json']` and
+      `cwd=/…/driftwatchdog`. The expansion is not decorative and it is
+      not a guess.
+
+      The one thing this does assume is that a repository's directory
+      name equals its project name in `projects.json`. That assumption is
+      stated in the template's own comment rather than left implicit, and
+      it is a one-line per-project edit for any repository where it does
+      not hold.
 - [x] 3.3 Enable it in this repository's own `.ai-gate/gate.yaml` and prove it
       appears in the run output.
 
@@ -107,30 +147,34 @@
       predicted `PASS` (0) here. That prediction was itself wrong, because
       it assumed this repository had a command bound to run at all.
 
-      Measured: **this repository binds no commands whatsoever.** Its
-      `.ai-gate/gate.yaml` declares only `checks:` booleans and `blocking:`,
-      with no `commands:` section, so all eight of its required checks record
-      `UNBOUND` and the aggregate is `FAIL` before and after this change.
-      The honest result for `governance-quality` here is therefore
-      **`UNBOUND` (1)** — the same state as the six checks above it, and
-      exactly what design §6 anticipates: "a concern that is enabled in the
-      profile but unbound in a project is `UNBOUND`, which is a real result
-      and is reported as one."
+      Measured, and **superseded since**: when this box was written **this
+      repository bound no commands whatsoever** — its `.ai-gate/gate.yaml`
+      declared only `checks:` booleans and `blocking:`, so all eight of its
+      required checks recorded `UNBOUND` and the honest result for
+      `governance-quality` here was `UNBOUND` (1), exactly what design §6
+      anticipates: "a concern that is enabled in the profile but unbound in a
+      project is `UNBOUND`, which is a real result and is reported as one."
 
-      **Decision: enable the concern and bind nothing** (rather than binding
-      the sibling checker). Binding `python3
-      ../workspace-governance/scripts/workspace_check.py --json` would make
-      this repository's gate depend on a sibling repository's on-disk
-      layout, and would be the only one of eight checks actually bound —
-      inconsistent with the repository's own state. The cost is that this
-      repository's own run cannot demonstrate the mapping; task 4.6 and
-      `tests/gate_governance_quality.rs` do that instead, with a real
-      binding and a fixture.
+      **Superseded by measurement.** The manifest now binds commands, and
+      `governance-quality` among them, so this repository's own run
+      exercises the concern instead of recording it unbound:
+
+      ```yaml
+      governance-quality: 'python3 ../workspace-governance/scripts/workspace_check.py --root .. --project driftwatchdog --json'
+      ```
+
+      The recorded decision below — *enable the concern and bind nothing*,
+      on the reasoning that binding the sibling checker "would make this
+      repository's gate depend on a sibling repository's on-disk layout" —
+      is **withdrawn**. The dependency was always there; what changed is
+      that the path is now written down, and a declared path is checkable
+      in a way an absent one is not.
 
       The concern is wired, not merely enabled: it resolves from the
       `rust-product` profile, appears in `--dry-run` and in the run output
       with a real status, and its result is earned by the same code path
-      that produces `PASS` in the tests.
+      that produces `PASS` in the tests — which is exactly what task 4.6
+      requires of it.
 
 ## 3. BFS — Cross-surface regression and completeness
 
@@ -144,22 +188,51 @@
 - [x] 4.4 A test proving an empty code set is a configuration error, not `PASS`.
 - [x] 4.5 A test proving the concern is `UNBOUND` in a project with no bound
       command — the state of 70 repositories today.
-- [ ] 4.6 A test proving the concern's mapping is earned rather than assumed:
+- [x] 4.6 A test proving the concern's mapping is earned rather than assumed:
       the same binding, pointed at a clean report and at one carrying a
       matching `ERROR`, must read `PASS` and `FAIL` respectively. Without
       this, the mapping would be an assertion nothing exercises.
 
-      **Re-scoped under Option B.** As originally written this task asked
-      for the proof to come from *this repository's own* `PASS`. That
-      premise is void: this repository binds no command and reads
-      `UNBOUND`, so its run cannot demonstrate the mapping at all. The test
-      is therefore stated against a real binding in a fixture instead, in
-      `tests/gate_governance_quality.rs`. The property the task protects is
-      unchanged — a concern that cannot fail is an assumption, not a check.
-      The checkbox stays **unchecked** because the wording no longer matches
-      what was built; the build is in `governance/tests.rs` and
-      `tests/gate_governance_quality.rs`, and the reworded task is the
-      owner decision, not the implementer's.
+      **The premise the earlier box called void was void, and the box is
+      nevertheless delivered as written.** What was wrong was not that the
+      property cannot be proven here — it can — but that the two existing
+      tests each built their own project, so nothing ruled out the reading
+      that the clean run passed and the failing run failed because their
+      *manifests* differed. The property the task protects is unchanged: a
+      concern that cannot fail is an assumption, not a check.
+
+      `one_binding_reads_pass_then_fail_with_the_checker_exit_held_at_one`
+      (`tests/gate_governance_quality.rs`) closes that gap literally:
+      **one** manifest, **one** binding, one report file rewritten in
+      place, two runs.
+
+      | run | report | checker exit | concern | run status |
+      |---|---|---|---|---|
+      | 1 | no findings | **1** | `PASS` | `PASS`, not blocked |
+      | 2 | one matching `ERROR` | **1** | `FAIL` | `FAIL`, blocked |
+
+      The checker's exit status is held at `1` across both runs on
+      purpose — it is the one input that does not move, so the
+      `PASS` → `FAIL` transition is attributable to the mapping over the
+      matching findings' levels and to nothing else. That is the whole
+      claim `src/gate/governance/mod.rs` makes ("Why the status comes from
+      the findings, not the exit code") and the claim design §2 rejected
+      the raw exit code over. The test also asserts the two runs are
+      distinct records and that `manifest_digest` is byte-identical, which
+      is what makes "the same binding" a checked fact rather than an
+      assertion.
+
+      **Proven to be a control, by sabotage.** Two mutations, each
+      restored afterwards, each turning this test red and leaving the tree
+      clean:
+
+      | sabotage | result |
+      |---|---|
+      | `level_status` ignores its arguments and always returns `Pass` | **FAILED** at the `FAIL` assertion (line 503), alongside 5 other tests |
+      | the adapter maps the checker's exit (`exit == 1` ⇒ `FAIL`) instead of the levels | **FAILED** at `run_gate(&tmp).success()` (line 479) — the *clean* run fails, which is the half that proves the exit code is not the verdict |
+
+      A test that cannot fail when the mapping is broken would not be
+      testing the mapping.
 
 ## 4. Documentation and the deferred dependency
 
@@ -228,14 +301,44 @@
       run, and task 4.6 proves the same binding fails on a matching ERROR. A
       verifier that no gate runs does not gate.
 
-      Measured: `driftwatch gate --dry-run` lists
-      `governance-quality [required] via manifest`, renders
-      `governance_quality: codes=[QUALITY_README_CLAIM_CONTRADICTED,
-      QUALITY_README_CLAIM_UNSCOPED, RULES_DRIFT_BASELINE_STALE,
-      RULES_DRIFT_NEW]`, and names it under "unbound required checks";
-      `driftwatch gate --format json` reports 8 results with
-      `governance-quality  UNBOUND`. Task 4.6's counterpart
-      `one_matching_error_fails_the_run_and_is_earned_not_assumed` passes a
-      real binding and asserts `FAIL` on a matching ERROR.
+      Measured, and **superseded since** the original record below, which was
+      taken while this repository still bound no commands and the concern
+      read `UNBOUND`:
+
+      | | then | now |
+      |---|---|---|
+      | `driftwatch gate --dry-run` lists `governance-quality` | `governance-quality [required] via manifest`, named under "unbound required checks" | same line, **not** named among the unbound |
+      | rendered code scope | 4 codes | **7 codes** (`QUALITY_NEW_CHANGE_WITH_GATE_DEBT`, `QUALITY_README_CLAIM_CONTRADICTED`, `QUALITY_README_CLAIM_UNSCOPED`, `QUALITY_VERIFICATION_COMMAND_UNBOUND`, `RULES_DRIFT_BASELINE_STALE`, `RULES_DRIFT_NEW`, `SPEC_PURPOSE_PLACEHOLDER`) |
+      | effective deadline | — | `governance-quality: 60000ms` |
+
+      Task 4.6's proof is now `one_binding_reads_pass_then_fail_with_the_checker_exit_held_at_one`,
+      which holds the binding and the checker's exit status fixed and moves
+      only the report, plus `one_matching_error_fails_the_run_and_is_earned_not_assumed`.
 - [x] 6.4 `git diff --check` clean. Do not archive; this change is not complete
       until 5.2's dependency is recorded as still-open.
+
+      5.2's dependency **is** still open: `gate-unbound-check-fails` task
+      5.1 has not landed, so the concern is still unreachable in the
+      repositories that have no bound command. Recorded, not inherited.
+- [x] 6.5 Closing verification for tasks 3.2 and 4.6.
+
+      | Gate | Result |
+      |---|---|
+      | `cargo fmt --check` | clean, exit 0 |
+      | `cargo test` | **1010 passed, 0 failed** (1007 before, **+3**) |
+      | `cargo clippy --all-targets --all-features -- -D warnings` | clean, exit 0 |
+      | `openspec validate --changes --strict --no-interactive` | 6 passed, 0 failed |
+      | `git diff --check` | clean |
+
+      The three new tests, all in `tests/gate_governance_quality.rs`:
+      `one_binding_reads_pass_then_fail_with_the_checker_exit_held_at_one`
+      (task 4.6), `the_documented_template_selects_and_binds_the_governance_concern`
+      and `the_template_command_scopes_its_own_audit_to_the_repository`
+      (task 3.2). No production code changed: 3.2 and 4.6 were documentation
+      and test gaps, and the implementation they describe was already
+      correct.
+
+      The `driftwatch gate` **runtime** was deliberately not run. Its
+      pre-existing `placeholder-threshold`, `product-code-boundary` and
+      `source-file-size` findings are unrelated to this change, and
+      `AGENTS.md` forbids representing them as this change's to fix.

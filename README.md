@@ -590,23 +590,30 @@ checks:                           # true | false | "optional"
   build: true
   tests: true
   accessibility: optional
+  governance-quality: true        # every profile schedules it; a `commands`
+                                  # entry must name a `checks` entry
 commands:                         # bind a selected concern to a command
   build: "npm run build"
   tests: "npm test"
+  # The governance checker is not defaulted: it lives in a sibling
+  # repository, so the path is written down here rather than inferred.
+  # Both flags are load-bearing. Without `--root` the checker audits its
+  # own repository instead of the workspace; without `--project` this
+  # concern is charged *other* repositories' findings, because it filters
+  # by code and not by project. `basename "$PWD"` names this repository
+  # without the template having to know it: the command runs as
+  # `sh -c` with the repository root as its working directory.
+  governance-quality: 'python3 ../workspace-governance/scripts/workspace_check.py --root .. --project "$(basename "$PWD")" --json'
 timeouts:                         # optional; per-check deadline in ms
   tests: 600000                   # a suite that needs longer than 60s
 blocking: [FAIL, REVIEW_REQUIRED]
 project_commands:
   lint: "npm run lint"
-contexts: [git, openspec
+contexts: [git, openspec]
 governance_quality:               # optional; narrows a code scope, never widens it
   codes: [RULES_DRIFT_NEW]
-# A product-profile project also schedules `governance-quality`. It has
-# no default command: the governance checker lives in a sibling
-# repository, so each project binds its own under `commands:` --
-#   commands:
-#     governance-quality: "python3 ../workspace-governance/scripts/workspace_check.py --json"
-# Leaving it unbound records `UNBOUND` and fails the run.
+# Leaving `governance-quality` unbound records `UNBOUND` and fails the
+# run, exactly like any other unbound required check.
 ```
 
 A `profile` that is not a built-in name selects exactly its declared
@@ -826,13 +833,12 @@ in force; it cannot be used to silence a code the concern owns.
 
 #### Where this is live
 
-The concern is **wired and live in this repository**, where it is
-`UNBOUND` — this repository binds no `governance-quality` command, so that
-check is `UNBOUND` and the run fails. That is the honest result, and the
-concern's behaviour is proved by
-`tests/gate_governance_quality.rs` and the unit tests in
-`src/gate/governance/` rather than by this repository's own run. The
-`declared-verification` concern, by contrast, **is** bound here and does run.
+The concern is **wired and bound in this repository**: `.ai-gate/gate.yaml`
+carries the sibling checker under `commands.governance-quality`, scoped with
+`--project driftwatchdog` so this repository is not charged other
+repositories' findings. Its behaviour is proved twice over — by this
+repository's own run, and by `tests/gate_governance_quality.rs` plus the unit
+tests in `src/gate/governance/`.
 
 The other **70 workspace repositories** gain the concern only when
 `gate-unbound-check-fails` task 5.1 lands (it makes unbound required

@@ -153,16 +153,27 @@ weakened check.
 | D4 | Whether `RULES_DRIFT_BASELINE_STALE` blocks | block · warn only | **block as `REVIEW_REQUIRED`** | It is not a repository defect, but it is not nothing either: a stale baseline means the ratchet is measuring against a snapshot that no longer matches the fleet. `REVIEW_REQUIRED` is already blocking via `.ai-gate/gate.yaml`, so the concern actually binds and does not become a notice. |
 | D5 | Whether a project may narrow the code set | no · yes, with a floor | **yes, but an empty set is a `REVIEW_REQUIRED` configuration error** | Scope is a legitimate per-project choice, but a scope that reports nothing while the concern is enabled is indistinguishable from a silent disable, which is the failure class D18 names. |
 | D6 | How a cannot-run checker is classified | one status · two | **two** | `UNBOUND` means nothing ran; `REVIEW_REQUIRED` means something ran and could not finish. Merging them would let a broken checker read as a missing one. |
+| D7 | Whether the documented `.ai-gate/gate.yaml` template may name a cross-repository path | documented shape only · a bound command with a hard-coded project name · a bound command that derives the project name | **a bound command that derives the project name** | The template cannot name a sibling repository's checker and also stay correct, because the checker needs `--project <this repository's name>` and no template knows it: `--root` makes it audit the governance repository instead of the workspace, and an unscoped `--root ..` charges this concern other repositories' findings, because the concern filters by code and not by project. Every command in the manifest already runs as `sh -c` with the repository root as its working directory, so `$(basename "$PWD")` is the project's own name, and the one assumption it makes — that a repository's directory name equals its `projects.json` name, which every repository in this workspace already satisfies — is written in the template rather than left implicit. A template that documents the binding without shipping it leaves the binding undocumented at the moment a project copies the file. |
 
 ## 9. Verification oracle
 
 - One test per cell of the envelope mapping table, including a mixed
   ERROR-and-WARNING run proving ERROR dominates.
-- One test per row of the failure-path table, asserting the exact status and exit
-  code, and asserting that **no** cannot-run case yields `PASS`.
+- One test per row of the failure-path table, asserting the exact status and
+  exit code, and asserting that **no** cannot-run case yields `PASS`.
 - One test proving the adapter reports the filtered count rather than the
   checker's total, so a 215-finding run scoped to 4 findings reports 4.
 - One test proving an empty code set is a configuration error, not a `PASS`.
 - One test proving the concern is `UNBOUND` in a project with no bound command.
+- One test holding **one** binding and the **checker's own exit status**
+  fixed and moving only the report, so the `PASS`/`FAIL` pair is
+  attributable to the mapping and to nothing else. This is the oracle the
+  adapter exists to satisfy: an implementation that mapped the exit code, or
+  one that ignored the findings, fails it in opposite directions.
 - A repository-level proof that the concern is enabled in this repository's own
   `.ai-gate/gate.yaml` and appears in its run output.
+- Two tests on the documented `.ai-gate/gate.yaml` template itself, extracted
+  from `README.md` rather than restated: one that the template selects and
+  binds the concern and keeps its blocking list, and one that runs the
+  shipped expansion in the fleet's own layout and asserts the checker was
+  invoked scoped to this repository.
