@@ -18,27 +18,45 @@ Nothing in group 3 starts before this group closes. Decisions 1, 2, 5 and 6 are
 unanswered; decision 3 has a shipped disposition but no owner ruling; decision 4
 is answered and implemented.
 
-- [ ] **0.1 Record the owner's answer to open decision 1** — when
-  `binding_policy` defaults to `reject`. Options: (a) at migration completion,
-  (b) at a named milestone accepting red earlier, (c) per repository. Origin:
-  `gate-unbound-check-fails` task 4.2 / `design.md` §8 decision 1.
-- [ ] **0.2 Record the owner's answer to open decision 2** — blocking from day
-  one, or a shadow cycle first. Options: (a) accept the immediate red (what
-  ships today), (b) one non-blocking shadow cycle reviewed from persisted run
-  rows, (c) block on spine-concern `UNBOUND` first. Origin: `gate-unbound-check-fails`
-  task 4.2 / §8 decision 2. **Measured consequence to weigh:** 59 of the 65
-  parseable manifests were red at phase 1 (2026-10-02).
-- [ ] **0.3 Record the owner's answer to open decision 3** — may
-  `not_applicable` exempt a profile-inherited concern. Options: (a) allowed with
-  a reason (shipped disposition), (b) explicit per-check override only, (c) never.
-  Origin: `gate-unbound-check-fails` task 4.2 / §8 decision 3 and §8.1.3.
-- [ ] **0.4 Record the owner's answer to open decision 5** — migration
-  granularity: one workspace change with per-repository boxes (this change's
-  shape), 70 per-repository changes, or a split by stack. Origin:
-  `gate-unbound-check-fails` task 4.2 / §8 decision 5.
-- [ ] **0.5 Record the owner's answer to open decision 6** — distinct `UNBOUND`
-  status (shipped) versus a `provenance` field on `NOT_APPLICABLE`. Origin:
-  `gate-unbound-check-fails` task 4.2 / §8 decision 6.
+- [x] **0.1 Record the owner's answer to open decision 1** — **(a) at
+  migration completion.** `binding_policy` defaults to `reject` only once no
+  manifest in the fleet still needs `report`; flipping earlier accepts red the
+  fleet has not finished migrating for, and per-repository flipping (c) leaves
+  the default incoherent across the workspace mid-migration. Origin:
+  `gate-unbound-check-fails` task 4.2 / `design.md` §8 decision 1. Decided by the
+  operator on 2026-10-13.
+- [x] **0.2 Record the owner's answer to open decision 2** — **(b) one
+  non-blocking shadow cycle, reviewed from persisted run rows, then block.**
+  Blocking already ships and already turned 59 of the 65 parseable manifests red
+  (2026-10-02), which is a migration cost being paid as breakage rather than as
+  evidence. A shadow cycle turns that same run history into the inventory the
+  migration needs, and the block then lands on a fleet that is already
+  green-or-explained. **(c) was rejected**: blocking on spine concerns first
+  still reds the repositories whose spine is unbound, which is most of them.
+  (a) — the shipped behaviour — is what the shadow cycle replaces. Origin:
+  `gate-unbound-check-fails` task 4.2 / §8 decision 2. Decided 2026-10-13.
+- [x] **0.3 Record the owner's answer to open decision 3** — **(a) allowed with
+  a recorded reason**, ratifying the shipped disposition. (b) was rejected: it
+  forces the 41 product-profile repositories to re-declare every inherited
+  concern in each manifest, trading exemption honesty for manifest verbosity
+  across the fleet. Decision 3.4 already guarantees an exempting and an unbound
+  concern can never be merged into one status, so the conflation (c) exists to
+  prevent is already prevented. Origin: `gate-unbound-check-fails` task 4.2 /
+  §8 decision 3 and §8.1.3. Decided 2026-10-13.
+- [x] **0.4 Record the owner's answer to open decision 5** — **(b) one
+  workspace change with per-repository boxes**, this change's own shape. The
+  archived design assumed per-repository changes and this change is itself the
+  counter-example: 81 repositories of largely mechanical binding work does not
+  review as 81 changes. Origin: `gate-unbound-check-fails` task 4.2 / §8
+  decision 5. Decided 2026-10-13.
+- [x] **0.5 Record the owner's answer to open decision 6** — **(a) the distinct
+  `UNBOUND` status**, which ships. The compatibility motive behind (b) — a
+  downstream consumer that keys on a closed status set — is already met by
+  decision 3.4, which guarantees `NOT_APPLICABLE` and `UNBOUND` can never be
+  merged into one status. (b) is also not a drop-in change: aggregation and
+  persistence behaviour differ, and a consumer that ignores the field would
+  silently lose the distinction. Origin: `gate-unbound-check-fails` task 4.2 /
+  §8 decision 6. Decided 2026-10-13.
 - [ ] **0.6 Re-measure the fleet before group 3 starts** — manifest count,
   parse failures, binding count, unbound debt per concern — from the files, not
   from these numbers. The counts in this file are dated.
@@ -147,9 +165,21 @@ and are capped per repository; `build`, `tests`, `security` and `repository`
 the migration that makes those semantics bearable, and none of it is driftwatchdog
 work.**
 
-- [ ] **3.0 Satisfy group 0 first.** Decisions 1 and 2 gate the migration
-  granularity and the enforcement timing; decision 5 gates how the work is
-  reviewed. Origin: `gate-unbound-check-fails` tasks 4.2 / 5.1.
+- [x] **3.0 Satisfy group 0 first.** Decisions 1, 2, 3, 5 and 6 were answered by
+  the operator on 2026-10-13 and are recorded in tasks 0.1-0.5. Decision 2
+  selected a shadow cycle, so **3.7 is the work that answer creates** and it must
+  land before 3.1 begins flipping repositories to `reject`. Origin:
+  `gate-unbound-check-fails` tasks 4.2 / 5.1.
+- [ ] **3.7 Implement the shadow cycle decision 2 selected.** `UNBOUND` already
+  blocks; decision 2 (b) requires it to stop blocking for exactly one full
+  workspace cycle while still being **persisted on every run row**, so the
+  inventory is derived from real run history rather than from a second scan.
+  Add the mode, make the run row record `UNBOUND` without folding it into
+  `FAIL`/`REVIEW_REQUIRED`/`NOT_APPLICABLE`, keep it out of the aggregate
+  verdict while shadowing, add a test that a shadowed `UNBOUND` is persisted and
+  does not block, and a test that the shadow cannot be re-entered silently.
+  Shadowing must be a declared, dated window — never a silent default that
+  outlives the migration.
 - [ ] **3.1 Bind, exempt or relax the 70 unbound repositories.** 70
   language-specific, per-repository migrations across Node, Rust, .NET and
   Python. Measured starting debt over all 76 manifests: 69 unbound `security`,
