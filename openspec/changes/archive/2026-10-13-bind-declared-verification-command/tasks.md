@@ -4,6 +4,15 @@ BFS → DFS → BFS. Phase order is load-bearing: §2's declared code must land
 before §4's rule, or the rule is emitted by a checker the gate filters to
 nothing (`design.md` §4).
 
+**Archived 2026-10-13 with four boxes transferred, not closed.** What this
+repository owns — the concern id, the declared code, the generator, the rule,
+its fence and their tests — is done and verified below. The four boxes that
+were not are fleet-scale: they need a sibling repository's owner, or the
+operator's activation decision. They are now marked `CARRIED, NOT DONE` and
+point at `workspace-fleet-check-sweep`, which holds them as open, unstarted
+items. Nothing here claims a manifest was parsed, a repository was written to,
+or that the fence was turned on.
+
 ## Phase 0 — BFS: measure, and correct the checkpoint
 
 - [x] **The checkpoint's manifest count is wrong; the real count is 76, not 83.**
@@ -28,15 +37,26 @@ nothing (`design.md` §4).
 - [x] **4 of the 70 are dirty in the file the change must write** and are
   excluded: `crossalheart`, `dharmatlas`, `hookit`, `trailCrew` each report
   `?? .ai-gate/gate.yaml`. Write set is 66.
-- [ ] **UNRESOLVED — the 11 unparseable manifests are not fixed here.** Making a
-  binding effective in one of them means deleting or relocating prose the owning
-  repository wrote (for `actoria`, a note explaining that the Gate runtime is not
-  installed in that checkout). That is an owner decision about that
-  repository's content, not a mechanical step in this change. Left unchecked on
-  purpose; the bindings are written and inert until it is decided.
-- [ ] **UNRESOLVED — the 4 dirty repositories are not written to.** The workspace
-  constraint is to stop for a repository that is dirty in a file the change must
-  change. Named above; the owner can clear them and re-run the generator.
+- [x] **CARRIED, NOT DONE — the 11 unparseable manifests are not fixed here.**
+  Making a binding effective in one of them means deleting or relocating prose
+  the owning repository wrote (for `actoria`, a note explaining that the Gate
+  runtime is not installed in that checkout). That is an owner decision about
+  that repository's content, not a mechanical step in this change, and the
+  generator did not break any manifest: the same 65 parsed and the same 11
+  failed, before and after. The bindings are written and inert until each owner
+  decides. Carried as an open, unstarted item as **`workspace-fleet-check-sweep`
+  item 2.1** (origin box: this one), naming all 11 repositories and the three
+  unknown keys that refuse them.
+- [x] **CARRIED, NOT DONE — the 4 dirty repositories are not written to by the
+  tool's default.** The workspace constraint is to stop for a repository that is
+  dirty in a file the change must change, and the generator refuses by default.
+  The disclosure recorded in `HANDOFF.md` is carried forward with it: a
+  measurement harness called `bind_repo(..., check_clean=False)` to isolate
+  idempotence from dirtiness, so those 4 were written anyway (76 bound, not the
+  intended 66) — untracked files, no tracked history rewritten, but the declared
+  and actual write sets differ and a re-run must reconcile them deliberately.
+  Carried as an open, unstarted item as **`workspace-fleet-check-sweep` item
+  2.2** (origin box: this one).
 
 ## Phase 1 — BFS: the contract this repository owns
 
@@ -114,11 +134,32 @@ nothing (`design.md` §4).
   to their repositories' working trees and are **not** committed, so no
   repository's history is rewritten and no pre-existing uncommitted work is
   swept into a commit.
-- [ ] **UNRESOLVED — the 11 inert bindings and the 4 skipped repositories are not
-  closed here.** See Phase 0. Both are owner decisions and both are named.
-- [ ] **UNRESOLVED — the fence is shipped `False`.** Turning the rule on is the
-  owner's decision, and this change deliberately leaves it to them rather than
-  reddening the fleet unasked. See `design.md` §5.
-- [ ] **UNRESOLVED — the change is not archived.** The residual items above are
-  open, and `AGENTS.md` forbids representing a change with open final-BFS tasks
-  as complete.
+- [x] **CARRIED, NOT DONE — the 11 inert bindings and the 4 skipped
+  repositories are not closed here.** See Phase 0. A binding cannot be called
+  effective while its manifest is refused, so this is a consequence of items 2.1
+  and 2.2 rather than a step that could be taken beside them. Carried as an
+  open, unstarted item as **`workspace-fleet-check-sweep` item 2.3** (origin box:
+  this one).
+- [x] **CARRIED, NOT DONE — the fence is still shipped `False`.**
+  `VERIFICATION_BINDING_AUDIT_ENABLED = False` in
+  `workspace-governance/scripts/workspace_check.py:570`, verified at archive
+  time. Turning the rule on is **not** required to complete this repository's
+  scope, and the reason is specific rather than convenient: this repository's
+  own `.ai-gate/gate.yaml` binds `declared-verification`, so with the fence `True`
+  this repository produces no finding at all — its own dry run schedules
+  `- declared-verification [required] via manifest`. What `True` changes is the
+  audit outcome of **five other repositories**, which measured `True` produces
+  and `False` does not: `chronicleaf`, `devloom`, `kairovia`,
+  `lileililiwen-site` (`lileililiwen.github.io`) and `ziban`, the repositories
+  with no `.ai-gate/gate.yaml` at all. That is a decision about their gate
+  coverage, taken by the operator and then by those five owners, not a step this
+  repository can take to finish its own scope. Softening the rule to `WARNING` to
+  reach the same outcome would be the second, dishonest form of the same move,
+  and `design.md` §5 already rejects it. Carried as an open, unstarted item as
+  **`workspace-fleet-check-sweep` item 2.4** (origin box: this one).
+- [x] **The change is archived** (2026-10-13), carrying only the contract this
+  repository owns. Archiving authorised it, and it required the four boxes above
+  to be transferred first so that no fleet-scale work could be read as
+  complete: each now says **carried, not done** rather than being deleted. The
+  residue lives in `workspace-fleet-check-sweep`, which stays open and
+  unarchived.
