@@ -14,6 +14,80 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`bind-declared-verification-command` is implemented, verified, and archived**
+(2026-10-13; archive commit `83a88fb`). It closed at **35/35** boxes. What this
+repository owns is two strings and a vocabulary: the `declared-verification`
+concern id, and `QUALITY_VERIFICATION_COMMAND_UNBOUND` in
+`GOVERNANCE_QUALITY_DECLARED_CODES`. The generator and the rule live in the
+sibling `workspace-governance` repository (`e1ef0af`) and were complete there
+before this archive.
+
+### The declaration is load-bearing, re-proved rather than trusted
+
+Deleting `QUALITY_VERIFICATION_COMMAND_UNBOUND` from the declared set turns
+`an_unbound_declared_verification_command_is_a_gate_failure` red with exactly
+`left: Pass, right: Fail` — an `ERROR` finding gating nothing, the D18 failure
+class. Restoring the string turns it green. The file was restored before
+archiving and `git status src/gate/governance/mod.rs` is clean. A control that
+has never been seen to fail is not known to be a control, and this one was seen
+fail today.
+
+Also re-run today: 4 `declared_verification` unit tests, 2
+`verification_binding` tests including the undeclared-code control and the
+narrowed-scope case, and **59 tests** in
+`workspace-governance/tests/test_bind_verification_command.py` +
+`test_verification_binding.py` — the generator's refusal semantics, its
+idempotence, its refusal to clobber a differing hand-written binding, the
+written-both-halves rule, and the fence flipping the result in both directions.
+Run with `PYTHONDONTWRITEBYTECODE=1`; **that repository's worktree is unchanged
+and nothing in it was edited**.
+
+### The fence stayed `False`, and that is this repository's call to make
+
+`VERIFICATION_BINDING_AUDIT_ENABLED = False` at
+`workspace-governance/scripts/workspace_check.py:570`, verified at archive time.
+
+**Enabling it is not required to complete this repository's scope, and the
+reason is specific.** This repository binds `declared-verification` — its own
+dry run schedules `- declared-verification [required] via manifest` — so with
+the fence `True` it produces **no finding at all**. What `True` changes is the
+audit outcome of five *other* repositories: the measured split is `False` → 205
+errors and 0 findings, `True` → 210 errors and exactly 5, naming
+`chronicleaf`, `devloom`, `kairovia`, `lileililiwen-site` and `ziban` — the five
+with no `.ai-gate/gate.yaml` at all. That is a decision about their coverage,
+taken by the operator and then by those five owners. Softening the level to
+`WARNING` to reach the same outcome would be the second, dishonest form of the
+same move, and `design.md` §5 already rejects it. Carried as
+`workspace-fleet-check-sweep` item **2.4**.
+
+### The rest of the residue, moved not closed
+
+**2.1** — the 11 unparseable manifests (`notes:` ×7, `status:` ×2,
+`evidence_boundary:` ×2), each refused before any check resolves, each carrying a
+written-and-inert binding. Resolving them means deleting or relocating prose
+their owners wrote. **2.2** — the 4 dirty repositories, *with the write-set
+disclosure carried forward*: the harness called `bind_repo(...,
+check_clean=False)` to isolate idempotence from dirtiness, so those 4 were
+written anyway (76 bound, not the intended 66); untracked files, no tracked
+history rewritten, but declared and actual write sets differ and a re-run must
+reconcile them deliberately. **2.3** — the 11 inert bindings, a consequence of
+2.1 rather than a step beside it.
+
+### Verification on 2026-10-13
+
+`cargo fmt --check` clean; `cargo test` **1010 passed, 0 failed, 31 suites**;
+`cargo clippy --all-targets --all-features -- -D warnings` clean; `openspec
+validate --changes --strict --no-interactive` 4 passed before the archive and 3
+after; `openspec validate --all --strict --no-interactive` **34 passed, 0 failed
+(34 items)** after it; `git diff --check` clean. The **`driftwatch gate` runtime
+was deliberately not run** — its pre-existing `placeholder-threshold`,
+`product-code-boundary` and `source-file-size` findings are unrelated.
+
+**Spec promotion, `--skip-specs` NOT used:** `gate-project-configuration`
+**+2** (8 → 10) and `generic-gate-contract` **+2** (11 → 13), **~0 modified, -0**
+in both. Checked for a bad merge: both files are insertions only and no existing
+requirement was touched.
+
 **`per-check-gate-timeout` is implemented, verified, and archived**
 (2026-10-13; archive commit `bcb87c4`). It closed at **32/32** boxes. This
 archive adds no code: the field, its validation, its resolution and its
@@ -941,9 +1015,11 @@ the whole plan, and it should not be rediscovered by the next reader.
 ### Previous change: bind-declared-verification-command
 
 The `bind-declared-verification-command` change is implemented and
-**deliberately not archived** (it carries open owner decisions, recorded
-below). Two things landed here, and the fleet tooling landed in the sibling
-`workspace-governance` repository (`e1ef0af`).
+**archived** (2026-10-13; `83a88fb` — see the Current state entry at the top of
+this file). It was **deliberately not archived** while it carried four open
+boxes, all of them fleet-scale; each is now marked `CARRIED, NOT DONE` and
+lives in `workspace-fleet-check-sweep`. Two things landed here, and the fleet
+tooling landed in the sibling `workspace-governance` repository (`e1ef0af`).
 
 **The problem, measured rather than assumed.** Across the 81 sibling
 repositories on 2026-10-04: **81** declare a non-empty
@@ -1783,6 +1859,7 @@ Read these in order:
 | gate-evidence-export | archived 2026-09-27 | Read-only `driftwatch gate evidence-export` subcommand (`--format human|json`, `--dry-run` for documentation) that maps a completed `gate_runs` row into the workspace-governance `release_evidence` vocabulary (closed field set `revision` / `version` / `toolchain` / `artifacts` / `digests` / `sbom` / `provenance` / `checks` / `publication`, closed state set `verified` / `unverified` / `blocked`); per-field state priority `verified > blocked > unverified` with `verified` reserved for scheduled checks that ran and passed on the current revision; stale-revision rule emits every field `unverified` with a `stale` diagnostic naming both revisions; unknown governance field is an `ExportError::UnknownField` construction error; refuses with a non-zero exit when no run exists. New `src/gate/evidence_export.rs` (23 unit tests) + new `src/commands/evidence_export.rs` (8 unit tests) + new `tests/gate_evidence_export.rs` (11 integration tests covering ran/PASS, ran/FAIL, not-scheduled, could-not-execute, stale revision, schema, and read-only invariants). The bounded-evidence store, the release-evidence / capability-conformance adapters, the release-gate envelope wire version, the `gate_runs` schema, the `driftwatch check` path, and the `gate --format json` path are byte-for-byte unchanged; Driftwatchdog remains an executor/aggregator. | release-evidence-and-capability-gate |
 | post-mvp-readiness | archived 2026-09-27 | Documentation-only README readiness pass: a checked-in terminal capture under `docs/assets/run-failure.txt` + `docs/assets/gate-run.txt` (synthetic project, no real repo data, no external image host, redacted), a consolidated built-in Gate profile and concern catalog in `README.md` (profile → stable concern IDs → default `required = true` → exit-code authority rule → text-mode fallback behaviour) sourced from `src/gate/concerns.rs` and `src/gate/manifest.rs`, and an ordered integration recipe from no manifest to a first `driftwatch gate` run (init, surface choice, profile + commands, blocking override, context providers, dry-run + run + export). The catalog and the recipe explicitly note Driftwatchdog owns the central workspace Gate (75 workspace `.ai-gate/gate.yaml` files name `runtime: driftwatchdog`). No `src/**`, concern ID, envelope, wire version, CLI surface, profile, rule, or canonical spec was changed; Driftwatchdog remains an executor/aggregator. | gate-evidence-export |
 | per-check-gate-timeout | implemented 2026-10-04, archived 2026-10-13 at 32/32 (2 boxes carried to `workspace-fleet-check-sweep`, unstarted) | `driftwatch gate` hardcoded one 60s deadline for every check (`CHECK_TIMEOUT_MS` in `src/commands/gate.rs`) that no manifest could reach; four fleet repositories were killed mid-run and reported unproven, and two more had 8% and 2% headroom. `ManifestCheck.timeout_ms: Option<u64>` mirrors the checker config's existing field, its `unwrap_or(DEFAULT)` resolution, and its refusal of `0`; the business YAML form gains a per-check `timeouts:` mapping onto the same field so the value rules run once in `manifest::validate` for both forms. `MAX_CHECK_TIMEOUT_MS = 3_600_000` bounds the value and is named in the error. **The default is unchanged at 60s** and all 77 fleet manifests produce byte-identical `manifest_digest` values before and after, measured by diffing `--dry-run` output from both binaries — no manifest needs an edit. `ResolvedGatePlan.check_timeouts` + `--dry-run` rendering make the effective deadline visible. 9 new `src/gate/manifest.rs` unit tests + 5 in `src/gate/aigate.rs` + 3 in `src/commands/gate.rs` + 5 new `tests/gate_check_timeout.rs` integration tests. Timeout stays distinct from failure (`REVIEW_REQUIRED` + `project-runtime:timeout` vs `FAIL`). No new execution path, dependency, or network call. | gate-cli-and-memory-integration; gate-project-configuration |
+| bind-declared-verification-command | implemented 2026-10-04, archived 2026-10-13 at 35/35 (4 boxes carried to `workspace-fleet-check-sweep`, unstarted) | A repository's own `verification.command` becomes a gate result rather than documentation (ruling D18). Two things are owned here: the `declared-verification` concern id — in no closed vocabulary, so the existing project-runtime text adapter serves it (exit 0 `PASS`, non-zero `FAIL`, timeout/spawn failure `REVIEW_REQUIRED`), non-exemptable with one spelling and no alias, and scheduled by no built-in profile — and `QUALITY_VERIFICATION_COMMAND_UNBOUND` in `GOVERNANCE_QUALITY_DECLARED_CODES`, without which the concern filters the finding away and reports PASS while the checker fails. The generator (`workspace-governance/scripts/bind_verification_command.py`) reads each repository's own declaration and refuses rather than invents; the rule is ERROR below a committed constant fence. The declaration is proven load-bearing: deleting the string turns `an_unbound_declared_verification_command_is_a_gate_failure` red with `left: Pass, right: Fail`, re-proved at archive time. 59 sibling tests cover the generator and the fence. **The fence remains `False`**, and enabling it is not this repository's scope: it binds the concern, so `True` produces no finding here and changes the audit outcome of five manifest-less repositories. | gate-project-configuration; generic-gate-contract |
 | installer-stdout-purity | archived 2026-10-12 | The shell installer's stdout is a contract: exactly one line on success (the installed path) and nothing on failure. Two cleanup deletes could append to it — the `EXIT` trap that removes the work directory (fires *after* the final `printf`) and the staged-binary cleanup further down (redirected stderr but not stdout). On a host whose `rm` is a wrapper that reports what it removed on stdout, `$( install.sh ... )` captured two lines and `test_installer.sh:21` failed. Both sites now redirect stdout; the trap keeps its stderr channel so a real cleanup failure is still visible and gains `|| true` so a failing delete cannot become a failed install. Regression test `tests/packaging/test_installer_stdout.sh` puts a chatty `rm` (and a second-call-failing `mv` for the failure path) on the installer's PATH so the defect reproduces on every host, and asserts one-line/empty stdout plus that each cleanup site was reached. Installer stderr, `--dry-run`, exit codes, checksum verification, and the atomic install are unchanged. | bind-governance-quality-checks (recorded dependency only) |
 | source-file-size-gate | archived 2026-09-28 | Built-in `source-file-size` concern scheduled by the `product`/`rust-product` profiles and executed in-process by a new `src/gate/source_size.rs` scanner (no project command, no language parsing). It resolves a repository-owned source boundary (Git: `git ls-files --cached --others --exclude-standard`; non-Git: symlink-free walk with root `.gitignore`), applies default dependency/build/vendor/state/generated/test exclusions plus conventional source roots, honors repository-relative `include`/`exclude` glob overrides (exclude wins), skips symlinks and binary/invalid-UTF-8 files, and counts raw `0x0A` bytes (`wc -l` semantics) per file. A required concern returns `FAIL` with one bounded finding per file above the default 1,000-line maximum; boundary/read uncertainty returns `REVIEW_REQUIRED`, so incomplete coverage never becomes a pass. A strict `[source_size]` manifest table (`max_lines` positive and <= 1,000,000; `include`/`exclude` repository-relative, non-empty, no absolute/`..` patterns) is validated before execution and participates in the manifest digest; `.ai-gate/gate.yaml` uses the built-in default. `--dry-run` renders `source_size: max_lines=... include=[...] exclude=[...]` without scanning or persisting. New `src/gate/source_size.rs` (18 unit tests) + `tests/gate_source_file_size.rs` (13 integration tests) + `concerns.rs`/`manifest.rs`/`mod.rs`/`aigate.rs`/`commands/gate.rs` updates. `driftwatch check`, every other concern path, the CLI surface, and the SQLite schema are unchanged. | product-quality-gate-contract |
 
