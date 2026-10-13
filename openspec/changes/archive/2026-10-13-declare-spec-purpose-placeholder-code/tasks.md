@@ -187,6 +187,10 @@
       `openspec list --changes` and `openspec validate --changes --strict` are.)
       `git diff --check` clean. **Not archived**, per instruction.
 
+      Superseded 2026-10-13: archived as
+      `2026-10-13-declare-spec-purpose-placeholder-code` once box 6.1's
+      recorded decision was closed as a decision rather than left open.
+
 ## 4. Documentation
 
 - [x] 4.1 `README.md`: the scope table and the declared-versus-emitted
@@ -201,19 +205,54 @@
       code; it does not make the rule exist and does not claim the rule is gated.
 - [x] 5.2 `.ai-gate/gate.yaml` not edited: no `commands:` block added, the
       aggregate stays `FAIL` with `governance-quality UNBOUND`.
+
+      True when written, and about this change's own actions, which remain
+      true. **Superseded as a statement about repository state**: the manifest
+      was later given a `commands:` block by other work, so
+      `governance-quality` is bound and runs here now. This change did not
+      edit it and did not add a command.
 - [x] 5.3 No guard built — see §6 for why, and for what is left undone.
 
-## 6. Left undone, with reasons
+## 6. Recorded decision: the declared-versus-emitted guard
 
-- [ ] 6.1 **No durable declared-versus-emitted guard is built.** The information a
-      correct guard needs is not on this side of the contract boundary: the
-      checker's report carries only the findings it emitted, never the set of
-      codes it *can* emit, and a `workspace_check.py` run is a fleet-wide audit
-      whose finding stream includes at least a dozen codes this concern does not
-      own. A "saw an undeclared code → `REVIEW_REQUIRED`" rule inside the concern
-      would therefore fire on every run and be a permanently red gate — the same
-      failure as a permanently green one. Left **unchecked** deliberately: it is
-      not this change to build, and a half-guard is worse than none.
+- [x] 6.1 **Decision taken: no durable declared-versus-emitted guard is built
+      here, and building one is not this change's to do.** This box was
+      previously left unchecked. It is closed as a **completed decision**, not
+      as work that was finished: the guard does not exist, will not exist on
+      this side of the contract boundary, and nothing in this change's spec
+      claims it does.
+
+      **Why a correct guard is impossible here, stated from this repository's
+      own code rather than from the sibling.** `parse_report`
+      (`src/gate/governance/mod.rs:148`) reads exactly one key out of the
+      checker's report — `findings` — and synthesises its `total` by counting
+      that array. The set of codes the checker *can emit* is therefore not
+      received: an absent key and an empty list are indistinguishable at this
+      boundary, and the only thing this side can derive is what the checker
+      happened to emit on one run.
+
+      **Why the obvious guard would be worse than none.** A rule of the form
+      "saw a code this concern does not declare → `REVIEW_REQUIRED`" reads a
+      fleet-wide audit. The live finding stream carries at least a dozen codes
+      this concern does not own — `PUBLICATION_UNVERIFIED`,
+      `DISCOVERABILITY_MISSING`, `LICENSE_MISSING`, `HANDOFF_SCAFFOLD`,
+      `DEPLOYMENT_PROMOTION_STALE`, `DISCOVERED_UNREGISTERED` — and those are
+      the governance audit's business, not this concern's.
+      `bind-governance-quality-checks` design §2 already rejected folding a
+      portfolio backlog into a code-scoped concern for exactly this reason.
+      Such a rule fires on **every** run: a permanently red gate, which is the
+      same failure as a permanently green one. A guard scoped to the declared
+      codes while reading a fleet-wide stream is the broken rule above; a guard
+      reading a key the envelope does not carry is dead code. A half-guard is
+      worse than none.
+
+      **The spec agrees, and says so in normative language.** The scenario
+      *"A declared code and an undeclared code are not conflated"* states that
+      the concern SHALL NOT "infer, assert, or report any divergence between
+      the declared set and the producing checker's full set of emittable codes,
+      because the producing checker's report does not carry that set". This box
+      records why that requirement is written that way; the archive does not
+      promote a promise the change declined to make.
 
       **Cross-repo dependency C1**, owned by `workspace-governance`, against its
       in-flight `spec-purpose-backfill-gate` change:
@@ -232,3 +271,31 @@
       watching a dead code and will never report it again). Both directions are
       required; the second is what the next renamed or removed code will produce,
       and it is invisible today. design §5 has the full reasoning.
+
+      **What this box does not claim.** It does not claim the guard exists,
+      does not claim the rule is gated, does not claim `SPEC_PURPOSE_AUDIT_ENABLED`
+      is on, and does not claim fleet coverage. Reopening this requires C1 to
+      land first; until then the honest state is the one recorded above.
+
+## 7. Archive-time verification
+
+- [x] 7.1 Re-measured before archiving, rather than trusting the record.
+
+      | Gate | Result |
+      |---|---|
+      | `cargo fmt --check` | clean, exit 0 |
+      | `cargo test` | **1010 passed, 0 failed** (874 at implementation time; the intervening archives added theirs) |
+      | `cargo clippy --all-targets --all-features -- -D warnings` | clean, exit 0 |
+      | `openspec validate declare-spec-purpose-placeholder-code --strict --no-interactive` | "Change 'declare-spec-purpose-placeholder-code' is valid" |
+      | `openspec validate --changes --strict --no-interactive` | 4 passed, 0 failed |
+      | `sh tests/packaging/run_all.sh` | **11 ok, 0 FAIL**, including `change_workflow` against this file's rewritten §6 |
+      | `git diff --check` | clean |
+
+      No production code changed: box 6.1 closed as a recorded decision, and
+      the two stale present-tense claims it sat next to (3.5 "Not archived",
+      5.2 `governance-quality UNBOUND`) were marked superseded rather than
+      restated, because both were true when written and false now.
+
+      The `driftwatch gate` runtime was deliberately not run — its
+      `placeholder-threshold`, `product-code-boundary` and `source-file-size`
+      findings are pre-existing and unrelated to this change.
