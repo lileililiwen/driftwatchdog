@@ -14,6 +14,94 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`gate-unbound-check-fails` is implemented, verified, and archived**
+(2026-10-13; archive commit `2fc0338`). It closed at **41/41** boxes — 40 as it
+stood, plus the archive-disposition box added when 4.2 and 5.1-5.5 were
+transferred (the earlier commit message says 40/40; 41 is the count in the
+archived `tasks.md`). The runtime
+semantics shipped earlier; the archive adds no code. It is archived carrying the
+runtime and nothing else: **task 4.2 is carried and still unanswered**, and
+tasks 5.1-5.5 are carried unstarted.
+
+### The archive aborted on the first attempt, and the abort was right
+
+`openspec archive` refused to promote this change's delta:
+
+```
+gate-project-configuration MODIFIED failed for header "### Requirement: Map
+YAML policy onto the existing Gate plan" - current spec contains scenario(s)
+not present in the modified block: "Selected concern without command"
+```
+
+Because a `MODIFIED` block **replaces** the canonical requirement wholesale, a
+dropped scenario is a silent deletion. The guard is the mechanism that stops an
+archive from quietly narrowing the spec, and this delta would have narrowed it in
+four places. Three of the four drops were **accidental** — the scenarios were
+still true and the requirement text still asserted them in prose while the
+scenario bodies had been rewritten:
+
+| canonical scenario | what it asserted | resolution |
+| --- | --- | --- |
+| `Valid manifest` | a supported profile resolves a plan without executing tools | restored verbatim |
+| `Unknown field` | loading fails naming the field, with a remediation hint | restored verbatim |
+| `Invalid project command` | an empty or malformed required command fails before execution | restored verbatim |
+| `One concern fails among many that pass` | one `FAIL` among `PASS`es gates the run failing, naming the concern | restored verbatim |
+| `A concern is unbound in a project that binds others` | a project binding 2 of 3 concerns is not presented as fully covered | restored verbatim |
+| `Selected concern without command` | a selected check with no command records `NOT_APPLICABLE` | **superseded, kept under its own name**: it now states the unbound status, error severity when required and warning when optional, never the non-failing `NOT_APPLICABLE` |
+
+The sixth is the only real supersession, and it is the point of the change: the
+old scenario asserted exactly the defect being closed. Renaming it out of the way
+would have deleted the history; keeping its name and stating the new truth keeps
+both.
+
+**One contradiction was resolved rather than papered over.** Canonical
+*Aggregate gate results* said a run containing any `FAIL`, `REVIEW_REQUIRED` or
+`UNBOUND` result is gated *"according to the project's declared `blocking`
+list"* — which this change makes **false** for a required `UNBOUND`. The
+promoted text now scopes that clause to `FAIL` and `REVIEW_REQUIRED` and states
+the supersession explicitly, so the canonical spec no longer says two different
+things about the same case.
+
+**Checked after the fact, not assumed:** a scenario-by-scenario diff of both
+canonical specs against `HEAD` reports **no loss anywhere** — 24 requirements,
+every surviving requirement with a scenario count that only went up.
+
+### Task 4.2 is carried, and it is still unanswered
+
+The box asked for the owner's answers to six questions. **Only decision 4 was
+given** (2026-10-02: cap exemptions at `min(floor(0.25 × required_checks), 5)`
+with four never-exempable spine concerns), and it is implemented. Decision 3 has
+a shipped *disposition* — allowed, with a recorded reason — which is an
+implementation choice made to keep the package shippable, **not an owner
+ruling**. **Decisions 1, 2, 5 and 6 remain unanswered**, and nothing invented an
+answer: `binding_policy` still defaults to `report`, a required unbound check
+still blocks from the first release, and `UNBOUND` is still a distinct status
+rather than a field on `NOT_APPLICABLE`. All six questions, each with its
+options, are carried in `workspace-fleet-check-sweep` `design.md` §4 and as
+items **0.1-0.5**, so one pass of operator input closes them. Item 0.6 is the
+re-measurement that has to come first.
+
+### Verification on 2026-10-13
+
+15 `tests/gate_unbound_check.rs` + 14 `tests/gate_exemption_cap.rs` pass;
+13 aggregate unit tests pass, including
+`required_unbound_blocks_even_when_review_required_does_not`,
+`required_unbound_blocks_even_when_the_plan_marks_it_exempt`,
+`optional_unbound_never_blocks_and_is_kept_separate` and
+`unbound_and_not_applicable_stay_in_separate_collections`;
+`exemption_cap_matches_the_owner_formula_at_the_boundaries` pins 10→2, 20→5,
+24→5, 40→5, 3→0, 4→1, 19→4. This repository's own dry run computes its budget
+from its own manifest: `exemption budget: 0 of 2 allowances used (2 headroom
+left; min(floor(0.25 x 9 required checks), 5) = 2)`. `cargo fmt --check` clean;
+`cargo test` **1010 passed, 0 failed, 31 suites**; `cargo clippy --all-targets
+--all-features -- -D warnings` clean; `openspec validate --all --strict
+--no-interactive` **33 passed, 0 failed (33 items)**; `git diff --check` clean.
+The **`driftwatch gate` runtime was deliberately not run**.
+
+**Spec promotion, `--skip-specs` NOT used:** `gate-project-configuration`
+**+6 added, ~2 modified, -0** (10 → 16) and `generic-gate-contract` **~2
+modified, -0** (13 → 13, both requirements modified in place).
+
 **`bind-declared-verification-command` is implemented, verified, and archived**
 (2026-10-13; archive commit `83a88fb`). It closed at **35/35** boxes. What this
 repository owns is two strings and a vocabulary: the `declared-verification`
@@ -1860,6 +1948,7 @@ Read these in order:
 | post-mvp-readiness | archived 2026-09-27 | Documentation-only README readiness pass: a checked-in terminal capture under `docs/assets/run-failure.txt` + `docs/assets/gate-run.txt` (synthetic project, no real repo data, no external image host, redacted), a consolidated built-in Gate profile and concern catalog in `README.md` (profile → stable concern IDs → default `required = true` → exit-code authority rule → text-mode fallback behaviour) sourced from `src/gate/concerns.rs` and `src/gate/manifest.rs`, and an ordered integration recipe from no manifest to a first `driftwatch gate` run (init, surface choice, profile + commands, blocking override, context providers, dry-run + run + export). The catalog and the recipe explicitly note Driftwatchdog owns the central workspace Gate (75 workspace `.ai-gate/gate.yaml` files name `runtime: driftwatchdog`). No `src/**`, concern ID, envelope, wire version, CLI surface, profile, rule, or canonical spec was changed; Driftwatchdog remains an executor/aggregator. | gate-evidence-export |
 | per-check-gate-timeout | implemented 2026-10-04, archived 2026-10-13 at 32/32 (2 boxes carried to `workspace-fleet-check-sweep`, unstarted) | `driftwatch gate` hardcoded one 60s deadline for every check (`CHECK_TIMEOUT_MS` in `src/commands/gate.rs`) that no manifest could reach; four fleet repositories were killed mid-run and reported unproven, and two more had 8% and 2% headroom. `ManifestCheck.timeout_ms: Option<u64>` mirrors the checker config's existing field, its `unwrap_or(DEFAULT)` resolution, and its refusal of `0`; the business YAML form gains a per-check `timeouts:` mapping onto the same field so the value rules run once in `manifest::validate` for both forms. `MAX_CHECK_TIMEOUT_MS = 3_600_000` bounds the value and is named in the error. **The default is unchanged at 60s** and all 77 fleet manifests produce byte-identical `manifest_digest` values before and after, measured by diffing `--dry-run` output from both binaries — no manifest needs an edit. `ResolvedGatePlan.check_timeouts` + `--dry-run` rendering make the effective deadline visible. 9 new `src/gate/manifest.rs` unit tests + 5 in `src/gate/aigate.rs` + 3 in `src/commands/gate.rs` + 5 new `tests/gate_check_timeout.rs` integration tests. Timeout stays distinct from failure (`REVIEW_REQUIRED` + `project-runtime:timeout` vs `FAIL`). No new execution path, dependency, or network call. | gate-cli-and-memory-integration; gate-project-configuration |
 | bind-declared-verification-command | implemented 2026-10-04, archived 2026-10-13 at 35/35 (4 boxes carried to `workspace-fleet-check-sweep`, unstarted) | A repository's own `verification.command` becomes a gate result rather than documentation (ruling D18). Two things are owned here: the `declared-verification` concern id — in no closed vocabulary, so the existing project-runtime text adapter serves it (exit 0 `PASS`, non-zero `FAIL`, timeout/spawn failure `REVIEW_REQUIRED`), non-exemptable with one spelling and no alias, and scheduled by no built-in profile — and `QUALITY_VERIFICATION_COMMAND_UNBOUND` in `GOVERNANCE_QUALITY_DECLARED_CODES`, without which the concern filters the finding away and reports PASS while the checker fails. The generator (`workspace-governance/scripts/bind_verification_command.py`) reads each repository's own declaration and refuses rather than invents; the rule is ERROR below a committed constant fence. The declaration is proven load-bearing: deleting the string turns `an_unbound_declared_verification_command_is_a_gate_failure` red with `left: Pass, right: Fail`, re-proved at archive time. 59 sibling tests cover the generator and the fence. **The fence remains `False`**, and enabling it is not this repository's scope: it binds the concern, so `True` produces no finding here and changes the audit outcome of five manifest-less repositories. | gate-project-configuration; generic-gate-contract |
+| gate-unbound-check-fails | implemented 2026-10-02 (cap amendment), archived 2026-10-13 at 41/41 (6 boxes carried to `workspace-fleet-check-sweep`, unstarted) | A required check with no bound command now fails closed. `NOT_APPLICABLE` used to mean both "evaluated and inapplicable" and "nothing ran", the record was `Info`/zero-findings, and whether an unexecuted mandatory assertion blocked was decided by the project-controlled `blocking:` list — `blocking: [FAIL]` aggregated to `PASS`. `UNBOUND` is now a distinct status with `Error` severity for required and `Warning` for optional, naming the missing `commands.<id>` key and missing evidence, blocking independently of the declared list; `not_applicable` is a first-class declaration with a required, bounded, redacted reason; exemptions are capped per repository at `min(floor(0.25 × required_checks), 5)` (owner 2026-10-02) with `build`, `tests`, `security` and `repository` plus the `repository_integrity` spelling never exempable, warned at the cap and failing above it, computed at resolve time so `--dry-run` names the budget. Measured correction to the ruling's premise: median 7 required checks, so the allowance is 1 for 60 of 65 parseable repos — the **spine**, not the cap, closes the escape. The first archive attempt was **aborted by the merge guard** for dropping five canonical scenarios; four were accidental and are restored verbatim, the fifth is a real supersession kept under its own name, and one contradiction in *Aggregate gate results* is now scoped and superseded explicitly. Task 4.2 is carried **unanswered**: only decision 4 was given; 1, 2, 5, 6 are open and none is invented. | gate-project-configuration; generic-gate-contract |
 | installer-stdout-purity | archived 2026-10-12 | The shell installer's stdout is a contract: exactly one line on success (the installed path) and nothing on failure. Two cleanup deletes could append to it — the `EXIT` trap that removes the work directory (fires *after* the final `printf`) and the staged-binary cleanup further down (redirected stderr but not stdout). On a host whose `rm` is a wrapper that reports what it removed on stdout, `$( install.sh ... )` captured two lines and `test_installer.sh:21` failed. Both sites now redirect stdout; the trap keeps its stderr channel so a real cleanup failure is still visible and gains `|| true` so a failing delete cannot become a failed install. Regression test `tests/packaging/test_installer_stdout.sh` puts a chatty `rm` (and a second-call-failing `mv` for the failure path) on the installer's PATH so the defect reproduces on every host, and asserts one-line/empty stdout plus that each cleanup site was reached. Installer stderr, `--dry-run`, exit codes, checksum verification, and the atomic install are unchanged. | bind-governance-quality-checks (recorded dependency only) |
 | source-file-size-gate | archived 2026-09-28 | Built-in `source-file-size` concern scheduled by the `product`/`rust-product` profiles and executed in-process by a new `src/gate/source_size.rs` scanner (no project command, no language parsing). It resolves a repository-owned source boundary (Git: `git ls-files --cached --others --exclude-standard`; non-Git: symlink-free walk with root `.gitignore`), applies default dependency/build/vendor/state/generated/test exclusions plus conventional source roots, honors repository-relative `include`/`exclude` glob overrides (exclude wins), skips symlinks and binary/invalid-UTF-8 files, and counts raw `0x0A` bytes (`wc -l` semantics) per file. A required concern returns `FAIL` with one bounded finding per file above the default 1,000-line maximum; boundary/read uncertainty returns `REVIEW_REQUIRED`, so incomplete coverage never becomes a pass. A strict `[source_size]` manifest table (`max_lines` positive and <= 1,000,000; `include`/`exclude` repository-relative, non-empty, no absolute/`..` patterns) is validated before execution and participates in the manifest digest; `.ai-gate/gate.yaml` uses the built-in default. `--dry-run` renders `source_size: max_lines=... include=[...] exclude=[...]` without scanning or persisting. New `src/gate/source_size.rs` (18 unit tests) + `tests/gate_source_file_size.rs` (13 integration tests) + `concerns.rs`/`manifest.rs`/`mod.rs`/`aigate.rs`/`commands/gate.rs` updates. `driftwatch check`, every other concern path, the CLI surface, and the SQLite schema are unchanged. | product-quality-gate-contract |
 
@@ -2136,8 +2225,8 @@ authorized by the workspace governance queue.
 Follow the "Change completion workflow" at the top of this file
 whenever the next change is ready to archive.
 
-The `gate-unbound-check-fails` change is **implemented, still active, and
-must not be archived** (amended 2026-10-02). A required check that binds
+The `gate-unbound-check-fails` change is **implemented and archived** (2026-10-13; `2fc0338` — see the Current state entry at the top
+of this file; amended 2026-10-02, when it was still open). A required check that binds
 no command now records `UNBOUND`/`Error` and blocks regardless of the
 project's `blocking:` list, and a project may declare a written
 `not_applicable` exemption. The 2026-10-02 owner decision adds the
@@ -2153,8 +2242,9 @@ escape (all 59 repos with unbound debt carry spine debt). The
 verdict reuses existing statuses (`REVIEW_REQUIRED`/`Warning`,
 `FAIL`/`Error`) on one plan-level `exemption-budget` result, so no new
 status, table, or consumer was added. Rationale and counting rules are in
-`openspec/changes/gate-unbound-check-fails/design.md` §3.5; the normative
-requirement and its scenarios are in that change's `spec.md`.
+`openspec/changes/archive/2026-10-13-gate-unbound-check-fails/design.md` §3.5;
+the normative requirement and its scenarios are now canonical in
+`openspec/specs/gate-project-configuration/spec.md`.
 
 Verification on 2026-10-02: `cargo fmt --all -- --check` clean,
 `cargo build` ok, `cargo clippy --workspace --all-targets --all-features
@@ -2169,6 +2259,13 @@ Open before archive: task 4.2's remaining owner decisions (1, 2, 5, 6 in
 `design.md` §8) and the deferred fleet migration (tasks 5.1-5.5). No
 `gate.yaml` in any sibling repository was edited; the measured fleet
 consequence is recorded in that change's `tasks.md` group 7.
+
+**Superseded 2026-10-13.** The change is archived at 41/41 (40 original boxes
+plus the archive-disposition box). 4.2 and 5.1-5.5 are
+carried, not done, in `workspace-fleet-check-sweep`: 4.2 as items 0.1-0.5 with
+the six questions and their options recorded verbatim and **unanswered**, and
+5.1-5.5 as items 3.1-3.6. The `design.md` §8 / `spec.md` paths named above are
+now under `openspec/changes/archive/2026-10-13-gate-unbound-check-fails/`.
 
 ## The product-quality gate checks now run here, and they fail
 

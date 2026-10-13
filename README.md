@@ -840,12 +840,13 @@ repositories' findings. Its behaviour is proved twice over — by this
 repository's own run, and by `tests/gate_governance_quality.rs` plus the unit
 tests in `src/gate/governance/`.
 
-The other **70 workspace repositories** gain the concern only when
-`gate-unbound-check-fails` task 5.1 lands (it makes unbound required
-checks fail across the fleet). Until then the concern is live here and
-inert elsewhere. The 76 repositories that select a product profile
-without binding `commands.governance-quality` report `UNBOUND` in the
-meantime — a real result, reported as one.
+The other **70 workspace repositories** gain the concern only when the
+fleet migration recorded in `workspace-fleet-check-sweep` item 3.1 lands (it
+moves each unbound repository to binding, exempting, or relaxing its own
+checks). Until then the concern is live here and inert elsewhere. The 76
+repositories that select a product profile without binding
+`commands.governance-quality` report `UNBOUND` in the meantime — a real
+result, reported as one.
 
 ### Declared-verification Gate concern
 
