@@ -14,7 +14,78 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`declare-new-change-with-gate-debt-code` is implemented, verified, and
+archived** (2026-10-13; archive commit `ecafe11`). It closed at **27/27**
+boxes. The implementation is one line: `QUALITY_NEW_CHANGE_WITH_GATE_DEBT`
+joins `GOVERNANCE_QUALITY_DECLARED_CODES` in `src/gate/governance/mod.rs:98`,
+so the `governance-quality` concern can report a finding it previously
+filtered out before the status was ever computed. This archive adds no code.
+
+### The earlier refusal was correct, and the reason is now recorded rather than gone
+
+A previous agent declined to archive this change, and was right to. Its
+`MODIFIED` delta targets the requirement **"A bound concern reports only the
+codes it owns"**, and that requirement existed in **no canonical spec** — only
+in still-open deltas. Archiving against a non-existent target would have
+promoted a delta into the void.
+
+`bind-governance-quality-checks` promoted it earlier the same day (see the
+entry below), so the target now resolves. **The delta was not weakened to get
+through**: it still `MODIFIED`s that requirement — adding the paragraph *"The
+declared set SHALL cover every code the bound checkers can emit at ERROR"* and
+its two scenarios — and still `ADD`s *"A declared code states why it is
+declared"*. `openspec` reports `+ 1 added, ~ 1 modified, - 0, → 0`, and
+`generic-gate-contract` goes from **8 requirements to 9**.
+
+### The negative control, re-verified rather than trusted
+
+The recorded control is *"deleting the constant turns the new test red with
+`left: Pass, right: Fail`, and restoring it turns it green"*. Re-run at
+archive time, because a record is not a measurement:
+
+| | result |
+|---|---|
+| `QUALITY_NEW_CHANGE_WITH_GATE_DEBT` removed from the declared set | `a_new_change_on_a_repository_carrying_gate_debt_is_a_gate_failure` **FAILED** with `left: Pass, right: Fail` |
+| constant restored | green |
+
+It fails with exactly the recorded message. The declaration is load-bearing,
+not a constant nobody reads. The tree was restored before archiving —
+`git diff --stat src/gate/governance/mod.rs` is empty.
+
+### Blast radius, and why declaring ahead of emission is safe
+
+22 repositories at the time of writing; every legacy repository that opens a
+change while carrying debt emits this code. Undeclared, that is a fleet-wide
+false green: a blocking rule reporting clean.
+
+Declaring a code the checker has not emitted is **inert, not red** — the
+declared set is 7 while at most 6 codes can match, the status is
+`level_status(has_error, has_warning)` over *observed* findings, and a
+declared code with no finding contributes to neither flag, is not named in
+the diagnostic, and never turns the gate `REVIEW_REQUIRED`. Pinned by
+`a_declared_code_the_checker_has_not_emitted_is_inert` and, end to end,
+`a_report_without_the_code_still_passes` — the latter also keeps the blocking
+test honest, since a concern that failed on everything would pass it.
+
+### Verification on 2026-10-13
+
+`cargo fmt --check` clean; `cargo test` **1010 passed, 0 failed** (unchanged
+— this archive moves no code); `cargo clippy --all-targets --all-features
+-- -D warnings` clean; `openspec validate --changes --strict
+--no-interactive` 5 passed / 0 failed before the archive and **4 after**;
+`openspec validate --all --strict --no-interactive` **36 passed, 0 failed
+(36 items)** after the archive (37 before: the archived change left the
+change list); `git diff --check` clean. The **`driftwatch gate` runtime was
+deliberately not run** — its pre-existing `placeholder-threshold`,
+`product-code-boundary` and `source-file-size` findings are unrelated.
+
+**No file outside this repository was modified.** The remaining four open
+changes — `per-check-gate-timeout`, `bind-declared-verification-command`,
+`declare-spec-purpose-placeholder-code` and `gate-unbound-check-fails` — were
+not edited, completed, archived or re-scoped.
+
 **`bind-governance-quality-checks` is implemented, verified, and archived**
+
 (2026-10-13; implementation commit `2bc0ab1`). It closed at **25/25** boxes.
 The concern itself shipped long ago; what this archive adds is the two boxes
 that were still open, and both turned out to be **documentation and test
@@ -593,10 +664,12 @@ from `GOVERNANCE_QUALITY_DECLARED_CODES` turns the new test red with
 `left: Pass, right: Fail`, and restoring it turns it green. A test that cannot
 fail when the declaration is removed would not be testing the declaration.
 
-`openspec/changes/declare-new-change-with-gate-debt-code/` holds the spec. It
-MODIFIES the code-ownership requirement with the two scenarios above and ADDs a
-requirement that every declared code states the failure its absence would
-cause, so a future addition cannot be made quietly. Not archived.
+`openspec/changes/archive/2026-10-13-declare-new-change-with-gate-debt-code/`
+holds the spec. It MODIFIES the code-ownership requirement with the two
+scenarios above and ADDs a requirement that every declared code states the
+failure its absence would cause, so a future addition cannot be made quietly.
+**Archived 2026-10-13** (`ecafe11`), once
+`bind-governance-quality-checks` promoted the requirement it modifies.
 
 **`governance-quality` now runs here.** This repository recorded the concern
 as `UNBOUND` and blocked on it, on the reasoning that the checker lives in
