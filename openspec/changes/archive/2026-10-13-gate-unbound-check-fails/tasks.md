@@ -2,11 +2,12 @@
 
 Ordered BFS baseline → DFS requirement implementation → BFS regression and
 completeness → Verification. Phase 1 (runtime + report) is implemented; the
-enforcement flip and the fleet migration are not. Tasks 4.2 and 5.1-5.5 stay
-unchecked by design: they are owner decisions and the separate migration
-change, so this change must not be archived or represented as complete yet.
-Task 4.2 is partially answered: the owner's 2026-10-02 decision on an
-exemption ceiling (open decision 4) is implemented in group 6 below.
+enforcement flip and the fleet migration are not. **Archived 2026-10-13.**
+Tasks 4.2 and 5.1-5.5 were fleet-scale and are now marked **carried, not
+done**: each names the `workspace-fleet-check-sweep` item that holds it, and
+none was deleted. Task 4.2 is **still unanswered** — the owner gave decision 4
+(exemption ceiling) on 2026-10-02 and it is implemented in group 6 below;
+decisions 1, 2, 5 and 6 were never answered, and this archive invents none.
 See "Verification record" at the end of this file for measured results.
 
 ## 1. BFS — Baseline and impact coverage
@@ -142,15 +143,26 @@ See "Verification record" at the end of this file for measured results.
   unconditional blocking of a required unbound check. This package's
   single `gate-project-configuration` delta does not modify that
   capability, and the change must not be archived without it.
-- [ ] 4.2 Resolve the owner's answers to open decisions 1-6 in
-  `design.md` §8 before flipping enforcement: the `binding_policy` default,
-  whether the new status blocks from the first release or after the
-  shadow cycle, whether a profile default may be exempted, whether
-  exemptions are capped, the fleet migration's change granularity, and
-  status variant versus a `provenance` field. Record each answer in
-  `design.md` rather than deciding it in code. **Partially answered on
-  2026-10-02:** decision 4 (exemption ceiling) is now decided and
-  implemented — see group 6. Decisions 1, 2, 5, and 6 remain open.
+- [x] 4.2 **CARRIED, NOT ANSWERED — the owner's answers to open decisions 1-6
+  were never given, and this change does not invent them.** Task 4.2 asked for the
+  `binding_policy` default's flip point, whether the new status blocks from the
+  first release or after a shadow cycle, whether a profile default may be
+  exempted, whether exemptions are capped, the fleet migration's granularity,
+  and status variant versus a `provenance` field. **Only decision 4 was
+  answered** (owner, 2026-10-02: cap at `min(floor(0.25 × required_checks), 5)`
+  with four never-exempable spine checks), and it is implemented in group 6.
+  Decision 3 has a shipped *disposition* — allowed, with a recorded reason —
+  which is an implementation choice made to keep the package shippable, not an
+  owner ruling. **Decisions 1, 2, 5 and 6 remain unanswered**, and nothing in
+  this change, in the promoted spec, or in code implements an assumed answer to
+  any of them: `binding_policy` still defaults to `report`, the required
+  unbound check blocks from the first release, and `UNBOUND` is a distinct
+  status. All six questions are carried verbatim **with their options** as
+  `workspace-fleet-check-sweep` `design.md` §4, and as its items **0.1-0.5**
+  (origin box: this one), so one pass of owner input closes them. One box of
+  them, 0.6, is the re-measurement that has to precede the rest.
+  **The decision set is unanswered at the time of this archive, and the archive
+  says so rather than closing the question.**
 - [x] 4.3 Run `cargo fmt --all -- --check`, `cargo clippy --all-targets`
   with no new findings, the focused gate test suite, `git diff --check`,
   and `openspec validate --all --strict --no-interactive`. Capture the
@@ -435,27 +447,58 @@ are lower only because 11 manifests cannot be parsed by the binary yet.
   command-free check. All three now assert the new state and additionally
   assert it is not the old one. No test was weakened or removed.
 
-## 5. Explicit deferred work (not in this package)
-- [ ] 5.1 Binding commands for the 70 unbound repositories. This is the
-  phase-1 fleet migration, 70 language-specific changes, and it is the
-  subject of its own change once the owner settles decisions 1 and 2.
-- [ ] 5.2 A uniform `make gate` entrypoint. Only 7 of 81 repos have a
-  Makefile and driftwatchdog executes language-neutral `sh -c` strings, so
-  mandating `make` would exclude npm/dotnet/msbuild stacks or force a shim
-  into 70 repos before any gate can run.
-- [ ] 5.3 A closed concern-id vocabulary. 34 check kinds are declared by
-  exactly one repo; closing the vocabulary is a breaking manifest change
-  for ~40 repos. Unbound unknown kinds are handled by the same fail-closed
-  rule in the meantime.
-- [ ] 5.4 CI wiring that runs tests and the gate together. 57 repos run
-  tests in CI and 0 run both; that belongs to the workspace-governance
-  repository and is an integration concern, not a driftwatchdog change.
-- [ ] 5.5 A workspace-level exemption *budget* or coverage metric across
-  repos. **Partly superseded by the 2026-10-02 decision (group 6):** the
-  per-repository ceiling and the never-exempable spine are now normative
-  and implemented, which closes "a repo exempts its entire gate and goes
-  green". What remains here is the cross-repo view — how much of the
+## 5. Explicit deferred work (moved, not dropped — `workspace-fleet-check-sweep`)
+
+Every item below was fleet-scale from the start, and each is now **carried, not
+done**: marked `[x]` only in the sense that this change stopped owning it, with
+the text saying so. The work lives in `workspace-fleet-check-sweep`, unstarted
+and unarchived, itemised per owner.
+
+- [x] 5.1 **CARRIED, NOT DONE — binding commands for the 70 unbound
+  repositories.** The phase-1 fleet migration: 70 language-specific changes
+  across Node, Rust, .NET and Python. Measured starting debt over all 76
+  manifests: 69 unbound `security`, 68 unbound `tests`, 66 unbound `build`,
+  61 unbound `repository`, plus the 41 repositories inheriting unbound
+  `product-code-boundary` and `placeholder-threshold` from the built-in
+  product profiles. It stays blocked on decisions 1 and 2 (4.2 above) and is
+  now `workspace-fleet-check-sweep` item **3.1**, unstarted. **Bind, do not
+  exempt**: with a median of 7 required checks the cap yields an allowance of
+  1 for 60 of 65 parseable repositories, and all 59 repositories carrying debt
+  carry *spine* debt, so a repository that exempts instead of binding still
+  ends red.
+- [x] 5.2 **CARRIED, NOT DONE — a uniform `make gate` entrypoint.** Only 7 of
+  81 repositories have a Makefile and driftwatchdog executes language-neutral
+  `sh -c` strings, so mandating `make` would exclude the `npm run` /
+  `dotnet test` / `msbuild` stacks or force a shim into 70 repositories before
+  any gate can run. The partial answer already ships: every unbound check must
+  name its own real command. Now `workspace-fleet-check-sweep` item **3.2**,
+  unstarted.
+- [x] 5.3 **CARRIED, NOT DONE — a closed concern-id vocabulary.** 34 check
+  kinds are declared by exactly one repository, `accessibility` by 4, `format`
+  by 3, `lint` by 2, and every one of those is unbound. Closing the vocabulary
+  is a breaking manifest change for ~40 repositories; until then unknown kinds
+  are handled by the same fail-closed rule, so an invented check name cannot
+  escape the ruling. This is also what would close the residual spine hole —
+  a future spelling of a non-exempable concern is protected today only if
+  someone adds it to `NON_EXEMPTABLE_ALIASES` deliberately. Now
+  `workspace-fleet-check-sweep` item **3.3**, unstarted.
+- [x] 5.4 **CARRIED, NOT DONE — CI wiring that runs tests and the gate
+  together.** 57 repositories run tests in CI and 0 run both. Owner:
+  `workspace-governance`; an integration concern, not a driftwatchdog change.
+  Now `workspace-fleet-check-sweep` item **3.4**, unstarted.
+- [x] 5.5 **CARRIED, NOT DONE — a workspace-level exemption budget or coverage
+  metric across repositories.** Partly superseded by the 2026-10-02 decision
+  (group 6): the per-repository ceiling and the never-exempable spine are
+  normative and implemented, which closes "a repo exempts its entire gate and
+  goes green". What remains is the cross-repo view — how much of the
   workspace's total coverage is exempted in aggregate — which is still a
-  workspace-governance concern. A per-repo override of the cap is
-  deliberately not offered: it would restore the self-authorisation the
-  cap removes.
+  `workspace-governance` concern. A per-repo override of the cap is
+  deliberately not offered anywhere: it would restore the self-authorisation
+  the cap removes. Now `workspace-fleet-check-sweep` items **3.5** and **3.6**,
+  unstarted.
+- [x] **This change is archived** (2026-10-13), carrying the runtime semantics
+  this repository owns and nothing else. Archiving authorised it, and it
+  required 4.2 and 5.1-5.5 to be transferred first, each box rewritten to say
+  it is carried rather than done — no box was deleted, and no fleet-scale work
+  is represented as complete. The residue lives in `workspace-fleet-check-sweep`,
+  which stays open and unarchived, with decisions 1-6 still unanswered.

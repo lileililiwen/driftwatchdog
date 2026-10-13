@@ -73,16 +73,23 @@ reaching the project's computed limit is a `REVIEW_REQUIRED` result with
 ### Requirement: Aggregate gate results
 
 The system MUST aggregate results using an explicit blocking policy and MUST NOT
-silently convert `REVIEW_REQUIRED` into `PASS`. A required result with status
-`UNBOUND` MUST block the aggregate and MUST produce aggregate status `FAIL`
-independently of the configured blocking policy, because a project must not be
-able to reduce an attempted-nothing required check to a pass by editing its
-declared blocking list. The aggregate MUST keep unbound checks in a collection
-distinct from proven or acknowledged not-applicable checks, so a single run
-distinguishes an absence that was evaluated from one that was never attempted.
-A failing exemption-budget result MUST block the aggregate on the same terms as
-any other required failure, and a warning-severity budget result MUST be
-recorded without blocking.
+silently convert `REVIEW_REQUIRED` into `PASS`.
+
+A run's status SHALL be derived from the results of the concerns it actually
+bound. A concern that is enabled but unbound SHALL contribute an `UNBOUND`
+result and SHALL NOT be reported as a pass. A run containing a `FAIL` or a
+`REVIEW_REQUIRED` result SHALL be gated according to the project's declared
+`blocking` list rather than reported as satisfied; **a required `UNBOUND`
+supersedes that list**, because the project would otherwise be able to reduce an
+attempted-nothing required check to a pass by editing the list it declares. A
+required result with status `UNBOUND` MUST block the aggregate and MUST produce
+aggregate status `FAIL` independently of the configured blocking policy. The
+aggregate MUST keep unbound checks in a collection distinct from proven or
+acknowledged not-applicable checks, so a single run distinguishes an absence
+that was evaluated from one that was never attempted. A failing
+exemption-budget result MUST block the aggregate on the same terms as any other
+required failure, and a warning-severity budget result MUST be recorded without
+blocking.
 
 #### Scenario: Blocking failure
 
@@ -98,6 +105,18 @@ recorded without blocking.
 
 - **WHEN** optional checks are `NOT_APPLICABLE` and required checks pass
 - **THEN** the aggregate status is `PASS` with explicit not-applicable records
+
+#### Scenario: One concern fails among many that pass
+
+- **WHEN** a run binds several concerns, all but one of which report `PASS`, and
+  the remaining one reports `FAIL`
+- **THEN** the run is gated as failing, and the report names the failing concern
+
+#### Scenario: A concern is unbound in a project that binds others
+
+- **WHEN** a project binds two of three enabled concerns
+- **THEN** the third is reported as `UNBOUND` for that project, and the run does
+  not present the project as fully covered
 
 #### Scenario: Required unbound check blocks independently of the blocking policy
 

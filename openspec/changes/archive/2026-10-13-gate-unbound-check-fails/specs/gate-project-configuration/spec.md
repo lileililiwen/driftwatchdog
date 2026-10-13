@@ -18,6 +18,14 @@ declaration of coverage and is never by itself evidence of coverage.
 - **THEN** the concern is scheduled with that command for execution and
   its result status is whatever the command reports
 
+#### Scenario: Selected concern without command
+
+- **WHEN** a selected check has no command binding
+- **THEN** the concern is scheduled and records the unbound status rather than a
+  silent pass **or** the non-failing `NOT_APPLICABLE` it used to record, at
+  error severity when the check is required and warning severity when it is
+  optional; the two cases below state how each status blocks
+
 #### Scenario: Required concern without command
 
 - **WHEN** a check selected `true` has no `commands` entry and no
@@ -53,11 +61,28 @@ declaration of coverage and is never by itself evidence of coverage.
 
 ### Requirement: Validate a project Gate manifest
 
-The system MUST fail manifest validation before any check executes on an
-unknown field, an unsupported version, an empty enabled command, or a
-malformed project command, and MUST additionally fail it, under the
-`reject` binding policy, when a required enabled check binds no command
-and declares no exemption.
+The system MUST load and validate a project-local Gate manifest with version,
+profile, checks, blocking policy, project commands, and optional context
+providers, and MUST fail that validation before any check executes on an
+unknown field, an unsupported version, an empty enabled command, or a malformed
+project command, and MUST additionally fail it, under the `reject` binding
+policy, when a required enabled check binds no command and declares no
+exemption.
+
+#### Scenario: Valid manifest
+
+- **WHEN** a project declares a supported profile and valid checks
+- **THEN** the system produces a resolved plan without executing tools
+
+#### Scenario: Unknown field
+
+- **WHEN** the manifest contains an unknown field
+- **THEN** loading fails with the field name and a remediation hint
+
+#### Scenario: Invalid project command
+
+- **WHEN** an enabled required command is empty or malformed
+- **THEN** plan resolution fails before any check executes
 
 #### Scenario: Empty command string is still rejected
 
