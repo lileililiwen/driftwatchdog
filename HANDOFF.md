@@ -14,6 +14,117 @@ After implementing a change and ticking every box in its `tasks.md`, follow the 
 
 ## Current state
 
+**`bind-governance-quality-checks` is implemented, verified, and archived**
+(2026-10-13; implementation commit `2bc0ab1`). It closed at **25/25** boxes.
+The concern itself shipped long ago; what this archive adds is the two boxes
+that were still open, and both turned out to be **documentation and test
+gaps rather than missing work** — no production code changed.
+
+Archived as `openspec/changes/archive/2026-10-13-bind-governance-quality-checks/`.
+`--skip-specs` was not used: **4 requirements added, 1 modified** promoted
+into `openspec/specs/generic-gate-contract/spec.md`, taking it from **4
+requirements to 8**. The four added ones are *A bound concern reports only the
+codes it owns*, *A cannot-run checker is never a pass*, *A concern is reported
+as unbound where no binding exists*, and *A code-scoped quality concern is not
+exempable*.
+
+That promotion is what unblocks `declare-new-change-with-gate-debt-code`,
+whose `MODIFIED` delta targets *A bound concern reports only the codes it owns*
+— a requirement that existed in no canonical spec until this archive.
+
+### Box 3.2: the template now ships a live command, and it is not a guess
+
+The box had been left open on the reasoning that binding a cross-repository
+path in a template "would break every project that copied it". The objection
+is real; it is not decisive. The template **cannot hard-code a project name**
+and **must scope the audit**, because `--root` without `--project ..` makes
+the checker audit the whole workspace and this concern filters by **code and
+not by project** — measured on the fleet, that charges `bargora` 12 in-scope
+findings of which **0** are its own.
+
+What settles it is that the template does not have to guess. Every manifest
+command already runs as `sh -c` with the repository root as its working
+directory (`src/checker/runner.rs:97`), so the shipped binding is:
+
+```yaml
+governance-quality: 'python3 ../workspace-governance/scripts/workspace_check.py --root .. --project "$(basename "$PWD")" --json'
+```
+
+**Measured, not argued.** Against a fixture laid out the way the fleet is — a
+repository beside a `workspace-governance/` sibling — the checker was invoked
+with `['--root', '..', '--project', 'driftwatchdog', '--json']` and
+`cwd=/…/driftwatchdog`. The one assumption it makes (a repository's directory
+name equals its `projects.json` name, which every repository here already
+satisfies) is written in the template rather than left implicit.
+
+`checks:` also gained `governance-quality: true`, which is **load-bearing**,
+not decorative: a `commands.<id>` naming no `checks` entry is a parse error
+(`src/gate/aigate.rs:210`), so without it the binding is illegal.
+`blocking: [FAIL, REVIEW_REQUIRED]` was already the template's list.
+`contexts: [git, openspec` was missing its closing bracket — a template that
+does not parse is not a template, so that is fixed too.
+
+### Box 4.6: the mapping is earned, and it is proven to be a control
+
+The property is delivered in the literal form the box states: **one**
+manifest, **one** binding, one report file rewritten in place, two runs.
+
+| run | report | checker exit | concern | run status |
+|---|---|---|---|---|
+| 1 | no findings | **1** | `PASS` | `PASS`, not blocked |
+| 2 | one matching `ERROR` | **1** | `FAIL` | `FAIL`, blocked |
+
+The checker's exit status is held at `1` across both runs because it is the
+one input that does not move — so the transition is attributable to the
+mapping over the matching findings' levels and to nothing else. That is
+precisely what `src/gate/governance/mod.rs` claims ("Why the status comes
+from the findings, not the exit code") and what design §2 rejected the raw
+exit code over. The test also asserts the two runs are distinct records and
+that `manifest_digest` is byte-identical, which is what makes "the same
+binding" a checked fact rather than an assertion.
+
+**Proven to be a control, by sabotage**, each restored afterwards:
+
+| sabotage | result |
+|---|---|
+| `level_status` ignores its arguments and always returns `Pass` | **FAILED** at the `FAIL` assertion (line 503), with 5 other tests |
+| the adapter maps the checker's exit (`exit == 1` ⇒ `FAIL`) instead of the levels | **FAILED** at `run_gate(&tmp).success()` (line 479) — the *clean* run fails, which is the half that proves the exit code is not the verdict |
+
+Three new tests in `tests/gate_governance_quality.rs` (13 → 16):
+`one_binding_reads_pass_then_fail_with_the_checker_exit_held_at_one`,
+`the_documented_template_selects_and_binds_the_governance_concern`, and
+`the_template_command_scopes_its_own_audit_to_the_repository`. The template
+test **extracts** the block out of `README.md` rather than restating it, so
+it breaks when the template breaks instead of passing against a copy that
+drifted. Sabotaging the template back to a commented binding turns it red
+with *"the template binds no command for `governance-quality`"*.
+
+### Verification on 2026-10-13
+
+`cargo fmt --check` clean; `cargo test` **1010 passed, 0 failed** (1007
+before, **+3**); `cargo clippy --all-targets --all-features -- -D warnings`
+clean; `openspec validate --changes --strict --no-interactive` 6 passed / 0
+failed before the archive and **5 after**; `openspec validate --all --strict
+--no-interactive` **37 passed, 0 failed (37 items)** after the archive (38
+before: the archived change left the change list); `git diff --check` clean.
+`driftwatch gate --dry-run` confirms the concern is scheduled, bound and no
+longer among the unbound required checks. The **`driftwatch gate` runtime was
+deliberately not run** — its `placeholder-threshold`, `product-code-boundary`
+and `source-file-size` findings are pre-existing and unrelated.
+
+Two stale claims were corrected while the file was open, because archiving
+them would have preserved a false record: tasks 3.3 and 6.3 still said *this
+repository binds no commands whatsoever* and *`governance-quality` reads
+`UNBOUND` here*, and README's "Where this is live" said the same. All three
+were true when written and are false now — the manifest binds the checker
+under `commands.governance-quality`, scoped with `--project driftwatchdog`.
+
+**No file outside this repository was modified.** No fleet manifest was swept.
+
+Next action for the orchestrator: archive
+`declare-new-change-with-gate-debt-code`, whose `MODIFIED` delta now resolves
+against a canonical requirement.
+
 **`gate-dry-run-json-plan` is implemented, verified, and archived.**
 `driftwatch gate --dry-run --format json` no longer ignores `--format`.
 Archived as `2026-10-12-gate-dry-run-json-plan`; implementation commit is
