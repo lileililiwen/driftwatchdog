@@ -69,7 +69,7 @@ jobs:
           echo "::add-mask::$PAT"
           echo 'skip=false' >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: steps.pat.outputs.skip != 'true'
         with:
           fetch-depth: 0
