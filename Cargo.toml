@@ -1,6 +1,6 @@
 [package]
 name = "driftwatchdog"
-version = "0.1.0"
+version = "0.1.11"
 edition = "2021"
 # Minimum supported Rust version. Floor is set by clap 4 (1.74);
 # CI pins this toolchain to keep the claim honest.
