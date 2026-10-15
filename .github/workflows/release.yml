@@ -150,10 +150,10 @@ jobs:
     runs-on: ubuntu-22.04
     # The npm package is pinned to the same version as the GitHub
     # release tag, so the launcher's download URL resolves. Runs only
-    # when NPM_TOKEN is configured; without it the job is skipped
-    # rather than failing (the GitHub release is already published by
-    # the `publish` job above).
-    if: ${{ secrets.NPM_TOKEN }}
+    # on tag pushes so re-running the workflow never republishes npm
+    # (npm refuses to overwrite a published version). The GitHub
+    # release is already published by the `publish` job above.
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
       id-token: write
