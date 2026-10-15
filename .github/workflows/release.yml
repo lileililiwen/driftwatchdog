@@ -99,7 +99,7 @@ jobs:
           [ "$tag" = "$cargo_version" ] || { echo "tag v$tag != Cargo.toml $cargo_version" >&2; exit 1; }
 
       - name: Download all archives
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: stage
           merge-multiple: true
