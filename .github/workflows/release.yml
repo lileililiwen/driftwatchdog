@@ -153,7 +153,7 @@ jobs:
     # when NPM_TOKEN is configured; without it the job is skipped
     # rather than failing (the GitHub release is already published by
     # the `publish` job above).
-    if: ${{ secrets.NPM_TOKEN != '' }}
+    if: ${{ secrets.NPM_TOKEN }}
     permissions:
       contents: read
       id-token: write
