@@ -1,0 +1,12 @@
+# Forge standard snapshot CI (baseline-service@1.2.0).
+name: verify
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: standard verify
+        run: sh .standard/scripts/verify.sh

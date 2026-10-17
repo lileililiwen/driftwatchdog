@@ -1,0 +1,6 @@
+# Forge standard snapshot Compose selection (baseline-service@1.2.0).
+services:
+  driftwatchdog:
+    build:
+      context: ../..
+      dockerfile: Dockerfile

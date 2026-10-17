@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "generator": "forge@0.1.0",
+  "project": "driftwatchdog",
+  "profile": "rust-web",
+  "pack": "baseline-service",
+  "version": "1.2.0",
+  "asset_digest": "f4236099f7aa1bc2a5e6c31f2733c599df7252795eb89450e3c95e924111390d",
+  "generated_at": "2026-10-17T00:22:28.892918298+00:00",
+  "files": [
+    {
+      "path": ".standard/ci/verify.yml",
+      "digest": "c40f757b9dee0b5c64c995ad9cc5ba70d8ea31be432fece0c8dbeb5fe9e8dc9f"
+    },
+    {
+      "path": ".standard/compose/docker-compose.yaml",
+      "digest": "78df78e1496f254fab0b85c9fbcccd5c1c2aaebd5aa2e36660725fe13be15880"
+    },
+    {
+      "path": ".standard/profile.yaml",
+      "digest": "7116636ca52251854ce60169ef04fdf5b16b74143474943efd6fe6a023864a0a"
+    },
+    {
+      "path": ".standard/quality/quality.yaml",
+      "digest": "9679d0d9aa633bee5c1da9b7ce500e3e8aeaf171aaefb3d3e1abff0c3d948bb6"
+    },
+    {
+      "path": ".standard/scripts/verify.sh",
+      "digest": "be5193b9a25c1c35c407fd8eb086c39f9eec51b9dd84127ec650215d521c789a"
+    },
+    {
+      "path": "scripts/check-accessibility.py",
+      "digest": "20a0a357fdad9cebd622b71059dcd155f8ff83436c3c7266d85ff184e4a6bdcf"
+    },
+    {
+      "path": "scripts/check-openspec-change-names.mjs",
+      "digest": "c5003d0cf60ca24b524cb1d08325dc364dca71d5a17d6ee7a0ab5e003b70ea93"
+    },
+    {
+      "path": "scripts/check-privacy.py",
+      "digest": "1dcddb2f091c84b86428f694f3eefefc969902cb5ccb69380371cfcc3d98ff20"
+    },
+    {
+      "path": "verify-local.sh",
+      "digest": "b8dfa634621b45c9b0b5a5e6748e90aae494e2bc54a2ba2f93ff443c1ca51b50"
+    }
+  ]
+}
